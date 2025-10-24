@@ -1,0 +1,148 @@
+# ZigBee Transceiver (Perfect Loopback)
+# FlowgraphController (block 0) allows hot-reload
+# Transmitter -> IQ Delay -> Receiver (no radio)
+
+[[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+[[blocks]]
+name = "mac"
+type = "zigbee::Mac"
+
+[[blocks]]
+name = "modulator"
+type = "zigbee::Modulator"
+# Note: This is a composite block created by modulator() function
+
+[[blocks]]
+name = "iq_delay"
+type = "zigbee::IqDelay"
+
+[[blocks]]
+name = "avg"
+type = "Apply"
+dtype = "Complex32"
+output_type = "f32"
+# Apply block with phase detection and IIR filtering
+[[blocks.parameters]]
+name = "function"
+type = "closure"
+value = "phase_detector_iir"  # Custom closure: phase = (last.conj() * i).arg(); iir filter
+
+[[blocks]]
+name = "mm"
+type = "zigbee::ClockRecoveryMm"
+[[blocks.parameters]]
+name = "omega"
+type = "f64"
+value = 2.0
+[[blocks.parameters]]
+name = "gain_omega"
+type = "f64"
+value = 0.000225
+[[blocks.parameters]]
+name = "mu"
+type = "f64"
+value = 0.5
+[[blocks.parameters]]
+name = "gain_mu"
+type = "f64"
+value = 0.03
+[[blocks.parameters]]
+name = "omega_relative_limit"
+type = "f64"
+value = 0.0002
+
+[[blocks]]
+name = "decoder"
+type = "zigbee::Decoder"
+[[blocks.parameters]]
+name = "threshold"
+type = "usize"
+value = 12
+
+[[blocks]]
+name = "symbol_sink_mm"
+type = "WebsocketPmtSink"
+[[blocks.parameters]]
+name = "port"
+type = "u16"
+value = 9002
+
+[[blocks]]
+name = "rx_messages_sink"
+type = "WebsocketPmtSink"
+[[blocks.parameters]]
+name = "port"
+type = "u16"
+value = 9003
+
+# Connections - Transmitter Chain
+[[connections]]
+from = "mac"
+from_port = "output"
+to = "modulator"
+to_port = "input"
+
+[[connections]]
+from = "modulator"
+from_port = "output"
+to = "iq_delay"
+to_port = "input"
+
+# Connections - Receiver Chain (loopback from iq_delay)
+[[connections]]
+from = "iq_delay"
+from_port = "output"
+to = "avg"
+to_port = "input"
+
+[[connections]]
+from = "avg"
+from_port = "output"
+to = "mm"
+to_port = "input"
+
+[[connections]]
+from = "mm"
+from_port = "output"
+to = "decoder"
+to_port = "input"
+
+# Message Connections
+# Controller TX -> MAC TX (for sending messages from web GUI)
+[[message_connections]]
+from = "flowgraph_controller"
+from_port = "tx_out"
+to = "mac"
+to_port = "tx"
+
+# Decoder -> Controller RX (received frames go directly to controller)
+[[message_connections]]
+from = "decoder"
+from_port = "out"
+to = "mac"
+to_port = "rx"
+
+[[message_connections]]
+from = "mac"
+from_port = "rxed"
+to = "flowgraph_controller"
+to_port = "rx"
+
+# Controller RX -> WebSocket (for GUI to receive messages)
+[[message_connections]]
+from = "flowgraph_controller"
+from_port = "rx_out"
+to = "rx_messages_sink"
+to_port = "in"
+
+# MM symbols to websocket
+[[message_connections]]
+from = "mm"
+from_port = "symbols"
+to = "symbol_sink_mm"
+to_port = "in"
+
+

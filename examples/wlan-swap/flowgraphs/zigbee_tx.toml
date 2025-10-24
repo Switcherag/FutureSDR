@@ -1,0 +1,109 @@
+# ZigBee Transmitter (Hardware SDR)
+# FlowgraphController (block 0) allows hot-reload
+# MAC -> Modulator -> IQ Delay -> SDR Sink
+
+[[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+[[blocks]]
+name = "mac"
+type = "zigbee::Mac"
+
+[[blocks]]
+name = "modulator"
+type = "zigbee::Modulator"
+# Composite block created by modulator() function
+
+[[blocks]]
+name = "iq_delay"
+type = "zigbee::IqDelay"
+
+[[blocks]]
+name = "snk"
+type = "seify::Sink"
+[[blocks.parameters]]
+name = "frequency"
+type = "f64"
+value = 2.48e9  # channel 26 by default
+[[blocks.parameters]]
+name = "sample_rate"
+type = "f64"
+value = 4e6
+[[blocks.parameters]]
+name = "gain"
+type = "f64"
+value = 60.0
+[[blocks.parameters]]
+name = "antenna"
+type = "string"
+value = ""  # optional
+[[blocks.parameters]]
+name = "args"
+type = "string"
+value = ""  # optional seify args
+
+# Connections
+[[connections]]
+from = "mac"
+from_port = "output"
+to = "modulator"
+to_port = "input"
+
+[[connections]]
+from = "modulator"
+from_port = "output"
+to = "iq_delay"
+to_port = "input"
+
+[[connections]]
+from = "iq_delay"
+from_port = "output"
+to = "snk"
+to_port = "inputs[0]"
+
+# Message Connections
+[[message_connections]]
+from = "flowgraph_controller"
+from_port = "tx_out"
+to = "mac"
+to_port = "tx"
+
+# Runtime Configuration
+[runtime]
+[[runtime.async_tasks]]
+block = "mac"
+port = "tx"
+task = "periodic_sender"
+interval_secs = 0.8
+message_format = "Blob"
+message_pattern = "FutureSDR {seq}"
+
+# CLI Arguments
+[cli]
+[[cli.args]]
+name = "antenna"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "args"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "gain"
+type = "f64"
+default = 60.0
+
+[[cli.args]]
+name = "sample_rate"
+type = "f64"
+default = 4e6
+
+[[cli.args]]
+name = "channel"
+type = "f64"
+default = 26
+parser = "parse_channel"
+description = "Zigbee Channel Number (11..26)"

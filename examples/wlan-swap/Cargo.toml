@@ -1,0 +1,76 @@
+[package]
+name = "wlan"
+version = "0.1.0"
+edition = "2024"
+default-run = "radio_frontend"
+
+[workspace]
+
+[[bin]]
+name = "frontend"
+path = "src/bin/frontend.rs"
+
+[[bin]]
+name = "radio_frontend"
+path = "src/bin/radio_frontend.rs"
+
+[[bin]]
+name = "load_nullstream"
+path = "src/bin/load_nullstream.rs"
+
+[[bin]]
+name = "load_zigbee_trx"
+path = "src/bin/load_zigbee_trx.rs"
+
+[[bin]]
+name = "rx_udp"
+path = "src/bin/rx_udp.rs"
+
+[[bin]]
+name = "wifi_loopback"
+path = "src/bin/wifi_loopback.rs"
+
+[[bin]]
+name = "wifi_rx"
+path = "src/bin/wifi_rx.rs"
+
+[[bin]]
+name = "wifi_tx"
+path = "src/bin/wifi_tx.rs"
+
+[[bin]]
+name = "zigbee_rx"
+path = "src/bin/zigbee_rx.rs"
+
+[[bin]]
+name = "zigbee_trx"
+path = "src/bin/zigbee_trx.rs"
+
+[[bin]]
+name = "zigbee_tx"
+path = "src/bin/zigbee_tx.rs"
+
+[features]
+default = ["soapy"]
+aaronia_http = ["futuresdr/aaronia_http"]
+soapy = ["futuresdr/soapy"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+crc32fast = "1.5"
+futuresdr = { path = "../..", features = ["seify"] }
+rand = "0.9"
+rand_distr = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+any_spawner = { version = "0.3", features = ["wasm-bindgen"] }
+console_error_panic_hook = "0.1"
+gloo-net = "0.6"
+leptos = { version = "0.8", features = ["csr", "nightly"] }
+log = "0.4"
+prophecy = { path = "../../crates/prophecy" }
+serde_json = "1.0"

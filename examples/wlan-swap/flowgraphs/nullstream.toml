@@ -1,0 +1,18 @@
+# Nullsource --> Head --> FileSink
+
+[[blocks]]
+name = "src"
+type = "NullSource"
+dtype = "u8"
+
+
+[[blocks]]
+name = "snk"
+type = "NullSink"
+dtype = "u8"
+
+
+[[connections]]
+from = "src"
+to = "snk"
+

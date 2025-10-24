@@ -1,0 +1,169 @@
+# ZigBee Receiver (Hardware SDR)
+# FlowgraphController (block 0) allows hot-reload
+# Source -> Phase Detector -> Clock Recovery -> Decoder -> MAC
+
+[[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+[[blocks]]
+name = "src_sdr"
+type = "seify::Source"
+[[blocks.parameters]]
+name = "frequency"
+type = "f64"
+value = 2.48e9  # channel 26 by default
+[[blocks.parameters]]
+name = "sample_rate"
+type = "f64"
+value = 4e6
+[[blocks.parameters]]
+name = "gain"
+type = "f64"
+value = 30.0
+[[blocks.parameters]]
+name = "antenna"
+type = "string"
+value = ""  # optional
+[[blocks.parameters]]
+name = "args"
+type = "string"
+value = ""  # optional seify args
+
+[[blocks]]
+name = "avg"
+type = "Apply"
+dtype = "Complex32"
+output_type = "f32"
+[[blocks.parameters]]
+name = "function"
+type = "closure"
+value = "phase_detector_iir"  # Custom closure: phase = (last.conj() * i).arg(); iir filter with alpha=0.00016
+
+[[blocks]]
+name = "mm"
+type = "zigbee::ClockRecoveryMm"
+[[blocks.parameters]]
+name = "omega"
+type = "f64"
+value = 2.0
+[[blocks.parameters]]
+name = "gain_omega"
+type = "f64"
+value = 0.000225
+[[blocks.parameters]]
+name = "mu"
+type = "f64"
+value = 0.5
+[[blocks.parameters]]
+name = "gain_mu"
+type = "f64"
+value = 0.03
+[[blocks.parameters]]
+name = "omega_relative_limit"
+type = "f64"
+value = 0.0002
+
+[[blocks]]
+name = "decoder"
+type = "zigbee::Decoder"
+[[blocks.parameters]]
+name = "threshold"
+type = "usize"
+value = 6
+
+[[blocks]]
+name = "mac"
+type = "zigbee::Mac"
+
+[[blocks]]
+name = "snk"
+type = "NullSink"
+dtype = "u8"
+
+[[blocks]]
+name = "blob_to_udp_default"
+type = "BlobToUdp"
+[[blocks.parameters]]
+name = "addr"
+type = "string"
+value = "127.0.0.1:55555"
+
+# Connections
+[[connections]]
+from = "src_sdr"
+from_port = "outputs[0]"
+to = "avg"
+to_port = "input"
+
+[[connections]]
+from = "avg"
+to = "mm"
+
+[[connections]]
+from = "mm"
+to = "decoder"
+
+[[connections]]
+from = "mac"
+to = "snk"
+
+# Message Connections
+[[message_connections]]
+from = "flowgraph_controller"
+from_port = "tx_out"
+to = "mac"
+to_port = "tx"
+
+[[message_connections]]
+from = "decoder"
+from_port = "out"
+to = "mac"
+to_port = "rx"
+
+[[message_connections]]
+from = "decoder"
+from_port = "out"
+to = "blob_to_udp_default"
+to_port = "in"
+
+# CLI Arguments
+[cli]
+[[cli.args]]
+name = "file"
+type = "string"
+optional = true
+description = "Input file (if not specified, use SDR)"
+
+[[cli.args]]
+name = "antenna"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "args"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "gain"
+type = "f64"
+default = 30.0
+
+[[cli.args]]
+name = "sample_rate"
+type = "f64"
+default = 4e6
+
+[[cli.args]]
+name = "channel"
+type = "f64"
+default = 26
+parser = "parse_channel"
+description = "Zigbee Channel Number (11..26)"
+
+[[cli.args]]
+name = "udp_addr"
+type = "string"
+optional = true
+description = "UDP Sink [address:port]"

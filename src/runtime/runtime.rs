@@ -363,6 +363,17 @@ impl RuntimeHandle {
             .map(|x| FlowgraphId(x.0))
             .collect()
     }
+
+    /// Get all alive flowgraph handles
+    pub async fn get_alive_flowgraphs(&self) -> Vec<FlowgraphHandle> {
+        self.flowgraphs
+            .lock()
+            .await
+            .iter()
+            .filter(|fg| fg.is_alive())
+            .cloned()
+            .collect()
+    }
 }
 
 pub(crate) async fn run_flowgraph<S: Scheduler>(

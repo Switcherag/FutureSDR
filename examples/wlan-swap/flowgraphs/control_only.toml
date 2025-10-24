@@ -1,0 +1,9 @@
+# Minimal Control Flowgraph
+# This flowgraph only contains the FlowgraphController to allow switching to other flowgraphs
+# Use this as the initial flowgraph, then switch to actual radio flowgraphs via web GUI
+
+[[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+# No connections needed - this block only listens for PMT messages

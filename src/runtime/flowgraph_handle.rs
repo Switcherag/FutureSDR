@@ -25,6 +25,10 @@ impl PartialEq for FlowgraphHandle {
 }
 
 impl FlowgraphHandle {
+    /// Returns true if the flowgraph is still alive (inbox not closed)
+    pub fn is_alive(&self) -> bool {
+        !self.inbox.is_closed()
+    }
     pub(crate) fn new(inbox: Sender<FlowgraphMessage>) -> FlowgraphHandle {
         FlowgraphHandle { inbox }
     }

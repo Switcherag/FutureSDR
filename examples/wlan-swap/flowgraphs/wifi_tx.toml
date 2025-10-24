@@ -1,0 +1,152 @@
+# WiFi Transmitter (Hardware SDR)
+# MAC -> Encoder -> Mapper -> IFFT -> Prefix -> SDR Sink
+
+[[blocks]]
+name = "mac"
+type = "wifi::Mac"
+[[blocks.parameters]]
+name = "src_addr"
+type = "mac_addr"
+value = "42:42:42:42:42:42"
+[[blocks.parameters]]
+name = "dst_addr"
+type = "mac_addr"
+value = "23:23:23:23:23:23"
+[[blocks.parameters]]
+name = "bssid"
+type = "mac_addr"
+value = "ff:ff:ff:ff:ff:ff"
+
+[[blocks]]
+name = "encoder"
+type = "wifi::Encoder"
+[[blocks.parameters]]
+name = "mcs"
+type = "Mcs"
+value = "Qpsk_1_2"
+
+[[blocks]]
+name = "mapper"
+type = "wifi::Mapper"
+
+[[blocks]]
+name = "fft"
+type = "Fft"
+[[blocks.parameters]]
+name = "size"
+type = "usize"
+value = 64
+[[blocks.parameters]]
+name = "direction"
+type = "FftDirection"
+value = "Inverse"
+[[blocks.parameters]]
+name = "normalize"
+type = "bool"
+value = true
+[[blocks.parameters]]
+name = "scaling"
+type = "f32"
+value = 0.138675  # sqrt(1.0/52.0)
+
+[[blocks]]
+name = "prefix"
+type = "wifi::Prefix"
+[[blocks.parameters]]
+name = "pad_front"
+type = "usize"
+value = 5000
+[[blocks.parameters]]
+name = "pad_tail"
+type = "usize"
+value = 5000
+
+[[blocks]]
+name = "snk"
+type = "seify::Sink"
+[[blocks.parameters]]
+name = "frequency"
+type = "f64"
+value = 5.17e9  # channel 34 by default
+[[blocks.parameters]]
+name = "sample_rate"
+type = "f64"
+value = 20e6
+[[blocks.parameters]]
+name = "gain"
+type = "f64"
+value = 60.0
+[[blocks.parameters]]
+name = "antenna"
+type = "string"
+value = ""  # optional
+[[blocks.parameters]]
+name = "args"
+type = "string"
+value = ""  # optional seify args
+
+# Connections
+[[connections]]
+from = "mac"
+from_port = "tx"
+to = "encoder"
+to_port = "tx"
+
+[[connections]]
+from = "encoder"
+to = "mapper"
+
+[[connections]]
+from = "mapper"
+to = "fft"
+
+[[connections]]
+from = "fft"
+to = "prefix"
+
+[[connections]]
+from = "prefix"
+to = "snk"
+to_port = "inputs[0]"
+
+# Runtime Configuration
+[runtime]
+[[runtime.async_tasks]]
+block = "mac"
+port = "tx"
+task = "periodic_sender"
+interval_secs = 0.1
+message_format = "Any"
+message_pattern = "FutureSDR {seq}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+[[runtime.async_tasks.extra_params]]
+name = "mcs"
+type = "Mcs"
+value = "Qam16_1_2"
+
+# CLI Arguments (for runtime configuration)
+[cli]
+[[cli.args]]
+name = "antenna"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "args"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "gain"
+type = "f64"
+default = 60.0
+
+[[cli.args]]
+name = "sample_rate"
+type = "f64"
+default = 20e6
+
+[[cli.args]]
+name = "channel"
+type = "f64"
+default = 34
+parser = "parse_channel"

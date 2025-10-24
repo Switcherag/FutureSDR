@@ -1,0 +1,293 @@
+# WiFi Receiver (Hardware SDR)
+# SDR Source -> Sync Short -> Sync Long -> FFT -> Equalizer -> Decoder
+
+[[blocks]]
+name = "src"
+type = "seify::Source"
+[[blocks.parameters]]
+name = "frequency"
+type = "f64"
+value = 5.17e9  # channel 34 by default
+[[blocks.parameters]]
+name = "sample_rate"
+type = "f64"
+value = 20e6
+[[blocks.parameters]]
+name = "gain"
+type = "f64"
+value = 28.0
+[[blocks.parameters]]
+name = "antenna"
+type = "string"
+value = ""  # optional
+[[blocks.parameters]]
+name = "args"
+type = "string"
+value = ""  # optional seify args
+
+# Optional DC Offset Removal
+[[blocks]]
+name = "dc_offset"
+type = "Apply"
+dtype = "Complex32"
+output_type = "Complex32"
+optional = true
+[[blocks.parameters]]
+name = "function"
+type = "closure"
+value = "dc_offset_removal"  # IIR filter: avg_real/img = ratio * (c - avg) + avg
+
+[[blocks]]
+name = "delay"
+type = "Delay"
+dtype = "Complex32"
+[[blocks.parameters]]
+name = "delay"
+type = "usize"
+value = 16
+
+[[blocks]]
+name = "complex_to_mag_2"
+type = "Apply"
+dtype = "Complex32"
+output_type = "f32"
+[[blocks.parameters]]
+name = "function"
+type = "closure"
+value = "norm_sqr"
+
+[[blocks]]
+name = "float_avg"
+type = "wifi::MovingAverage"
+dtype = "f32"
+[[blocks.parameters]]
+name = "length"
+type = "usize"
+value = 64
+
+[[blocks]]
+name = "mult_conj"
+type = "Combine"
+dtype = "Complex32"
+[[blocks.parameters]]
+name = "function"
+type = "closure"
+value = "mult_conjugate"  # a * b.conj()
+
+[[blocks]]
+name = "complex_avg"
+type = "wifi::MovingAverage"
+dtype = "Complex32"
+[[blocks.parameters]]
+name = "length"
+type = "usize"
+value = 48
+
+[[blocks]]
+name = "divide_mag"
+type = "Combine"
+input1_type = "Complex32"
+input2_type = "f32"
+output_type = "f32"
+[[blocks.parameters]]
+name = "function"
+type = "closure"
+value = "norm_divide"  # a.norm() / b
+
+[[blocks]]
+name = "sync_short"
+type = "wifi::SyncShort"
+
+[[blocks]]
+name = "sync_long"
+type = "wifi::SyncLong"
+
+[[blocks]]
+name = "fft"
+type = "Fft"
+[[blocks.parameters]]
+name = "size"
+type = "usize"
+value = 64
+
+[[blocks]]
+name = "frame_equalizer"
+type = "wifi::FrameEqualizer"
+
+[[blocks]]
+name = "symbol_sink"
+type = "WebsocketPmtSink"
+[[blocks.parameters]]
+name = "port"
+type = "u16"
+value = 9002
+
+[[blocks]]
+name = "decoder"
+type = "wifi::Decoder"
+
+[[blocks]]
+name = "blob_to_udp_frames"
+type = "BlobToUdp"
+[[blocks.parameters]]
+name = "addr"
+type = "string"
+value = "127.0.0.1:55555"
+
+[[blocks]]
+name = "blob_to_udp_rftap"
+type = "BlobToUdp"
+[[blocks.parameters]]
+name = "addr"
+type = "string"
+value = "127.0.0.1:55556"
+
+# Connections
+# Source -> delay (and other branches)
+[[connections]]
+from = "src"
+from_port = "outputs[0]"
+to = "delay"
+conditional = "!dc_offset"
+
+[[connections]]
+from = "src"
+from_port = "outputs[0]"
+to = "dc_offset"
+conditional = "dc_offset"
+
+[[connections]]
+from = "dc_offset"
+to = "delay"
+conditional = "dc_offset"
+
+# Branch 1: magnitude detection
+[[connections]]
+from = "src"
+from_port = "outputs[0]"
+to = "complex_to_mag_2"
+conditional = "!dc_offset"
+
+[[connections]]
+from = "dc_offset"
+to = "complex_to_mag_2"
+conditional = "dc_offset"
+
+[[connections]]
+from = "complex_to_mag_2"
+to = "float_avg"
+
+# Branch 2: complex correlation
+[[connections]]
+from = "src"
+from_port = "outputs[0]"
+to = "mult_conj"
+to_port = "in0"
+conditional = "!dc_offset"
+
+[[connections]]
+from = "dc_offset"
+to = "mult_conj"
+to_port = "in0"
+conditional = "dc_offset"
+
+[[connections]]
+from = "delay"
+to = "mult_conj"
+to_port = "in1"
+
+[[connections]]
+from = "mult_conj"
+to = "complex_avg"
+
+# Combine paths
+[[connections]]
+from = "complex_avg"
+to = "divide_mag"
+to_port = "in0"
+
+[[connections]]
+from = "float_avg"
+to = "divide_mag"
+to_port = "in1"
+
+# Sync blocks
+[[connections]]
+from = "delay"
+to = "sync_short"
+to_port = "in_sig"
+
+[[connections]]
+from = "complex_avg"
+to = "sync_short"
+to_port = "in_abs"
+
+[[connections]]
+from = "divide_mag"
+to = "sync_short"
+to_port = "in_cor"
+
+[[connections]]
+from = "sync_short"
+to = "sync_long"
+
+[[connections]]
+from = "sync_long"
+to = "fft"
+
+[[connections]]
+from = "fft"
+to = "frame_equalizer"
+
+[[connections]]
+from = "frame_equalizer"
+to = "decoder"
+
+# Message Connections
+[[message_connections]]
+from = "frame_equalizer"
+from_port = "symbols"
+to = "symbol_sink"
+
+[[message_connections]]
+from = "decoder"
+from_port = "rx_frames"
+to = "blob_to_udp_frames"
+
+[[message_connections]]
+from = "decoder"
+from_port = "rftap"
+to = "blob_to_udp_rftap"
+
+# CLI Arguments
+[cli]
+[[cli.args]]
+name = "antenna"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "args"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "gain"
+type = "f64"
+default = 28.0
+
+[[cli.args]]
+name = "sample_rate"
+type = "f64"
+default = 20e6
+
+[[cli.args]]
+name = "channel"
+type = "f64"
+default = 34
+parser = "parse_channel"
+
+[[cli.args]]
+name = "dc_offset"
+type = "bool"
+default = false
