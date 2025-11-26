@@ -1,8 +1,4 @@
 //! Flowgraph Scheduler Trait and Implementations
-#[cfg(feature = "flow_scheduler")]
-mod cpu_pin;
-#[cfg(feature = "flow_scheduler")]
-pub use crate::runtime::scheduler::cpu_pin::CpuPinScheduler;
 
 #[cfg(feature = "flow_scheduler")]
 mod flow;
@@ -13,11 +9,6 @@ pub use crate::runtime::scheduler::flow::FlowScheduler;
 mod smol;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::runtime::scheduler::smol::SmolScheduler;
-
-#[cfg(feature = "tpb_scheduler")]
-mod tpb;
-#[cfg(feature = "tpb_scheduler")]
-pub use crate::runtime::scheduler::tpb::TpbScheduler;
 
 #[allow(clippy::module_inception)]
 mod scheduler;
