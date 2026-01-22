@@ -1,10 +1,10 @@
 # ZigBee Transmitter v2 (Hardware SDR)
 # Based on zigbee_trx.rs TX chain
-# MAC -> Modulator -> IQ Delay -> SDR Sink
+# MAC -> Modulator -> IQ Delay -> Throttle -> SDR Sink
 #
 # Flow:
 #   flowgraph_controller.tx_out | mac.tx  (send messages to transmit)
-#   mac -> modulator -> iq_delay -> snk (SDR)
+#   mac -> modulator -> iq_delay -> throttle -> snk (SDR)
 
 [[blocks]]
 name = "flowgraph_controller"
@@ -24,6 +24,16 @@ type = "zigbee::Modulator"
 [[blocks]]
 name = "iq_delay"
 type = "zigbee::IqDelay"
+
+# Throttle to avoid buffer overflow
+[[blocks]]
+name = "throttle"
+type = "Throttle"
+dtype = "Complex32"
+[[blocks.parameters]]
+name = "rate"
+type = "f64"
+value = 1e6  # Match sample_rate
 
 # SDR Sink
 [[blocks]]
@@ -53,7 +63,7 @@ value = ""
 # ============================================================================
 # Stream Connections
 # ============================================================================
-# mac -> modulator -> iq_delay -> snk
+# mac -> modulator -> iq_delay -> throttle -> snk
 
 [[connections]]
 from = "mac"
@@ -69,6 +79,12 @@ to_port = "input"
 
 [[connections]]
 from = "iq_delay"
+from_port = "output"
+to = "throttle"
+to_port = "input"
+
+[[connections]]
+from = "throttle"
 from_port = "output"
 to = "snk"
 to_port = "inputs[0]"
