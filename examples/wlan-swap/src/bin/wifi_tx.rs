@@ -81,7 +81,7 @@ fn main() -> Result<()> {
                     mac,
                     "tx",
                     Pmt::Any(Box::new((
-                        format!("FutureSDR {seq}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").as_bytes().to_vec(),
+                        format!("FutureSDR {seq}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").as_bytes().to_vec(),
                         Mcs::Qam16_1_2,
                     ))),
                 )
