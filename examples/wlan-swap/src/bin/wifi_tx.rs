@@ -2,6 +2,7 @@ use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::blocks::Fft;
 use futuresdr::blocks::FftDirection;
+use futuresdr::blocks::Throttle;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
 use std::time::Duration;
@@ -62,8 +63,9 @@ fn main() -> Result<()> {
         .gain(args.gain)
         .antenna(args.antenna)
         .build_sink()?;
-
-    connect!(fg, prefix > inputs[0].snk);
+    let throttle = Throttle::<Complex32>::new(args.sample_rate);
+    let throttle = fg.add_block(throttle);  
+    connect!(fg, prefix > throttle > inputs[0].snk);
 
     let mac = mac.get()?.id;
 
@@ -73,7 +75,7 @@ fn main() -> Result<()> {
     let mut seq = 0u64;
     rt.block_on(async move {
         loop {
-            Timer::after(Duration::from_secs_f32(0.1)).await;
+            Timer::after(Duration::from_secs_f32(1.0)).await;
             handle
                 .call(
                     mac,

@@ -53,7 +53,7 @@ fn main() -> Result<()> {
         .build_sink()?;
     let snk = fg.add_block(snk);
     let throttle = Throttle::<Complex32>::new(100_000_000.0);
-        let throttle = fg.add_block(throttle);    
+    let throttle = fg.add_block(throttle);    
     fg.connect_dyn(&mac, "output", modulator, "input")?;
     fg.connect_dyn(modulator, "output", &iq_delay, "input")?;
     fg.connect_dyn(&iq_delay, "output", &throttle, "input")?;
