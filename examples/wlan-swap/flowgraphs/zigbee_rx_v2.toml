@@ -1,0 +1,200 @@
+# ZigBee Receiver v2 (Hardware SDR)
+# Based on zigbee_rx.rs example
+# Source -> Phase Detector -> Clock Recovery -> Decoder -> MAC
+#
+# Flow:
+#   src (SDR/File) -> avg (phase detector) -> mm (clock recovery) -> decoder
+#   decoder | rx -> mac
+#   mac -> snk (NullSink)
+#   mac.rftap | blob_to_udp (127.0.0.1:55555)
+
+[[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+# SDR Source (used when no file is specified)
+[[blocks]]
+name = "src_sdr"
+type = "seify::Source"
+[[blocks.parameters]]
+name = "frequency"
+type = "f64"
+value = 2.48e9  # channel 26 by default
+[[blocks.parameters]]
+name = "sample_rate"
+type = "f64"
+value = 1e6
+[[blocks.parameters]]
+name = "gain"
+type = "f64"
+value = 30.0
+[[blocks.parameters]]
+name = "antenna"
+type = "string"
+value = ""
+[[blocks.parameters]]
+name = "args"
+type = "string"
+value = ""
+
+# Phase detector with IIR filter (alpha = 0.00016)
+# let phase = (last.conj() * i).arg();
+# iir = (1.0 - alpha) * iir + alpha * phase;
+# output = phase - iir
+[[blocks]]
+name = "avg"
+type = "Apply"
+dtype = "Complex32"
+output_type = "f32"
+[[blocks.parameters]]
+name = "function"
+type = "closure"
+value = "phase_detector_iir"
+[[blocks.parameters]]
+name = "alpha"
+type = "f32"
+value = 0.00016
+
+# Clock Recovery Mueller and Müller
+[[blocks]]
+name = "mm"
+type = "zigbee::ClockRecoveryMm"
+[[blocks.parameters]]
+name = "omega"
+type = "f32"
+value = 2.0
+[[blocks.parameters]]
+name = "gain_omega"
+type = "f32"
+value = 0.000225
+[[blocks.parameters]]
+name = "mu"
+type = "f32"
+value = 0.5
+[[blocks.parameters]]
+name = "gain_mu"
+type = "f32"
+value = 0.03
+[[blocks.parameters]]
+name = "omega_relative_limit"
+type = "f32"
+value = 0.0002
+
+# ZigBee Decoder
+[[blocks]]
+name = "decoder"
+type = "zigbee::Decoder"
+[[blocks.parameters]]
+name = "threshold"
+type = "u32"
+value = 6
+
+# MAC layer
+[[blocks]]
+name = "mac"
+type = "zigbee::Mac"
+
+# Null sink for MAC output
+[[blocks]]
+name = "snk"
+type = "NullSink"
+dtype = "u8"
+
+# UDP sink for rftap output (127.0.0.1:55555)
+[[blocks]]
+name = "blob_to_udp_rftap"
+type = "BlobToUdp"
+[[blocks.parameters]]
+name = "addr"
+type = "string"
+value = "127.0.0.1:55555"
+
+# ============================================================================
+# Stream Connections
+# ============================================================================
+# src_sdr -> avg -> mm -> decoder
+
+[[connections]]
+from = "src_sdr"
+from_port = "outputs[0]"
+to = "avg"
+to_port = "input"
+
+[[connections]]
+from = "avg"
+from_port = "output"
+to = "mm"
+to_port = "input"
+
+[[connections]]
+from = "mm"
+from_port = "output"
+to = "decoder"
+to_port = "input"
+
+# mac -> snk
+[[connections]]
+from = "mac"
+from_port = "output"
+to = "snk"
+to_port = "input"
+
+# ============================================================================
+# Message Connections
+# ============================================================================
+# decoder | rx -> mac
+[[message_connections]]
+from = "decoder"
+from_port = "out"
+to = "mac"
+to_port = "rx"
+
+# mac.rftap | blob_to_udp
+[[message_connections]]
+from = "mac"
+from_port = "rftap"
+to = "blob_to_udp_rftap"
+to_port = "in"
+
+# ============================================================================
+# CLI Arguments
+# ============================================================================
+[cli]
+[[cli.args]]
+name = "file"
+type = "string"
+optional = true
+description = "Input file (if not specified, use SDR)"
+
+[[cli.args]]
+name = "antenna"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "args"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "gain"
+type = "f64"
+default = 30.0
+
+[[cli.args]]
+name = "sample_rate"
+type = "f64"
+default = 1e6
+
+[[cli.args]]
+name = "channel"
+type = "f64"
+default = 26
+parser = "parse_channel"
+description = "Zigbee Channel Number (11..26)"
+
+[[cli.args]]
+name = "udp_addr"
+type = "string"
+optional = true
+description = "Additional UDP Sink [address:port]"

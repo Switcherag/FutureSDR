@@ -187,10 +187,10 @@ where
                 self.frame_complete = true;
 
                 if self.decode() {
-                    // println!(
-                    //     "decoded: {:?}",
-                    //     &self.out_bytes[0..self.frame_param.psdu_size() + 2]
-                    // );
+                     println!(
+                        "decoded: {:?}",
+                        &self.out_bytes[0..self.frame_param.psdu_size() + 2]
+                     );
                     let mut blob = vec![0; self.frame_param.psdu_size() - 4];
                     blob.copy_from_slice(&self.out_bytes[2..self.frame_param.psdu_size() - 2]);
 

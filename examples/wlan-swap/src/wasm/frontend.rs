@@ -464,20 +464,27 @@ pub fn FlowgraphSelector(
     let (selected, set_selected) = signal(String::new());
     let (status, set_status) = signal(String::new());
     
-    // Load available flowgraphs (hardcoded list for now)
+    // Load available flowgraphs - hardcoded list since WASM can't access filesystem
+    // To add new flowgraphs, add them to this list
     Effect::new(move |_| {
         let fgs = vec![
-            "flowgraphs/zigbee_tx.toml".to_string(),
-            "flowgraphs/zigbee_rx.toml".to_string(),
-            "flowgraphs/zigbee_trx.toml".to_string(),
-            "flowgraphs/wifi_tx.toml".to_string(),
-            "flowgraphs/wifi_rx.toml".to_string(),
-            "flowgraphs/wifi_loopback.toml".to_string(),
-            "flowgraphs/nullstream.toml".to_string(),
-            "flowgraphs/wifi_tx_bis.toml".to_string(),
-        ];
+            "flowgraphs/control_only.toml",
+            "flowgraphs/nullstream.toml",
+            "flowgraphs/wifi_loopback.toml",
+            "flowgraphs/wifi_rx.toml",
+            "flowgraphs/wifi_tx.toml",
+            "flowgraphs/wifi_tx_bis.toml",
+            "flowgraphs/zigbee_rx.toml",
+            "flowgraphs/zigbee_rx_v2.toml",
+            "flowgraphs/zigbee_trx.toml",
+            "flowgraphs/zigbee_tx.toml",
+            "flowgraphs/zigbee_tx_v2.toml",
+        ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        
+        if !fgs.is_empty() {
+            set_selected(fgs[0].clone());
+        }
         set_flowgraphs(fgs);
-        set_selected("flowgraphs/zigbee_trx.toml".to_string());
     });
     
     let switch_flowgraph = move |_| {

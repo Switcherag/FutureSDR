@@ -1,0 +1,115 @@
+# ZigBee Transmitter v2 (Hardware SDR)
+# Based on zigbee_trx.rs TX chain
+# MAC -> Modulator -> IQ Delay -> SDR Sink
+#
+# Flow:
+#   flowgraph_controller.tx_out | mac.tx  (send messages to transmit)
+#   mac -> modulator -> iq_delay -> snk (SDR)
+
+[[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+# MAC layer (TX side)
+[[blocks]]
+name = "mac"
+type = "zigbee::Mac"
+
+# ZigBee Modulator (composite block)
+[[blocks]]
+name = "modulator"
+type = "zigbee::Modulator"
+
+# IQ Delay (Gaussian filter delay compensation)
+[[blocks]]
+name = "iq_delay"
+type = "zigbee::IqDelay"
+
+# SDR Sink
+[[blocks]]
+name = "snk"
+type = "seify::Sink"
+[[blocks.parameters]]
+name = "frequency"
+type = "f64"
+value = 2.48e9  # channel 26 by default
+[[blocks.parameters]]
+name = "sample_rate"
+type = "f64"
+value = 1e6
+[[blocks.parameters]]
+name = "gain"
+type = "f64"
+value = 60.0
+[[blocks.parameters]]
+name = "antenna"
+type = "string"
+value = ""
+[[blocks.parameters]]
+name = "args"
+type = "string"
+value = ""
+
+# ============================================================================
+# Stream Connections
+# ============================================================================
+# mac -> modulator -> iq_delay -> snk
+
+[[connections]]
+from = "mac"
+from_port = "output"
+to = "modulator"
+to_port = "input"
+
+[[connections]]
+from = "modulator"
+from_port = "output"
+to = "iq_delay"
+to_port = "input"
+
+[[connections]]
+from = "iq_delay"
+from_port = "output"
+to = "snk"
+to_port = "inputs[0]"
+
+# ============================================================================
+# Message Connections
+# ============================================================================
+# flowgraph_controller.tx_out -> mac.tx (for sending TX messages)
+[[message_connections]]
+from = "flowgraph_controller"
+from_port = "tx_out"
+to = "mac"
+to_port = "tx"
+
+# ============================================================================
+# CLI Arguments
+# ============================================================================
+[cli]
+[[cli.args]]
+name = "antenna"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "args"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "gain"
+type = "f64"
+default = 60.0
+
+[[cli.args]]
+name = "sample_rate"
+type = "f64"
+default = 1e6
+
+[[cli.args]]
+name = "channel"
+type = "f64"
+default = 26
+parser = "parse_channel"
+description = "Zigbee Channel Number (11..26)"
