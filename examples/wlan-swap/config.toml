@@ -1,2 +1,3 @@
 ctrlport_bind = "0.0.0.0:1337"
 frontend_path = "dist"
+buffer_size = 16777216  # 16 MB buffer for Pluto SDR compatibility (default is typically 64KB)

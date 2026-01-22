@@ -101,7 +101,6 @@ fn main() -> Result<()> {
     // fft.set_tag_propagation(Box::new(copy_tag_propagation));
     let frame_equalizer: FrameEqualizer = FrameEqualizer::new();
     let decoder = Decoder::new();
-    let symbol_sink = WebsocketPmtSink::new(9002);
     connect!(fg, sync_long > fft > frame_equalizer > decoder;
         frame_equalizer.symbols | r#in.symbol_sink);
 

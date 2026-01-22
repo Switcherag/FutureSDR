@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::async_io::block_on;
+use futuresdr::blocks::Throttle;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
 use std::time::Duration;
@@ -24,7 +25,7 @@ struct Args {
     #[clap(short, long, default_value_t = 60.0)]
     gain: f64,
     /// Sample Rate
-    #[clap(short, long, default_value_t = 4e6)]
+    #[clap(short, long, default_value_t = 2e6)]
     sample_rate: f64,
     /// Zigbee Channel Number (11..26)
     #[clap(id = "channel", short, long, value_parser = parse_channel, default_value = "26")]
@@ -43,17 +44,20 @@ fn main() -> Result<()> {
     let iq_delay: IqDelay = IqDelay::new();
     let iq_delay = fg.add_block(iq_delay);
 
+    
     let snk = Builder::new(args.args)?
-        .frequency(args.freq)
+        .frequency(80_000_000.0)
         .sample_rate(args.sample_rate)
         .gain(args.gain)
         .antenna(args.antenna)
         .build_sink()?;
     let snk = fg.add_block(snk);
-
+    let throttle = Throttle::<Complex32>::new(100_000_000.0);
+        let throttle = fg.add_block(throttle);    
     fg.connect_dyn(&mac, "output", modulator, "input")?;
     fg.connect_dyn(modulator, "output", &iq_delay, "input")?;
-    fg.connect_dyn(iq_delay, "output", snk, "inputs[0]")?;
+    fg.connect_dyn(&iq_delay, "output", &throttle, "input")?;
+    fg.connect_dyn(&throttle, "output", snk, "inputs[0]")?;
     let mac = mac.into();
 
     let rt = Runtime::new();

@@ -20,16 +20,24 @@ name = "iq_delay"
 type = "zigbee::IqDelay"
 
 [[blocks]]
+name = "throttle"
+type = "Throttle"
+[[blocks.parameters]]
+name = "rate"
+type = "f64"
+value = 100_000_000.0
+
+[[blocks]]
 name = "snk"
 type = "seify::Sink"
 [[blocks.parameters]]
 name = "frequency"
 type = "f64"
-value = 2.48e9  # channel 26 by default
+value = 0.5e9  # channel 26 by default
 [[blocks.parameters]]
 name = "sample_rate"
 type = "f64"
-value = 4e6
+value = 1e6
 [[blocks.parameters]]
 name = "gain"
 type = "f64"
@@ -59,6 +67,11 @@ to_port = "input"
 [[connections]]
 from = "iq_delay"
 from_port = "output"
+to = "throttle"
+to_port = "input"
+
+[[connections]]
+from = "throttle"
 to = "snk"
 to_port = "inputs[0]"
 
@@ -69,15 +82,6 @@ from_port = "tx_out"
 to = "mac"
 to_port = "tx"
 
-# Runtime Configuration
-[runtime]
-[[runtime.async_tasks]]
-block = "mac"
-port = "tx"
-task = "periodic_sender"
-interval_secs = 0.8
-message_format = "Blob"
-message_pattern = "FutureSDR {seq}"
 
 # CLI Arguments
 [cli]

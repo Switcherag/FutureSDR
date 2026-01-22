@@ -1,4 +1,6 @@
-
+# WiFi Transmitter (Hardware SDR) - Clean Architecture
+# Based on zigbee_tx.toml structure with wifi_tx.toml blocks
+# FlowgraphController (block 0) allows hot-reload
 # MAC -> Encoder -> Mapper -> IFFT -> Prefix -> Throttle -> SDR Sink
 
 [[blocks]]
@@ -168,4 +170,3 @@ name = "channel"
 type = "f64"
 default = 34
 parser = "parse_channel"
-

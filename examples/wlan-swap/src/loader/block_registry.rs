@@ -4,7 +4,7 @@
 
 use anyhow::{Result, Context, bail};
 use futuresdr::prelude::*;
-use futuresdr::blocks::{Apply, NullSource, NullSink, Delay, Fft, Combine};
+use futuresdr::blocks::{Apply, NullSource, NullSink, Delay, Fft, Combine, Throttle};
 #[cfg(not(target_arch = "wasm32"))]
 use futuresdr::blocks::{WebsocketPmtSink, FileSource, BlobToUdp};
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,6 +42,7 @@ impl BlockRegistry {
         registry.register("Combine", Box::new(CombineFactory));
         registry.register("Delay", Box::new(DelayFactory));
         registry.register("Fft", Box::new(FftFactory));
+        registry.register("Throttle", Box::new(ThrottleFactory));
         #[cfg(not(target_arch = "wasm32"))]
         registry.register("WebsocketPmtSink", Box::new(WebsocketPmtSinkFactory));
         #[cfg(not(target_arch = "wasm32"))]
@@ -111,7 +112,6 @@ fn get_param_f32(params: &[ParameterConfig], name: &str) -> Result<f32> {
         .with_context(|| format!("Parameter '{}' not found or invalid", name))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn get_param_f64(params: &[ParameterConfig], name: &str) -> Result<f64> {
     params.iter()
         .find(|p| p.name == name)
@@ -409,6 +409,23 @@ impl BlockFactory for FftFactory {
         
         let fft: Fft = Fft::with_options(size, fft_dir, normalize, scaling);
         Ok(fg.add_block(fft).into())
+    }
+}
+
+/// Factory for Throttle
+struct ThrottleFactory;
+
+impl BlockFactory for ThrottleFactory {
+    fn create(&self, fg: &mut Flowgraph, config: &BlockConfig) -> Result<BlockId> {
+        let rate = get_param_f64(&config.parameters, "rate")?;
+        let dtype = config.dtype.as_deref().unwrap_or("Complex32");
+        
+        match dtype {
+            "Complex32" => Ok(fg.add_block(Throttle::<Complex32>::new(rate)).into()),
+            "f32" => Ok(fg.add_block(Throttle::<f32>::new(rate)).into()),
+            "u8" => Ok(fg.add_block(Throttle::<u8>::new(rate)).into()),
+            _ => bail!("Unsupported dtype for Throttle: {}", dtype),
+        }
     }
 }
 

@@ -13,7 +13,6 @@ use prophecy::ListSelector;
 use prophecy::RadioSelector;
 use prophecy::RuntimeHandle;
 use std::rc::Rc;
-use std::time::Duration;
 
 #[component]
 pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
@@ -93,7 +92,13 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                 if let Some(msg_str) = txt.as_string() {
                     if !msg_str.is_empty() {
                         leptos::logging::log!("RX WebSocket: {}", msg_str);
-                        if msg_str == "reload" {
+                        if msg_str == "initialized" {
+                            leptos::logging::log!("Flowgraph initialized! Auto-refreshing page...");
+                            // Reload page when flowgraph finishes initialization
+                            if let Some(window) = leptos::web_sys::window() {
+                                let _ = window.location().reload();
+                            }
+                        } else if msg_str == "reload" {
                             leptos::logging::log!("Received reload signal from backend (no page reload)");
                             // Here you can trigger a signal update or refetch logic instead of reloading the page
                         } else {
@@ -463,6 +468,7 @@ pub fn FlowgraphSelector(
             "flowgraphs/wifi_rx.toml".to_string(),
             "flowgraphs/wifi_loopback.toml".to_string(),
             "flowgraphs/nullstream.toml".to_string(),
+            "flowgraphs/wifi_tx_bis.toml".to_string(),
         ];
         set_flowgraphs(fgs);
         set_selected("flowgraphs/zigbee_trx.toml".to_string());
@@ -558,6 +564,14 @@ pub fn Gui() -> impl IntoView {
     
     // Signal to track flowgraph switches
     let (fg_version, set_fg_version) = signal(0u32);
+    
+    // Simple reload button handler
+    let handle_reload = move |_| {
+        leptos::logging::log!("Manual reload triggered");
+        if let Some(window) = leptos::web_sys::window() {
+            let _ = window.location().reload();
+        }
+    };
 
     let fg_handle = LocalResource::new(move || {
         let rt_handle = rt_handle_clone.clone();
@@ -591,7 +605,15 @@ pub fn Gui() -> impl IntoView {
 
     view! {
         <h1 class="text-xl text-white m-4">FutureSDR Radio Frontend</h1>
-        <FlowgraphSelector rt_handle=rt_handle.clone() on_switch=on_switch />
+        <div class="m-4 flex gap-2">
+            <FlowgraphSelector rt_handle=rt_handle.clone() on_switch=on_switch />
+            <button
+                class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                on:click=handle_reload
+            >
+                "Reload Page"
+            </button>
+        </div>
         {move || {
             let version = fg_version.get();
             match fg_handle.get() {

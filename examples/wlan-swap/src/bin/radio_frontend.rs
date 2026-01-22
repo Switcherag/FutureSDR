@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         file.clone()
     } else {
         // Use zigbee_trx flowgraph by default for testing
-        "flowgraphs/zigbee_trx.toml".to_string()
+        "flowgraphs/wifi_tx.toml".to_string()
     };
     
     // Write to control file for initial state
@@ -95,11 +95,14 @@ fn main() -> Result<()> {
                     
                     println!(">>> Flowgraph running. Listening for reload signals...");
                     
-                    // Send reload message to FlowgraphController RX port so frontend can reload
+                    // Send 'initialized' message to FlowgraphController TX port to notify frontend
                     if let Some(controller_id) = loader.get_block("flowgraph_controller") {
                         use futuresdr::runtime::Pmt;
+                        let _ = new_fg_handle.call(controller_id, "tx", Pmt::String("initialized".to_string()));
+                        println!(">>> Sent initialization signal to frontend via FlowgraphController");
+                        
+                        // Also send reload message to RX port for any UI state resets
                         let _ = new_fg_handle.call(controller_id, "rx", Pmt::String("reload".to_string()));
-                        println!(">>> Sent reload notification to FlowgraphController RX port");
                     }
 
                     // Keep the new handle for next iteration
