@@ -216,6 +216,24 @@ impl BlockFactory for ApplyFactory {
                 
                 Ok(fg.add_block(block).into())
             }
+            "norm_sqr" => {
+                // Complex32 -> f32: |z|^2 = z.norm_sqr()
+                let block = Apply::<_, _, _>::new(|i: &Complex32| i.norm_sqr());
+                Ok(fg.add_block(block).into())
+            }
+            "dc_offset_removal" => {
+                // DC offset removal using IIR filter
+                let ratio = 1.0e-5f32;
+                let mut avg_real = 0.0f32;
+                let mut avg_img = 0.0f32;
+                
+                let block = Apply::<_, _, _>::new(move |c: &Complex32| -> Complex32 {
+                    avg_real = ratio * (c.re - avg_real) + avg_real;
+                    avg_img = ratio * (c.im - avg_img) + avg_img;
+                    Complex32::new(c.re - avg_real, c.im - avg_img)
+                });
+                Ok(fg.add_block(block).into())
+            }
             _ => bail!("Unknown closure type for Apply block: {}", closure_name),
         }
     }
@@ -434,21 +452,31 @@ struct CombineFactory;
 
 impl BlockFactory for CombineFactory {
     fn create(&self, fg: &mut Flowgraph, config: &BlockConfig) -> Result<BlockId> {
+        // Try both 'closure' and 'function' parameter names
         let closure_name = config.parameters.iter()
-            .find(|p| p.name == "closure")
+            .find(|p| p.name == "closure" || p.name == "function")
             .and_then(|p| p.value.as_str())
-            .context("Combine block requires 'closure' parameter")?;
+            .context("Combine block requires 'closure' or 'function' parameter")?;
         
         match closure_name {
-            "multiply_conj" => {
+            "multiply_conj" | "mult_conjugate" => {
+                // a * b.conj() : Complex32, Complex32 -> Complex32
                 let combine: Combine<_, Complex32, Complex32, Complex32> = Combine::new(
                     |a: &Complex32, b: &Complex32| a * b.conj()
                 );
                 Ok(fg.add_block(combine).into())
             }
             "divide" => {
+                // a / b : Complex32, Complex32 -> Complex32
                 let combine: Combine<_, Complex32, Complex32, Complex32> = Combine::new(
                     |a: &Complex32, b: &Complex32| a / b
+                );
+                Ok(fg.add_block(combine).into())
+            }
+            "norm_divide" => {
+                // a.norm() / b : Complex32, f32 -> f32
+                let combine: Combine<_, Complex32, f32, f32> = Combine::new(
+                    |a: &Complex32, b: &f32| a.norm() / b
                 );
                 Ok(fg.add_block(combine).into())
             }
@@ -602,9 +630,18 @@ struct WifiMovingAverageFactory;
 impl BlockFactory for WifiMovingAverageFactory {
     fn create(&self, fg: &mut Flowgraph, config: &BlockConfig) -> Result<BlockId> {
         let length = get_param_u32(&config.parameters, "length")? as usize;
-        // MovingAverage can work with f32 or Complex32, default to f32
-        let avg: wifi::MovingAverage<f32> = wifi::MovingAverage::new(length);
-        Ok(fg.add_block(avg).into())
+        let dtype = config.dtype.as_deref().unwrap_or("f32");
+        
+        match dtype {
+            "Complex32" => {
+                let avg: wifi::MovingAverage<Complex32> = wifi::MovingAverage::new(length);
+                Ok(fg.add_block(avg).into())
+            }
+            "f32" | _ => {
+                let avg: wifi::MovingAverage<f32> = wifi::MovingAverage::new(length);
+                Ok(fg.add_block(avg).into())
+            }
+        }
     }
 }
 

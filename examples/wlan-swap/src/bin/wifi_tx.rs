@@ -2,17 +2,16 @@ use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::blocks::Fft;
 use futuresdr::blocks::FftDirection;
-use futuresdr::blocks::Throttle;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
 use std::time::Duration;
 
-use wlan::wifi::Encoder;
-use wlan::wifi::Mac;
-use wlan::wifi::Mapper;
-use wlan::wifi::Mcs;
-use wlan::wifi::Prefix;
-use wlan::wifi::parse_channel;
+use wlan::Encoder;
+use wlan::Mac;
+use wlan::Mapper;
+use wlan::Mcs;
+use wlan::Prefix;
+use wlan::parse_channel;
 
 #[derive(Parser, Debug)]
 #[clap(version)]
@@ -27,7 +26,7 @@ struct Args {
     #[clap(short, long, default_value_t = 60.0)]
     gain: f64,
     /// Sample Rate
-    #[clap(short, long, default_value_t = 2e6)]
+    #[clap(short, long, default_value_t = 20e6)]
     sample_rate: f64,
     /// WLAN Channel Number
     #[clap(short, long, value_parser = parse_channel, default_value = "34")]
@@ -58,13 +57,13 @@ fn main() -> Result<()> {
     let prefix: Prefix = Prefix::new(PAD_FRONT, PAD_TAIL);
     connect!(fg, fft > prefix);
     let snk = Builder::new(args.args)?
-        .frequency(100_000_000.0)
+        .frequency(args.channel)
         .sample_rate(args.sample_rate)
         .gain(args.gain)
         .antenna(args.antenna)
         .build_sink()?;
-    let throttle = Throttle::<Complex32>::new(10_000_000.0);
-    connect!(fg, prefix > throttle > inputs[0].snk);
+
+    connect!(fg, prefix > inputs[0].snk);
 
     let mac = mac.get()?.id;
 
@@ -74,14 +73,14 @@ fn main() -> Result<()> {
     let mut seq = 0u64;
     rt.block_on(async move {
         loop {
-            Timer::after(Duration::from_secs_f32(1.0)).await;
+            Timer::after(Duration::from_secs_f32(0.1)).await;
             handle
                 .call(
                     mac,
                     "tx",
                     Pmt::Any(Box::new((
                         format!("FutureSDR {seq}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").as_bytes().to_vec(),
-                        Mcs::Bpsk_1_2,
+                        Mcs::Qam16_1_2,
                     ))),
                 )
                 .await

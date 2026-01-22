@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         file.clone()
     } else {
         // Use zigbee_trx flowgraph by default for testing
-        "flowgraphs/wifi_tx.toml".to_string()
+        "flowgraphs/wifi_rx.toml".to_string()
     };
     
     // Write to control file for initial state

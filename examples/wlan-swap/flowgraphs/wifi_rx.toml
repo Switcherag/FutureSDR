@@ -2,6 +2,10 @@
 # SDR Source -> Sync Short -> Sync Long -> FFT -> Equalizer -> Decoder
 
 [[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+[[blocks]]
 name = "src"
 type = "seify::Source"
 [[blocks.parameters]]
@@ -19,23 +23,11 @@ value = 28.0
 [[blocks.parameters]]
 name = "antenna"
 type = "string"
-value = ""  # optional
+value = ""
 [[blocks.parameters]]
 name = "args"
 type = "string"
-value = ""  # optional seify args
-
-# Optional DC Offset Removal
-[[blocks]]
-name = "dc_offset"
-type = "Apply"
-dtype = "Complex32"
-output_type = "Complex32"
-optional = true
-[[blocks.parameters]]
-name = "function"
-type = "closure"
-value = "dc_offset_removal"  # IIR filter: avg_real/img = ratio * (c - avg) + avg
+value = ""
 
 [[blocks]]
 name = "delay"
@@ -49,8 +41,6 @@ value = 16
 [[blocks]]
 name = "complex_to_mag_2"
 type = "Apply"
-dtype = "Complex32"
-output_type = "f32"
 [[blocks.parameters]]
 name = "function"
 type = "closure"
@@ -68,11 +58,10 @@ value = 64
 [[blocks]]
 name = "mult_conj"
 type = "Combine"
-dtype = "Complex32"
 [[blocks.parameters]]
 name = "function"
 type = "closure"
-value = "mult_conjugate"  # a * b.conj()
+value = "mult_conjugate"
 
 [[blocks]]
 name = "complex_avg"
@@ -86,13 +75,10 @@ value = 48
 [[blocks]]
 name = "divide_mag"
 type = "Combine"
-input1_type = "Complex32"
-input2_type = "f32"
-output_type = "f32"
 [[blocks.parameters]]
 name = "function"
 type = "closure"
-value = "norm_divide"  # a.norm() / b
+value = "norm_divide"
 
 [[blocks]]
 name = "sync_short"
@@ -142,54 +128,37 @@ name = "addr"
 type = "string"
 value = "127.0.0.1:55556"
 
+[[blocks]]
+name = "rx_messages_sink"
+type = "WebsocketPmtSink"
+[[blocks.parameters]]
+name = "port"
+type = "u16"
+value = 9003
+
 # Connections
-# Source -> delay (and other branches)
+# Source -> delay and other branches
 [[connections]]
 from = "src"
 from_port = "outputs[0]"
 to = "delay"
-conditional = "!dc_offset"
 
-[[connections]]
-from = "src"
-from_port = "outputs[0]"
-to = "dc_offset"
-conditional = "dc_offset"
-
-[[connections]]
-from = "dc_offset"
-to = "delay"
-conditional = "dc_offset"
-
-# Branch 1: magnitude detection
+# Branch 1: magnitude detection (src -> norm_sqr -> float_avg)
 [[connections]]
 from = "src"
 from_port = "outputs[0]"
 to = "complex_to_mag_2"
-conditional = "!dc_offset"
-
-[[connections]]
-from = "dc_offset"
-to = "complex_to_mag_2"
-conditional = "dc_offset"
 
 [[connections]]
 from = "complex_to_mag_2"
 to = "float_avg"
 
-# Branch 2: complex correlation
+# Branch 2: complex correlation (src -> mult_conj.in0, delay -> mult_conj.in1)
 [[connections]]
 from = "src"
 from_port = "outputs[0]"
 to = "mult_conj"
 to_port = "in0"
-conditional = "!dc_offset"
-
-[[connections]]
-from = "dc_offset"
-to = "mult_conj"
-to_port = "in0"
-conditional = "dc_offset"
 
 [[connections]]
 from = "delay"
@@ -200,7 +169,7 @@ to_port = "in1"
 from = "mult_conj"
 to = "complex_avg"
 
-# Combine paths
+# Combine paths for divide_mag
 [[connections]]
 from = "complex_avg"
 to = "divide_mag"
@@ -248,46 +217,29 @@ to = "decoder"
 from = "frame_equalizer"
 from_port = "symbols"
 to = "symbol_sink"
+to_port = "in"
 
 [[message_connections]]
 from = "decoder"
 from_port = "rx_frames"
 to = "blob_to_udp_frames"
+to_port = "in"
 
 [[message_connections]]
 from = "decoder"
 from_port = "rftap"
 to = "blob_to_udp_rftap"
+to_port = "in"
 
-# CLI Arguments
-[cli]
-[[cli.args]]
-name = "antenna"
-type = "string"
-optional = true
+# Forward RX frames to FlowgraphController for WebSocket broadcast
+[[message_connections]]
+from = "decoder"
+from_port = "rx_frames"
+to = "flowgraph_controller"
+to_port = "rx"
 
-[[cli.args]]
-name = "args"
-type = "string"
-optional = true
-
-[[cli.args]]
-name = "gain"
-type = "f64"
-default = 28.0
-
-[[cli.args]]
-name = "sample_rate"
-type = "f64"
-default = 20e6
-
-[[cli.args]]
-name = "channel"
-type = "f64"
-default = 34
-parser = "parse_channel"
-
-[[cli.args]]
-name = "dc_offset"
-type = "bool"
-default = false
+[[message_connections]]
+from = "flowgraph_controller"
+from_port = "rx_out"
+to = "rx_messages_sink"
+to_port = "in"
