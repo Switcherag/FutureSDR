@@ -78,7 +78,13 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
         use leptos::wasm_bindgen::closure::Closure;
         use leptos::wasm_bindgen::JsCast;
         
-        let ws = match WebSocket::new("ws://127.0.0.1:9003") {
+        // Get the hostname from the current page's location
+        let host = leptos::web_sys::window()
+            .and_then(|w| w.location().hostname().ok())
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        let ws_url = format!("ws://{}:9003", host);
+        
+        let ws = match WebSocket::new(&ws_url) {
             Ok(ws) => ws,
             Err(e) => {
                 leptos::logging::warn!("Failed to connect to RX WebSocket: {:?}", e);
@@ -559,7 +565,13 @@ pub fn FlowgraphSelector(
 
 #[component]
 pub fn Gui() -> impl IntoView {
-    let rt_handle = RuntimeHandle::from_url("http://127.0.0.1:1337");
+    // Get the hostname from the current page's location for remote access
+    let host = leptos::web_sys::window()
+        .and_then(|w| w.location().hostname().ok())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let rt_url = format!("http://{}:1337", host);
+    
+    let rt_handle = RuntimeHandle::from_url(&rt_url);
     let rt_handle_clone = rt_handle.clone();
     
     // Signal to track flowgraph switches
