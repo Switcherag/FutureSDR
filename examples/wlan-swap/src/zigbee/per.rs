@@ -9,6 +9,8 @@
 //! sending `packets_per_gain` packets at each level.
 
 use futuresdr::prelude::*;
+use futuresdr::async_io::Timer;
+use std::time::Duration;
 
 /// Configuration for the PER test
 #[derive(Clone, Debug)]
@@ -137,7 +139,7 @@ impl Per {
                     mio.post("status", Pmt::String(format!("started:gain={}", self.current_gain))).await?;
                     
                     // Trigger work to start sending
-                    io.notify_work();
+                    io.call_again = true;
                 }
             }
             Pmt::String(ref cmd) if cmd == "stop" => {
@@ -169,7 +171,7 @@ impl Per {
                     info!("Set initial TX gain to {} dB", self.current_gain);
                     mio.post("status", Pmt::String(format!("started:gain={}", self.current_gain))).await?;
                     
-                    io.notify_work();
+                    io.call_again = true;
                 }
             }
             _ => {
@@ -234,10 +236,10 @@ impl Kernel for Per {
         }
 
         // Schedule next packet after interval
-        smol::Timer::after(std::time::Duration::from_millis(self.config.packet_interval_ms)).await;
+        Timer::after(Duration::from_millis(self.config.packet_interval_ms)).await;
         
         // Continue sending
-        io.notify_work();
+        io.call_again = true;
         
         Ok(())
     }
