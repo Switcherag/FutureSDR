@@ -132,9 +132,9 @@ from_port = "gain"
 to = "snk"
 to_port = "gain"
 
-# Per status -> FlowgraphController rx_in (for monitoring)
+# Per status -> FlowgraphController rx (for monitoring)
 [[message_connections]]
 from = "per"
 from_port = "status"
 to = "flowgraph_controller"
-to_port = "rx_in"
+to_port = "rx"
