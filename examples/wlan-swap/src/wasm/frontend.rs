@@ -476,6 +476,7 @@ pub fn FlowgraphSelector(
             "flowgraphs/wifi_tx_bis.toml",
             "flowgraphs/zigbee_rx.toml",
             "flowgraphs/zigbee_rx_v2.toml",
+            "flowgraphs/zigbee_rx_v3.toml",
             "flowgraphs/zigbee_trx.toml",
             "flowgraphs/zigbee_tx.toml",
             "flowgraphs/zigbee_tx_v2.toml",

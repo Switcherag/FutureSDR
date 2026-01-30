@@ -1,0 +1,140 @@
+# ZigBee Transmitter with PER (Packet Error Rate) Test Block
+# 
+# This flowgraph runs a gain sweep test:
+#   - Sends "loadXXYYYY" messages where XX=gain, YYYY=sequence
+#   - Sweeps TX gain from 88 dB down to 0 dB (step 4)
+#   - Sends 1000 packets at each gain level
+#   - The Per block auto-starts on flowgraph init
+#
+# Flow:
+#   per.tx -> mac.tx (packets to send)
+#   per.gain -> snk.gain (gain control)
+#   per.status -> flowgraph_controller.rx_in (status updates)
+#
+# Message format: "loadGGSSSS"
+#   GG = gain value (00-88)
+#   SSSS = sequence number (0000-0999)
+
+[[blocks]]
+name = "flowgraph_controller"
+type = "FlowgraphController"
+
+# PER Test Block
+[[blocks]]
+name = "per"
+type = "zigbee::Per"
+[[blocks.parameters]]
+name = "gain_start"
+type = "f64"
+value = 88.0
+[[blocks.parameters]]
+name = "gain_end"
+type = "f64"
+value = 0.0
+[[blocks.parameters]]
+name = "gain_step"
+type = "f64"
+value = 4.0
+[[blocks.parameters]]
+name = "packets_per_gain"
+type = "i64"
+value = 1000
+[[blocks.parameters]]
+name = "packet_interval_ms"
+type = "i64"
+value = 10  # 100 packets/sec
+
+# MAC layer (TX side)
+[[blocks]]
+name = "mac"
+type = "zigbee::Mac"
+
+# ZigBee Modulator (composite block)
+[[blocks]]
+name = "modulator"
+type = "zigbee::Modulator"
+
+# IQ Delay (Gaussian filter delay compensation)
+[[blocks]]
+name = "iq_delay"
+type = "zigbee::IqDelay"
+
+# SDR Sink
+[[blocks]]
+name = "snk"
+type = "seify::Sink"
+[[blocks.parameters]]
+name = "frequency"
+type = "f64"
+value = 2.48e9  # channel 26
+[[blocks.parameters]]
+name = "sample_rate"
+type = "f64"
+value = 4e6  # 4 MHz to match RX
+[[blocks.parameters]]
+name = "gain"
+type = "f64"
+value = 88.0  # Initial gain, will be controlled by Per block
+[[blocks.parameters]]
+name = "antenna"
+type = "string"
+value = ""
+[[blocks.parameters]]
+name = "args"
+type = "string"
+value = ""
+
+# ============================================================================
+# Stream Connections
+# ============================================================================
+# mac -> modulator -> iq_delay -> snk
+
+[[connections]]
+from = "mac"
+from_port = "output"
+to = "modulator"
+to_port = "input"
+
+[[connections]]
+from = "modulator"
+from_port = "output"
+to = "iq_delay"
+to_port = "input"
+
+[[connections]]
+from = "iq_delay"
+from_port = "output"
+to = "snk"
+to_port = "inputs[0]"
+
+# ============================================================================
+# Message Connections
+# ============================================================================
+
+# FlowgraphController init signal -> Per ctrl (auto-start)
+[[message_connections]]
+from = "flowgraph_controller"
+from_port = "tx_out"
+to = "per"
+to_port = "ctrl"
+
+# Per tx output -> MAC tx (packets to send)
+[[message_connections]]
+from = "per"
+from_port = "tx"
+to = "mac"
+to_port = "tx"
+
+# Per gain control -> SDR sink gain
+[[message_connections]]
+from = "per"
+from_port = "gain"
+to = "snk"
+to_port = "gain"
+
+# Per status -> FlowgraphController rx_in (for monitoring)
+[[message_connections]]
+from = "per"
+from_port = "status"
+to = "flowgraph_controller"
+to_port = "rx_in"

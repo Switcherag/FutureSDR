@@ -28,7 +28,7 @@ struct Args {
     #[clap(short, long, default_value_t = 28.0)]
     gain: f64,
     /// Sample Rate
-    #[clap(short, long, default_value_t = 20e6)]
+    #[clap(short, long, default_value_t = 4e6)]
     sample_rate: f64,
     /// WLAN Channel Number
     #[clap(short, long, value_parser = parse_channel, default_value = "34")]
@@ -39,9 +39,10 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
     println!("Configuration: {args:?}");
 
+    args.channel = 2300.0e6;
     let rt = Runtime::new();
     let mut fg = Flowgraph::new();
 
