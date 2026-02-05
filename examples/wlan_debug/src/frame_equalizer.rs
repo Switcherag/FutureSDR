@@ -267,16 +267,16 @@ where
                 _ => {}
             }
 
-            // println!("equalizer state {:?}", self.state);
+            //println!("equalizer state {:?}", self.state);
 
-            // let b : Vec<u8> = (6..=58).filter(|i| *i != 32).map(|x| if self.sym_in[x].re > 0.0 { 0 } else { 1 }).collect();
-            // info!("{:?} {:?}", &self.state, b);
-            // for i in 0..64 {
-            //     if (i == 32) || (i < 6) || (i > 58) {
-            //         continue;
-            //     }
-            // }
-
+            /*let b : Vec<u8> = (6..=58).filter(|i| *i != 32).map(|x| if self.sym_in[x].re > 0.0 { 0 } else { 1 }).collect();
+            info!("{:?} {:?}", &self.state, b);
+            for i in 0..64 {
+                if (i == 32) || (i < 6) || (i > 58) {
+                    continue;
+                 }
+            }
+            */
             match &mut self.state {
                 State::Sync1 => {
                     self.equalizer.sync1(&self.sym_in);
@@ -295,7 +295,8 @@ where
                         &mut self.bits_out,
                         Modulation::Bpsk,
                     );
-                    
+                    // Include BPSK SIGNAL field symbols in constellation output
+                    self.syms.extend_from_slice(&self.sym_out);
                     // info!("{:?}", &self.bits_out);
                     i += 1;
                     if let Some(frame) = Self::decode_signal_field(
@@ -303,7 +304,7 @@ where
                         &self.bits_out,
                         &mut self.decoded_bits,
                     ) {
-                        // info!("signal field decoded {:?}, snr {}", &frame, self.equalizer.snr());
+                        info!("signal field decoded {:?}, snr {}", &frame, self.equalizer.snr());
 
                         self.state = State::Copy(
                             frame.n_symbols(),
@@ -315,10 +316,10 @@ where
                             Tag::NamedAny("wifi_start".to_string(), Box::new(frame)),
                         );
                     } else {
-                        info!(
+                        /*info!(
                             "signal field could not be decoded, snr {}",
                             self.equalizer.snr()
-                        );
+                        );*/
                         self.state = State::Skip;
                     }
                 }

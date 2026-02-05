@@ -14,21 +14,32 @@ use web_sys::WebGl2RenderingContext as GL;
 
 use crate::ArrayView;
 
-pub const BINS: usize = 128;
+pub const DEFAULT_BINS: usize = 256;
 
 struct RenderState {
     canvas: HtmlCanvasElement,
     gl: GL,
     width: Signal<f32>,
-    texture: [f32; BINS * BINS],
+    bins: usize,
+    texture: Vec<f32>,
 }
 
 #[component]
-/// Constellation Sink
+/// Constellation Sink with configurable density resolution
 ///
 /// See WLAN receiver for an example.
+///
+/// # Parameters
+/// - `width`: The coordinate range for the constellation (e.g., 2.0 means -2 to +2)
+/// - `bins`: Number of bins per dimension for the density map (default: 256). Higher = more detail.
+/// - `decay`: Decay factor per sample (default: 0.999). Lower = faster fade.
+/// - `intensity`: Intensity increment per sample hit (default: 0.1).
+/// - `websocket`: WebSocket URL for receiving constellation data.
 pub fn ConstellationSinkDensity(
     #[prop(into)] width: Signal<f32>,
+    #[prop(optional, default = DEFAULT_BINS)] bins: usize,
+    #[prop(optional, default = 0.999f32)] decay: f32,
+    #[prop(optional, default = 0.1f32)] intensity: f32,
     #[prop(optional, into, default = "ws://127.0.0.1:9002".to_string())] websocket: String,
 ) -> impl IntoView {
     let data = Rc::new(RefCell::new(None));
@@ -88,22 +99,42 @@ pub fn ConstellationSinkDensity(
                 varying vec2 coord;
                 uniform sampler2D sampler;
 
+                // Rainbow colormap: sky blue (low) -> cyan -> green -> yellow -> orange -> red (high)
                 vec3 color_map(float t) {
-                    const vec3 c0 = vec3(0.2777273272234177, 0.005407344544966578, 0.3340998053353061);
-                    const vec3 c1 = vec3(0.1050930431085774, 1.404613529898575, 1.384590162594685);
-                    const vec3 c2 = vec3(-0.3308618287255563, 0.214847559468213, 0.09509516302823659);
-                    const vec3 c3 = vec3(-4.634230498983486, -5.799100973351585, -19.33244095627987);
-                    const vec3 c4 = vec3(6.228269936347081, 14.17993336680509, 56.69055260068105);
-                    const vec3 c5 = vec3(4.776384997670288, -13.74514537774601, -65.35303263337234);
-                    const vec3 c6 = vec3(-5.435455855934631, 4.645852612178535, 26.3124352495832);
-
-                    return c0+t*(c1+t*(c2+t*(c3+t*(c4+t*(c5+t*c6)))));
+                    // Sky blue to red rainbow gradient
+                    // t=0: sky blue (0.53, 0.81, 0.92)
+                    // t=0.2: cyan (0.0, 1.0, 1.0)
+                    // t=0.4: green (0.0, 1.0, 0.0)
+                    // t=0.6: yellow (1.0, 1.0, 0.0)
+                    // t=0.8: orange (1.0, 0.5, 0.0)
+                    // t=1.0: red (1.0, 0.0, 0.0)
+                    
+                    vec3 sky_blue = vec3(0.53, 0.81, 0.92);
+                    vec3 cyan = vec3(0.0, 1.0, 1.0);
+                    vec3 green = vec3(0.0, 1.0, 0.0);
+                    vec3 yellow = vec3(1.0, 1.0, 0.0);
+                    vec3 orange = vec3(1.0, 0.5, 0.0);
+                    vec3 red = vec3(1.0, 0.0, 0.0);
+                    
+                    if (t < 0.2) {
+                        return mix(sky_blue, cyan, t / 0.2);
+                    } else if (t < 0.4) {
+                        return mix(cyan, green, (t - 0.2) / 0.2);
+                    } else if (t < 0.6) {
+                        return mix(green, yellow, (t - 0.4) / 0.2);
+                    } else if (t < 0.8) {
+                        return mix(yellow, orange, (t - 0.6) / 0.2);
+                    } else {
+                        return mix(orange, red, (t - 0.8) / 0.2);
+                    }
                 }
 
                 void main(void) {
                     vec4 sample = texture2D(sampler, vec2(coord.x * 0.5 + 0.5, coord.y * 0.5 - 0.5));
                     float value = clamp(sample.r, 0.0, 1.0);
-                    gl_FragColor = vec4(color_map(value), value);
+                    // Solid color (alpha = 1.0) when there's any sample, black background otherwise
+                    float alpha = value > 0.001 ? 1.0 : 0.0;
+                    gl_FragColor = vec4(color_map(value), alpha);
                 }
             ";
 
@@ -124,14 +155,14 @@ pub fn ConstellationSinkDensity(
             gl.tex_parameteri(GL::TEXTURE_2D, GL::TEXTURE_MIN_FILTER, GL::NEAREST as i32);
             gl.tex_parameteri(GL::TEXTURE_2D, GL::TEXTURE_MAG_FILTER, GL::NEAREST as i32);
 
-            let texture = [0.0f32; BINS * BINS];
+            let texture = vec![0.0f32; bins * bins];
             let view = unsafe { f32::view(&texture) };
             gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_array_buffer_view_and_src_offset(
                 GL::TEXTURE_2D,
                 0,
                 GL::R32F as i32,
-                BINS as i32,
-                BINS as i32,
+                bins as i32,
+                bins as i32,
                 0,
                 GL::RED,
                 GL::FLOAT,
@@ -160,8 +191,9 @@ pub fn ConstellationSinkDensity(
                 gl,
                 texture,
                 width,
+                bins,
             }));
-            request_animation_frame(render(state, data.clone()))
+            request_animation_frame(render(state, data.clone(), decay, intensity))
         }
     });
 
@@ -171,6 +203,8 @@ pub fn ConstellationSinkDensity(
 fn render(
     state: Rc<RefCell<RenderState>>,
     data: Rc<RefCell<Option<Vec<u8>>>>,
+    decay: f32,
+    intensity: f32,
 ) -> impl FnOnce() + 'static {
     move || {
         {
@@ -179,7 +213,9 @@ fn render(
                 gl,
                 texture,
                 width,
+                bins,
             } = &mut (*state.borrow_mut());
+            let bins = *bins;
 
             let display_width = canvas.client_width() as u32;
             let display_height = canvas.client_height() as u32;
@@ -199,16 +235,16 @@ fn render(
                     std::slice::from_raw_parts(p as *const Complex32, s)
                 };
 
-                let decay = 0.999f32.powi(samples.len() as i32);
-                texture.iter_mut().for_each(|v| *v *= decay);
+                let decay_factor = decay.powi(samples.len() as i32);
+                texture.iter_mut().for_each(|v| *v *= decay_factor);
 
                 let width = width.get_untracked();
                 for s in samples.iter() {
-                    let w = ((s.re + width) / (2.0 * width) * BINS as f32).round() as i64;
-                    if w >= 0 && w < BINS as i64 {
-                        let h = ((s.im + width) / (2.0 * width) * BINS as f32).round() as i64;
-                        if h >= 0 && h < BINS as i64 {
-                            texture[h as usize * BINS + w as usize] += 0.1;
+                    let w = ((s.re + width) / (2.0 * width) * bins as f32).round() as i64;
+                    if w >= 0 && w < bins as i64 {
+                        let h = ((s.im + width) / (2.0 * width) * bins as f32).round() as i64;
+                        if h >= 0 && h < bins as i64 {
+                            texture[h as usize * bins + w as usize] += intensity;
                         }
                     }
                 }
@@ -219,8 +255,8 @@ fn render(
                     0,
                     0,
                     0,
-                    BINS as i32,
-                    BINS as i32,
+                    bins as i32,
+                    bins as i32,
                     GL::RED,
                     GL::FLOAT,
                     &view,
@@ -231,6 +267,6 @@ fn render(
                 gl.draw_elements_with_i32(GL::TRIANGLES, 6, GL::UNSIGNED_SHORT, 0);
             }
         }
-        request_animation_frame(render(state, data))
+        request_animation_frame(render(state, data, decay, intensity))
     }
 }

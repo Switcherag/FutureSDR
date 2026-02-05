@@ -1,5 +1,8 @@
 use futuresdr::prelude::*;
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_FRAMES: usize = 128;
 const MAX_FRAME_SIZE: usize = 127;
@@ -93,7 +96,34 @@ where
     ) -> Result<Pmt> {
         match p {
             Pmt::Blob(data) => {
-                if Self::check_crc(&data) && data.len() > 2 {
+                let crc_ok = Self::check_crc(&data) && data.len() > 2;
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+                
+                // Log to file
+                if let Ok(mut file) = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("log2.txt")
+                {
+                    let hex_data: String = data.iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let _ = writeln!(
+                        file,
+                        "{:.6},{},{},{}",
+                        timestamp,
+                        data.len(),
+                        if crc_ok { "OK" } else { "FAIL" },
+                        hex_data
+                    );
+                }
+
+                if crc_ok {
+                    println!("========== CRC CORRECT! Frame {} bytes ==========", data.len());
                     info!("received frame, crc correct, payload length {}", data.len());
                     let mut rftap = vec![0; data.len() + 12];
                     rftap[0..4].copy_from_slice("RFta".as_bytes());
@@ -119,7 +149,8 @@ where
                     debug!("{}", s);
                     mio.post("rxed", Pmt::Blob(data)).await?;
                 } else {
-                    debug!("received frame, crc wrong");
+                    // Force decode: print frame data even with bad CRC
+                    println!("CRC wrong, frame {} bytes: {:02x?}", data.len(), &data[..data.len().min(20)]);
                 }
             }
             Pmt::Finished => {

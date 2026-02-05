@@ -18,6 +18,20 @@ fn decode(seq: u32, threshold: u32) -> Option<u8> {
     if *v < threshold { Some(i as u8) } else { None }
 }
 
+// Force decode: always return the best match regardless of threshold
+fn decode_force(seq: u32) -> u8 {
+    let mut matches = [32u32; 16];
+    for (i, o) in CHIP_MAPPING.iter().zip(matches.iter_mut()) {
+        *o = ((seq & 0x7FFFFFFE) ^ (i & 0x7FFFFFFE)).count_ones();
+    }
+    let (i, _) = matches
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, item)| **item)
+        .unwrap();
+    i as u8
+}
+
 #[derive(Debug)]
 enum State {
     Search,
@@ -100,7 +114,7 @@ where
             match &mut self.state {
                 State::Search => {
                     if self.correlator.matching(0) {
-                        // info!("premable found");
+                        info!("preamble found");
                         self.state = State::PreambleFound;
                         self.chip_count = 0;
                     }
@@ -108,6 +122,7 @@ where
                 State::PreambleFound => {
                     if self.chip_count == 0 {
                         if self.correlator.matching(7) {
+                            info!("SFD search started");
                             self.state = State::SearchSfd;
                         } else if !self.correlator.matching(0) {
                             self.state = State::Search;
@@ -117,6 +132,7 @@ where
                 State::SearchSfd => {
                     if self.chip_count == 0 {
                         if self.correlator.matching(10) {
+                            info!("SFD found, searching header");
                             self.state = State::SearchHeader { byte: None };
                         } else {
                             self.state = State::Search;
@@ -131,6 +147,7 @@ where
                             if let Some(o) = byte {
                                 let len = (i << 4) | *o;
                                 if len < 128 {
+                                    info!("header found, frame len: {}", len);
                                     self.state = State::Decode {
                                         len: (len as usize).saturating_sub(2),
                                         data: Vec::new(),
@@ -149,23 +166,21 @@ where
                 }
                 State::Decode { len, data, byte } => {
                     if self.chip_count == 0 {
-                        if let Some(i) =
-                            decode(self.correlator.shift_reg, self.correlator.threshold)
-                        {
-                            if let Some(current) = byte {
-                                let current = (i << 4) | *current;
-                                data.push(current);
-                                *byte = None;
-                                if data.len() == *len {
-                                    // info!("decoded frame");
-                                    mio.post("out", Pmt::Blob(std::mem::take(data))).await?;
-                                    self.state = State::Search;
-                                }
-                            } else {
-                                *byte = Some(i);
+                        // Force decode: use best match even if below threshold
+                        let i = decode(self.correlator.shift_reg, self.correlator.threshold)
+                            .unwrap_or_else(|| decode_force(self.correlator.shift_reg));
+                        
+                        if let Some(current) = byte {
+                            let current = (i << 4) | *current;
+                            data.push(current);
+                            *byte = None;
+                            if data.len() == *len {
+                                info!("decoded frame: {} bytes", data.len());
+                                mio.post("out", Pmt::Blob(std::mem::take(data))).await?;
+                                self.state = State::Search;
                             }
                         } else {
-                            self.state = State::Search;
+                            *byte = Some(i);
                         }
                     }
                 }

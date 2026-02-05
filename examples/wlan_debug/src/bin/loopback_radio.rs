@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::blocks::Apply;
 use futuresdr::blocks::BlobToUdp;
@@ -7,11 +8,11 @@ use futuresdr::blocks::Delay;
 use futuresdr::blocks::Fft;
 use futuresdr::blocks::FftDirection;
 use futuresdr::blocks::MessagePipe;
+use futuresdr::blocks::Throttle;
 use futuresdr::blocks::WebsocketPmtSink;
+use futuresdr::blocks::seify::Builder;
 use futuresdr::futures::StreamExt;
 use futuresdr::prelude::*;
-use rand_distr::Distribution;
-use rand_distr::Normal;
 use std::time::Duration;
 
 use wlan::Decoder;
@@ -25,50 +26,85 @@ use wlan::Prefix;
 use wlan::SyncLong;
 use wlan::SyncShort;
 
+#[derive(Parser, Debug)]
+#[clap(version)]
+struct Args {
+    /// Seify/SoapySDR device args
+    #[clap(short, long)]
+    args: Option<String>,
+    /// TX Gain
+    #[clap(long, default_value_t = 80.0)]
+    tx_gain: f64,
+    /// RX Gain
+    #[clap(long, default_value_t = 20.0)]
+    rx_gain: f64,
+    /// Sample Rate
+    #[clap(short, long, default_value_t = 2e6)]
+    sample_rate: f64,
+    /// Frequency (Hz)
+    #[clap(short, long, default_value_t = 2300e6)]
+    frequency: f64,
+}
+
 const PAD_FRONT: usize = 10000;
 const PAD_TAIL: usize = 10000;
 
 fn main() -> Result<()> {
+    let args = Args::parse();
+    futuresdr::runtime::init();
+    println!("Configuration: {args:?}");
+
     let mut fg = Flowgraph::new();
+
+    // ========================================
+    // Transmitter
+    // ========================================
     let mac = Mac::new([0x42; 6], [0x23; 6], [0xff; 6]);
     let encoder: Encoder = Encoder::new(Mcs::Qpsk_1_2);
     connect!(fg, mac.tx | tx.encoder);
     let mapper: Mapper = Mapper::new();
     connect!(fg, encoder > mapper);
-    let fft: Fft = Fft::with_options(
+    let fft_tx: Fft = Fft::with_options(
         64,
         FftDirection::Inverse,
         true,
         Some((1.0f32 / 52.0).sqrt()),
     );
-    connect!(fg, mapper > fft);
+    connect!(fg, mapper > fft_tx);
     let prefix: Prefix = Prefix::new(PAD_FRONT, PAD_TAIL);
-    connect!(fg, fft > prefix);
+    connect!(fg, fft_tx > prefix);
 
-    // add noise
-    let normal = Normal::new(0.0f32, 0.05).unwrap();
-    let noise = Apply::<_, _, _>::new(move |i: &Complex32| -> Complex32 {
-        let re = normal.sample(&mut rand::rng());
-        let imag = normal.sample(&mut rand::rng());
-        i + Complex32::new(re, imag)
-    });
-    connect!(fg, prefix > noise);
+    let throttle = Throttle::<Complex32>::new(10.0*args.sample_rate);
 
-    let src = noise;
+    // TX sink (ADALM-Pluto will use same device for TX and RX with loopback)
+    let tx_sink = Builder::new(args.args.clone())?
+        .frequency(args.frequency)
+        .sample_rate(args.sample_rate)
+        .gain(args.tx_gain)
+        .build_sink()?;
+
+    connect!(fg, prefix > throttle > inputs[0].tx_sink);
 
     // ========================================
     // Receiver
     // ========================================
+    // RX source (hardware loopback on the Pluto)
+    let rx_src = Builder::new(args.args)?
+        .frequency(args.frequency)
+        .sample_rate(args.sample_rate)
+        .gain(args.rx_gain)
+        .build_source()?;
+
     let delay = Delay::<Complex32>::new(16);
-    connect!(fg, src > delay);
+    connect!(fg, rx_src.outputs[0] > delay);
 
     let complex_to_mag_2 = Apply::<_, _, _>::new(|i: &Complex32| i.norm_sqr());
     let float_avg = MovingAverage::<f32>::new(64);
-    connect!(fg, src > complex_to_mag_2 > float_avg);
+    connect!(fg, rx_src.outputs[0] > complex_to_mag_2 > float_avg);
 
     let mult_conj = Combine::<_, _, _, _>::new(|a: &Complex32, b: &Complex32| a * b.conj());
     let complex_avg = MovingAverage::<Complex32>::new(48);
-    connect!(fg, src > in0.mult_conj > complex_avg);
+    connect!(fg, rx_src.outputs[0] > in0.mult_conj > complex_avg);
     connect!(fg, delay > in1.mult_conj);
 
     let divide_mag = Combine::<_, _, _, _>::new(|a: &Complex32, b: &f32| a.norm() / b);
@@ -109,13 +145,13 @@ fn main() -> Result<()> {
     let mut seq = 0u64;
     rt.spawn_background(async move {
         loop {
-            Timer::after(Duration::from_secs_f32(0.6)).await;
+            Timer::after(Duration::from_secs_f32(0.1)).await;
             handle
                 .call(
                     mac,
                     "tx",
                     Pmt::Any(Box::new((
-                        format!("FutureSDR {seq}").as_bytes().to_vec(),
+                        format!("FutureSDR {seq}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").as_bytes().to_vec(),
                         Mcs::Qpsk_1_2,
                     ))),
                 )

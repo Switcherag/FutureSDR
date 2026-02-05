@@ -186,7 +186,8 @@ where
             if self.copied == self.frame_param.n_symbols() {
                 self.frame_complete = true;
 
-                if self.decode() | true {
+                //self.decode(); // CRC check bypassed - always forward
+                if self.decode() {
                     // println!(
                     //     "decoded: {:?}",
                     //     &self.out_bytes[0..self.frame_param.psdu_size() + 2]

@@ -25,13 +25,13 @@ struct Args {
     #[clap(short, long)]
     args: Option<String>,
     /// Gain
-    #[clap(short, long, default_value_t = 30.0)]
+    #[clap(short, long, default_value_t = 36.0)]
     gain: f64,
     /// Sample Rate
-    #[clap(short, long, default_value_t = 1e6)]
+    #[clap(short, long, default_value_t = 2e6)]
     sample_rate: f64,
     /// Zigbee Channel Number (11..26)
-    #[clap(id = "channel", short, long, value_parser = parse_channel, default_value = "26")]
+    #[clap(id = "channel", short, long, value_parser = parse_channel, default_value = "25")]
     freq: f64,
     /// UDP Sink [address:port]
     #[clap(short, long)]

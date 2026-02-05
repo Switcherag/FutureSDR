@@ -2,7 +2,7 @@ use futuresdr::prelude::*;
 
 const MIN_GAP: usize = 480;
 const MAX_SAMPLES: usize = 540 * 80;
-const THRESHOLD: f32 = 0.7;
+const THRESHOLD: f32 = 0.7;  // previous 0.56
 
 #[derive(Debug)]
 enum State {
