@@ -10,9 +10,17 @@ use std::sync::mpsc;
 /// Global reload channel for flowgraph switching
 static RELOAD_CHANNEL: OnceLock<Mutex<mpsc::Sender<String>>> = OnceLock::new();
 
+/// Global gain channel for gain control (used by PER flowgraph)
+static GAIN_CHANNEL: OnceLock<Mutex<mpsc::Sender<f64>>> = OnceLock::new();
+
 /// Set the reload channel (called once at startup)
 pub fn set_reload_channel(tx: mpsc::Sender<String>) {
     RELOAD_CHANNEL.set(Mutex::new(tx)).ok();
+}
+
+/// Set the gain channel (called once at startup)
+pub fn set_gain_channel(tx: mpsc::Sender<f64>) {
+    GAIN_CHANNEL.set(Mutex::new(tx)).ok();
 }
 
 /// Block that receives PMT commands to switch flowgraphs and proxies MAC messages
@@ -99,6 +107,25 @@ impl FlowgraphController {
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
+        // Check if this is a gain control message (Pmt::F64 from Per block)
+        if let Pmt::F64(gain) = p {
+            info!("FlowgraphController: Received gain control message: {} dB", gain);
+            
+            // Send gain value through global channel for handle.call(snk, "gain", ...)
+            if let Some(tx_mutex) = GAIN_CHANNEL.get() {
+                if let Ok(tx) = tx_mutex.lock() {
+                    if let Err(e) = tx.send(gain) {
+                        error!("FlowgraphController: Failed to send gain signal: {}", e);
+                    }
+                }
+            }
+            
+            // Also forward to rx_out for UI display
+            let display_msg = Pmt::String(format!("gain:{}", gain));
+            let _ = mio.post("rx_out", display_msg).await;
+            return Ok(Pmt::Ok);
+        }
+        
         // Convert Blob to String for GUI display
         let display_msg = match p {
             Pmt::Blob(bytes) => {

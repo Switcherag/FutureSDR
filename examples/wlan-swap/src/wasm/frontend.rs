@@ -23,8 +23,86 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
     let (auto_send_active, set_auto_send_active) = signal(false);
     let (auto_send_count, set_auto_send_count) = signal(0u64);
     
-    // Clone fg_handle for auto-send effect
+    // Benchmark state
+    let (benchmark_active, set_benchmark_active) = signal(false);
+    let (benchmark_gain, set_benchmark_gain) = signal(88i32);
+    let (benchmark_packets_at_gain, set_benchmark_packets_at_gain) = signal(0u32);
+    let (benchmark_total, set_benchmark_total) = signal(0u64);
+    
+    // Clone fg_handle for all usages upfront
     let fg_handle_for_auto = fg_handle.clone();
+    let fg_handle_for_benchmark = fg_handle.clone();
+    let fg_handle_for_send = fg_handle.clone();
+    let fg_handle_for_toggle = fg_handle.clone();
+    
+    // Benchmark effect: sends "testxxGG" messages, sweeps gain 88->0 step 4
+    Effect::new(move |_| {
+        if benchmark_active.get() {
+            let fg_handle_clone = fg_handle_for_benchmark.clone();
+            let interval_handle = set_interval(
+                move || {
+                    let mut fg = fg_handle_clone.clone();
+                    let gain = benchmark_gain.get();
+                    let packets_at_gain = benchmark_packets_at_gain.get();
+                    
+                    // Send message "testxxGG" where GG is current gain
+                    let msg = format!("testxx{:02}", gain);
+                    let msg_for_display = msg.clone();
+                    let pmt = Pmt::Blob(msg.as_bytes().to_vec());
+                    
+                    spawn_local(async move {
+                        // Send to FlowgraphController tx which forwards to MAC
+                        match fg.call(0, "tx", pmt).await {
+                            Ok(_) => {
+                                leptos::logging::log!("Benchmark sent: {}", msg);
+                            }
+                            Err(e) => {
+                                leptos::logging::error!("Benchmark send failed: {:?}", e);
+                            }
+                        }
+                    });
+                    
+                    // Update counters
+                    set_benchmark_packets_at_gain.update(|c| *c += 1);
+                    set_benchmark_total.update(|c| *c += 1);
+                    
+                    // Check if we need to change gain (every 10000 packets)
+                    if packets_at_gain + 1 >= 10000 {
+                        let mut new_gain = gain - 4;
+                        if new_gain < 0 {
+                            // Wrap back to 88
+                            new_gain = 88;
+                        }
+                        
+                        // Change gain
+                        set_benchmark_gain.set(new_gain);
+                        set_benchmark_packets_at_gain.set(0);
+                        
+                        // Set new gain on SDR sink (block 5, gain handler)
+                        let mut fg_for_gain = fg_handle_clone.clone();
+                        let gain_pmt = Pmt::F64(new_gain as f64);
+                        spawn_local(async move {
+                            let _ = fg_for_gain.call(5, "gain", gain_pmt).await;
+                        });
+                        leptos::logging::log!("Benchmark: switched to gain {} dB", new_gain);
+                    }
+                    
+                    // Update TX display
+                    set_tx_messages.update(|msgs| {
+                        msgs.push(format!("[Benchmark g={}] {}", gain, msg_for_display));
+                        if msgs.len() > 50 {
+                            msgs.remove(0);
+                        }
+                    });
+                },
+                std::time::Duration::from_millis(100), // 100 packets/sec
+            );
+            
+            on_cleanup(move || {
+                drop(interval_handle);
+            });
+        }
+    });
     
     // Auto-send effect: sends messages every second when active
     Effect::new(move |_| {
@@ -127,7 +205,7 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
         let text = tx_input.get();
         if !text.is_empty() {
             let pmt = Pmt::Blob(text.as_bytes().to_vec());
-            let mut fg_handle = fg_handle.clone();
+            let mut fg_handle = fg_handle_for_send.clone();
             let text_clone = text.clone();
             
             spawn_local(async move {
@@ -172,6 +250,25 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
             set_auto_send_count(0);
         }
     };
+    
+    let toggle_benchmark = {
+        move |_| {
+            let was_active = benchmark_active.get();
+            set_benchmark_active.update(|active| *active = !*active);
+            if !was_active {
+                // Starting benchmark: reset state and set initial gain
+                set_benchmark_gain.set(88);
+                set_benchmark_packets_at_gain.set(0);
+                set_benchmark_total.set(0);
+                
+                // Set initial gain to 88
+                let mut fg = fg_handle_for_toggle.clone();
+                spawn_local(async move {
+                    let _ = fg.call(0, "gain", Pmt::F64(88.0)).await;
+                });
+            }
+        }
+    };
 
     view! {
         <div class="h-full flex flex-col">
@@ -198,6 +295,29 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                                 }.into_any()
                             } else {
                                 view! { <>"Auto-send OFF"</> }.into_any()
+                            }
+                        }}
+                    </button>
+                    <button
+                        class=move || {
+                            if benchmark_active.get() {
+                                "bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded flex items-center gap-2"
+                            } else {
+                                "bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded flex items-center gap-2"
+                            }
+                        }
+                        on:click=toggle_benchmark
+                    >
+                        {move || {
+                            if benchmark_active.get() {
+                                view! {
+                                    <>
+                                        <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                                        {format!("Benchmark g={} ({}/1000) total={}", benchmark_gain.get(), benchmark_packets_at_gain.get(), benchmark_total.get())}
+                                    </>
+                                }.into_any()
+                            } else {
+                                view! { <>"Start Benchmark (88→0 dB)"</> }.into_any()
                             }
                         }}
                     </button>

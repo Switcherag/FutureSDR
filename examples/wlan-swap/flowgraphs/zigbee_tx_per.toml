@@ -1,25 +1,20 @@
-# ZigBee Transmitter with PER (Packet Error Rate) Test Block
+# ZigBee Transmitter with PER (Packet Error Rate) Test
+# Based on zigbee_tx_v2.toml
 # 
-# This flowgraph runs a gain sweep test:
-#   - Sends "loadXXYYYY" messages where XX=gain, YYYY=sequence
-#   - Sweeps TX gain from 88 dB down to 0 dB (step 4)
-#   - Sends 1000 packets at each gain level
-#   - The Per block auto-starts on flowgraph init
+# Per block replaces FlowgraphController's TX connection to MAC.
+# Per sends "testxxGG" messages where GG is the current gain (88 -> 0, step 4)
+# Per also controls the SDR sink gain directly.
 #
 # Flow:
-#   per.tx -> mac.tx (packets to send)
-#   per.gain -> snk.gain (gain control)
-#   per.status -> flowgraph_controller.rx_in (status updates)
-#
-# Message format: "loadGGSSSS"
-#   GG = gain value (00-88)
-#   SSSS = sequence number (0000-0999)
+#   per.tx -> mac.tx (packets to send: "testxx88", "testxx84", ...)
+#   per.gain -> snk.gain (gain control: 88, 84, 80, ... 0)
+#   mac -> modulator -> iq_delay -> throttle -> snk (SDR)
 
 [[blocks]]
 name = "flowgraph_controller"
 type = "FlowgraphController"
 
-# PER Test Block
+# PER Test Block - replaces flowgraph_controller's TX to MAC
 [[blocks]]
 name = "per"
 type = "zigbee::Per"
@@ -59,6 +54,16 @@ type = "zigbee::Modulator"
 name = "iq_delay"
 type = "zigbee::IqDelay"
 
+# Throttle to avoid buffer overflow
+[[blocks]]
+name = "throttle"
+type = "Throttle"
+dtype = "Complex32"
+[[blocks.parameters]]
+name = "rate"
+type = "f64"
+value = 1e6  # Match sample_rate
+
 # SDR Sink
 [[blocks]]
 name = "snk"
@@ -66,11 +71,11 @@ type = "seify::Sink"
 [[blocks.parameters]]
 name = "frequency"
 type = "f64"
-value = 2.48e9  # channel 26
+value = 2.48e9  # channel 26 by default
 [[blocks.parameters]]
 name = "sample_rate"
 type = "f64"
-value = 4e6  # 4 MHz to match RX
+value = 1e6
 [[blocks.parameters]]
 name = "gain"
 type = "f64"
@@ -87,7 +92,7 @@ value = ""
 # ============================================================================
 # Stream Connections
 # ============================================================================
-# mac -> modulator -> iq_delay -> snk
+# mac -> modulator -> iq_delay -> throttle -> snk
 
 [[connections]]
 from = "mac"
@@ -104,6 +109,12 @@ to_port = "input"
 [[connections]]
 from = "iq_delay"
 from_port = "output"
+to = "throttle"
+to_port = "input"
+
+[[connections]]
+from = "throttle"
+from_port = "output"
 to = "snk"
 to_port = "inputs[0]"
 
@@ -111,30 +122,54 @@ to_port = "inputs[0]"
 # Message Connections
 # ============================================================================
 
-# FlowgraphController init signal -> Per ctrl (auto-start)
+# FlowgraphController init -> Per ctrl (auto-start the PER test)
 [[message_connections]]
 from = "flowgraph_controller"
 from_port = "tx_out"
 to = "per"
 to_port = "ctrl"
 
-# Per tx output -> MAC tx (packets to send)
+# Per tx -> MAC tx (packets: "testxx88", "testxx84", etc.)
 [[message_connections]]
 from = "per"
 from_port = "tx"
 to = "mac"
 to_port = "tx"
 
-# Per gain control -> SDR sink gain
+# Per gain -> SDR sink gain (88 -> 84 -> 80 -> ... -> 0)
 [[message_connections]]
 from = "per"
 from_port = "gain"
 to = "snk"
 to_port = "gain"
 
-# Per status -> FlowgraphController rx (for monitoring)
-[[message_connections]]
-from = "per"
-from_port = "status"
-to = "flowgraph_controller"
-to_port = "rx"
+# ============================================================================
+# CLI Arguments
+# ============================================================================
+[cli]
+[[cli.args]]
+name = "antenna"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "args"
+type = "string"
+optional = true
+
+[[cli.args]]
+name = "gain"
+type = "f64"
+default = 88.0
+
+[[cli.args]]
+name = "sample_rate"
+type = "f64"
+default = 1e6
+
+[[cli.args]]
+name = "channel"
+type = "f64"
+default = 26
+parser = "parse_channel"
+description = "Zigbee Channel Number (11..26)"

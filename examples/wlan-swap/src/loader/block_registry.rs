@@ -9,7 +9,7 @@ use futuresdr::blocks::{Apply, NullSource, NullSink, Delay, Fft, Combine, Thrott
 use futuresdr::blocks::{WebsocketPmtSink, FileSource, BlobToUdp};
 #[cfg(not(target_arch = "wasm32"))]
 use futuresdr::blocks::seify::Builder;
-use crate::zigbee::{Mac, IqDelay, ClockRecoveryMm, Decoder, modulator, Per};
+use crate::zigbee::{Mac, IqDelay, ClockRecoveryMm, Decoder, modulator};
 use crate::wifi;
 use super::toml_loader::{BlockConfig, ParameterConfig};
 
@@ -36,7 +36,7 @@ impl BlockRegistry {
         registry.register("zigbee::IqDelay", Box::new(IqDelayFactory));
         registry.register("zigbee::ClockRecoveryMm", Box::new(ClockRecoveryMmFactory));
         registry.register("zigbee::Decoder", Box::new(DecoderFactory));
-        registry.register("zigbee::Per", Box::new(PerFactory));
+        
         
         // Register generic blocks
         registry.register("Apply", Box::new(ApplyFactory));
@@ -142,49 +142,6 @@ impl BlockFactory for MacFactory {
     }
 }
 
-/// Factory for zigbee::Per (Packet Error Rate test block)
-struct PerFactory;
-
-impl BlockFactory for PerFactory {
-    fn create(&self, fg: &mut Flowgraph, config: &BlockConfig) -> Result<BlockId> {
-        // Extract optional parameters with defaults
-        let gain_start = config.parameters.iter()
-            .find(|p| p.name == "gain_start")
-            .and_then(|p| p.value.as_float())
-            .unwrap_or(88.0);
-        
-        let gain_end = config.parameters.iter()
-            .find(|p| p.name == "gain_end")
-            .and_then(|p| p.value.as_float())
-            .unwrap_or(0.0);
-        
-        let gain_step = config.parameters.iter()
-            .find(|p| p.name == "gain_step")
-            .and_then(|p| p.value.as_float())
-            .unwrap_or(4.0);
-        
-        let packets_per_gain = config.parameters.iter()
-            .find(|p| p.name == "packets_per_gain")
-            .and_then(|p| p.value.as_integer())
-            .map(|v| v as u32)
-            .unwrap_or(1000);
-        
-        let packet_interval_ms = config.parameters.iter()
-            .find(|p| p.name == "packet_interval_ms")
-            .and_then(|p| p.value.as_integer())
-            .map(|v| v as u64)
-            .unwrap_or(10);
-        
-        let per = Per::with_params(
-            gain_start,
-            gain_end,
-            gain_step,
-            packets_per_gain,
-            packet_interval_ms,
-        );
-        Ok(fg.add_block(per).into())
-    }
-}
 
 /// Factory for zigbee::Modulator (composite block)
 struct ModulatorFactory;

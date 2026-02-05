@@ -30,8 +30,8 @@ fn main() -> Result<()> {
     } else if let Some(ref file) = args.file {
         file.clone()
     } else {
-        // Use zigbee_trx flowgraph by default for testing
-        "flowgraphs/zigbee_rx_v3.toml".to_string()
+        // Use zigbee_tx_v2 flowgraph by default for testing
+        "flowgraphs/zigbee_tx_v2.toml".to_string()
     };
     
     // Write to control file for initial state

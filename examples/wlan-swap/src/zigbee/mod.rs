@@ -13,9 +13,6 @@ pub use mac::Mac;
 mod modulator;
 pub use modulator::modulator;
 
-mod per;
-pub use per::{Per, PerConfig};
-
 use anyhow::Result;
 use anyhow::bail;
 
