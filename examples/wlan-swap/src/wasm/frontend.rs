@@ -28,7 +28,7 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
     let (benchmark_gain, set_benchmark_gain) = signal(88i32);
     let (benchmark_packets_at_gain, set_benchmark_packets_at_gain) = signal(0u32);
     let (benchmark_total, set_benchmark_total) = signal(0u64);
-    
+    let (benchmark_repeat, set_benchmark_repeat) = signal(0u64);
     // Clone fg_handle for all usages upfront
     let fg_handle_for_auto = fg_handle.clone();
     let fg_handle_for_benchmark = fg_handle.clone();
@@ -44,9 +44,8 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                     let mut fg = fg_handle_clone.clone();
                     let gain = benchmark_gain.get();
                     let packets_at_gain = benchmark_packets_at_gain.get();
-                    
-                    // Send message "testxxGG" where GG is current gain
-                    let msg = format!("testxx{:02}", gain);
+                    // Send message "Message 18oGG" where GG is current gain
+                    let msg = format!("This Message is18o{:02}", gain);
                     let msg_for_display = msg.clone();
                     let pmt = Pmt::Blob(msg.as_bytes().to_vec());
                     
@@ -54,7 +53,7 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                         // Send to FlowgraphController tx which forwards to MAC
                         match fg.call(0, "tx", pmt).await {
                             Ok(_) => {
-                                leptos::logging::log!("Benchmark sent: {}", msg);
+                                //leptos::logging::log!("Benchmark sent: {}", msg);
                             }
                             Err(e) => {
                                 leptos::logging::error!("Benchmark send failed: {:?}", e);
@@ -67,11 +66,13 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                     set_benchmark_total.update(|c| *c += 1);
                     
                     // Check if we need to change gain (every 10000 packets)
-                    if packets_at_gain + 1 >= 10000 {
-                        let mut new_gain = gain - 4;
+                    if packets_at_gain + 1 >= 1000 {
+                        let mut new_gain = gain - 1;
                         if new_gain < 0 {
                             // Wrap back to 88
                             new_gain = 88;
+                            set_benchmark_repeat.update(|r| *r += 1);
+                            leptos::logging::log!("Wrapping n: {}", benchmark_repeat.get());
                         }
                         
                         // Change gain
