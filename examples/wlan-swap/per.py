@@ -21,9 +21,9 @@ def parse_packets(filename):
     """
     gain_counts = defaultdict(int)
     
-    # Pattern to match "testxx" followed by 2 digits (gain value)
+    # Pattern to match "This Message is18o" followed by 2 digits (gain value)
     # The packet may have binary garbage around it, so we search for the pattern
-    pattern = re.compile(rb'testxx(\d{2})')
+    pattern = re.compile(rb'This Message is18o(\d{2})')
     
     try:
         with open(filename, 'rb') as f:
@@ -85,9 +85,10 @@ def print_results(results, expected_per_gain=1000):
     print(f"{'TOTAL':<8} {'':<8} {total_received:<12} {total_expected:<12} {overall_ratio:<12.3f} {overall_per:<12.1f}")
     print("=" * 72)
 
-def plot_results(results, output_file='per_results.png'):
+def plot_results(results, expected_per_gain, output_file='per_results.png'):
     """
-    Plot the reception ratio vs TX gain and dBm.
+    Plot the PER (error %) vs TX gain and dBm.
+    Origin at 0.001% error and lowest SNR.
     """
     if not results:
         print("No data to plot!")
@@ -98,43 +99,46 @@ def plot_results(results, output_file='per_results.png'):
     ratios = [r[2] for r in results]
     counts = [r[1] for r in results]
     
+    # Convert ratios to PER percentages
+    per_percentages = [(1 - r) * 100 for r in ratios]
+    
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
     
-    # Plot 1: Reception Ratio vs dBm (primary) and Gain (secondary)
-    ax1.plot(dbm_values, ratios, 'b-o', linewidth=2, markersize=8)
-    ax1.set_xlabel('RX SNR (dB)', fontsize=12)
-    ax1.set_ylabel('Reception Ratio (received/expected)', fontsize=12)
-    ax1.set_title('Packet Reception Ratio vs TX Power', fontsize=14)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xlim(max(dbm_values) + 2, min(dbm_values) - 2)  # High power on left
-    ax1.set_ylim(0, 1.1)
-    ax1.axhline(y=1.0, color='g', linestyle='--', alpha=0.5, label='100% reception')
-    ax1.axhline(y=0.5, color='orange', linestyle='--', alpha=0.5, label='50% reception')
+    # Plot 1: PER (%) vs SNR (dBm) on log scale
+    ax1.semilogy(dbm_values, per_percentages, 'r-o', linewidth=2, markersize=8)
+    ax1.set_xlabel('RX SNR (dBm)', fontsize=12)
+    ax1.set_ylabel('Packet Error Rate - PER (%)', fontsize=12)
+    ax1.set_title('Packet Error Rate vs RX SNR', fontsize=14)
+    ax1.grid(True, alpha=0.3, which='both')
+    ax1.set_xlim(min(dbm_values) - 2, max(dbm_values) + 2)  # Low power on left, high on right
+    ax1.set_ylim(0.001, 200)  # Origin at 0.001% error, log scale
+    ax1.axhline(y=0.001, color='g', linestyle='--', alpha=0.5, label='0.001% (origin)')
+    ax1.axhline(y=1, color='orange', linestyle='--', alpha=0.5, label='1% PER')
     ax1.legend()
     
     # Add secondary x-axis for gain
     ax1_gain = ax1.twiny()
-    ax1_gain.set_xlim(ax1.get_xlim()[0] + 85, ax1.get_xlim()[1] + 85)
+    ax1_gain.set_xlim(min(dbm_values) - 2 + 85, max(dbm_values) + 2 + 85)
     ax1_gain.set_xlabel('TX Gain Setting', fontsize=10, color='gray')
     ax1_gain.tick_params(axis='x', colors='gray')
     
     # Plot 2: Received Packet Count vs dBm (bar chart)
-    colors = ['green' if r > 0.9 else 'orange' if r > 0.5 else 'red' for r in ratios]
+    colors = ['green' if per < 10 else 'orange' if per < 50 else 'red' for per in per_percentages]
     ax2.bar(dbm_values, counts, color=colors, edgecolor='black', alpha=0.7, width=3)
-    ax2.set_xlabel('TX Power (dBm)', fontsize=12)
+    ax2.set_xlabel('RX SNR (dBm)', fontsize=12)
     ax2.set_ylabel('Received Packet Count', fontsize=12)
-    ax2.set_title('Received Packets vs TX Power', fontsize=14)
+    ax2.set_title('Received Packets vs RX SNR', fontsize=14)
     ax2.grid(True, alpha=0.3, axis='y')
-    ax2.set_xlim(max(dbm_values) + 2, min(dbm_values) - 2)  # High power on left
+    ax2.set_xlim(min(dbm_values) - 2, max(dbm_values) + 2)  # Low power on left, high on right
     
     # Add secondary x-axis for gain
     ax2_gain = ax2.twiny()
-    ax2_gain.set_xlim(ax2.get_xlim()[0] + 85, ax2.get_xlim()[1] + 85)
+    ax2_gain.set_xlim(min(dbm_values) - 2 + 85, max(dbm_values) + 2 + 85)
     ax2_gain.set_xlabel('TX Gain Setting', fontsize=10, color='gray')
     ax2_gain.tick_params(axis='x', colors='gray')
     
     # Add expected line
-    expected = 10000
+    expected = expected_per_gain
     ax2.axhline(y=expected, color='blue', linestyle='--', alpha=0.7, label=f'Expected ({expected})')
     ax2.legend()
     
@@ -145,8 +149,8 @@ def plot_results(results, output_file='per_results.png'):
 
 def main():
     # Configuration
-    input_file = 'received_packets.txt'
-    expected_per_gain = 10000  # Number of packets sent at each gain level
+    input_file = 'data.txt'
+    expected_per_gain = 500  # Number of packets sent at each gain level
     
     if len(sys.argv) > 1:
         input_file = sys.argv[1]
@@ -171,8 +175,18 @@ def main():
     # Print summary
     print_results(results, expected_per_gain)
     
+    # Calculate and display overall PER
+    total_received = sum(r[1] for r in results)
+    total_expected = len(results) * expected_per_gain
+    overall_per = ((total_expected - total_received) / total_expected * 100) if total_expected > 0 else 0
+    
+    print("\n" + "=" * 72)
+    print(f"OVERALL PACKET ERROR RATE (PER): {overall_per:.2f}%")
+    print(f"Total Received: {total_received}/{total_expected} packets")
+    print("=" * 72 + "\n")
+    
     # Plot results
-    plot_results(results)
+    plot_results(results, expected_per_gain)
 
 if __name__ == '__main__':
     main()

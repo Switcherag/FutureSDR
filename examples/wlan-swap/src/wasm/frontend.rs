@@ -90,7 +90,7 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                     // Update TX display
                     set_tx_messages.update(|msgs| {
                         msgs.push(format!("[Benchmark g={}] {}", gain, msg_for_display));
-                        if msgs.len() > 50 {
+                        if msgs.len() > 20 {
                             msgs.remove(0);
                         }
                     });
@@ -135,7 +135,7 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                     // Update TX display
                     set_tx_messages.update(|msgs| {
                         msgs.push(format!("[Auto] {}", msg_for_display));
-                        if msgs.len() > 50 {
+                        if msgs.len() > 20 {
                             msgs.remove(0);
                         }
                     });
@@ -188,7 +188,7 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                         } else {
                             set_rx_messages_clone.update(|msgs| {
                                 msgs.push(msg_str);
-                                if msgs.len() > 50 {
+                                if msgs.len() > 20 {
                                     msgs.remove(0);
                                 }
                             });
@@ -224,8 +224,8 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
             // Add to TX messages display
             set_tx_messages.update(|msgs| {
                 msgs.push(format!("[Manual] {}", text_clone));
-                // Keep only last 50 messages
-                if msgs.len() > 50 {
+                // Keep only last 20 messages
+                if msgs.len() > 20 {
                     msgs.remove(0);
                 }
             });
@@ -338,10 +338,10 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                         } else {
                             view! {
                                 <div>
-                                    {messages.iter().enumerate().map(|(i, msg)| {
+                                    {messages.iter().rev().take(20).enumerate().map(|(i, msg)| {
                                         view! {
                                             <div class="text-blue-400 mb-1">
-                                                <span class="text-gray-400">{format!("[{}] ", i)}</span>
+                                                <span class="text-gray-400">{format!("[{}] ", messages.len() - i - 1)}</span>
                                                 {msg.clone()}
                                             </div>
                                         }
@@ -366,10 +366,10 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                         } else {
                             view! {
                                 <div>
-                                    {messages.iter().enumerate().map(|(i, msg)| {
+                                    {messages.iter().rev().take(20).enumerate().map(|(i, msg)| {
                                         view! {
                                             <div class="text-green-400 mb-1">
-                                                <span class="text-gray-400">{format!("[{}] ", i)}</span>
+                                                <span class="text-gray-400">{format!("[{}] ", messages.len() - i - 1)}</span>
                                                 {msg.clone()}
                                             </div>
                                         }

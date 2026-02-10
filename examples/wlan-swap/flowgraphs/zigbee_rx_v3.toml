@@ -19,7 +19,7 @@ type = "seify::Source"
 [[blocks.parameters]]
 name = "frequency"
 type = "f64"
-value = 2.48e9  # channel 26 by default
+value = 2.3e9  # channel 26 by default
 [[blocks.parameters]]
 name = "sample_rate"
 type = "f64"
