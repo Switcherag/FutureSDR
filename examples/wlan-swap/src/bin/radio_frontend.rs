@@ -88,7 +88,7 @@ fn main() -> Result<()> {
                         Ok(h) => h,
                         Err(e) => {
                             eprintln!(">>> Failed to start flowgraph: {}", e);
-                            thread::sleep(Duration::from_secs(2));
+                            thread::sleep(Duration::from_secs(1));
                             continue;
                         }
                     };

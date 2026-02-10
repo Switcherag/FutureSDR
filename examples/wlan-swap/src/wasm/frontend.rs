@@ -340,9 +340,10 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                             view! {
                                 <div>
                                     {messages.iter().rev().take(20).enumerate().map(|(i, msg)| {
+                                        let max_idx = std::cmp::min(20, messages.len());
                                         view! {
                                             <div class="text-blue-400 mb-1">
-                                                <span class="text-gray-400">{format!("[{}] ", messages.len() - i - 1)}</span>
+                                                <span class="text-gray-400">{format!("[{}] ", max_idx - i - 1)}</span>
                                                 {msg.clone()}
                                             </div>
                                         }
@@ -368,9 +369,10 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                             view! {
                                 <div>
                                     {messages.iter().rev().take(20).enumerate().map(|(i, msg)| {
+                                        let max_idx = std::cmp::min(20, messages.len());
                                         view! {
                                             <div class="text-green-400 mb-1">
-                                                <span class="text-gray-400">{format!("[{}] ", messages.len() - i - 1)}</span>
+                                                <span class="text-gray-400">{format!("[{}] ", max_idx - i - 1)}</span>
                                                 {msg.clone()}
                                             </div>
                                         }

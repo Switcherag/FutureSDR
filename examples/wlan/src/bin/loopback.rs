@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     connect!(fg, fft > prefix);
 
     // add noise
-    let normal = Normal::new(0.0f32, 0.05).unwrap();
+    let normal = Normal::new(0.0f32, 0.01).unwrap();
     let noise = Apply::<_, _, _>::new(move |i: &Complex32| -> Complex32 {
         let re = normal.sample(&mut rand::rng());
         let imag = normal.sample(&mut rand::rng());
@@ -109,14 +109,14 @@ fn main() -> Result<()> {
     let mut seq = 0u64;
     rt.spawn_background(async move {
         loop {
-            Timer::after(Duration::from_secs_f32(0.6)).await;
+            Timer::after(Duration::from_secs_f32(0.8)).await;
             handle
                 .call(
                     mac,
                     "tx",
                     Pmt::Any(Box::new((
                         format!("FutureSDR {seq}").as_bytes().to_vec(),
-                        Mcs::Qpsk_1_2,
+                        Mcs::Qam16_1_2,
                     ))),
                 )
                 .await

@@ -1,0 +1,31 @@
+=== FutureSDR Radio Frontend ===
+Initial flowgraph: flowgraphs/zigbee_rx_v3.toml
+Hot-reload: Web GUI can switch flowgraphs via control message
+
+[2m2026-02-10T14:55:26.103873Z[0m [32m INFO[0m main [2mfuturesdr::runtime::runtime[0m[2m:[0m after init in runtime
+[2m2026-02-10T14:55:26.105666Z[0m [32m INFO[0m main [2mfuturesdr::runtime::runtime[0m[2m:[0m runtime constructed
+>>> Runtime started at http://127.0.0.1:1337
+>>> Press Ctrl+C to stop
+
+>>> Loading flowgraph: flowgraphs/zigbee_rx_v3.toml
+[2m2026-02-10T14:55:26.106059Z[0m [34mDEBUG[0m ThreadId(31) [2mfuturesdr::runtime::ctrl_port[0m[2m:[0m Listening on 0.0.0.0:1337
+DEBUG: Connecting message: decoder (BlockId(4)) port 'out' -> mac (BlockId(5))
+DEBUG: Connecting message: decoder (BlockId(4)) port 'out' -> blob_to_udp_frames (BlockId(7))
+DEBUG: Connecting message: mac (BlockId(5)) port 'rftap' -> blob_to_udp_rftap (BlockId(8))
+>>> Flowgraph loaded successfully!
+>>> FlowgraphController is at block ID: BlockId(0)
+[2m2026-02-10T14:55:28.569900Z[0m [34mDEBUG[0m smol-26 [2mfuturesdr::runtime::runtime[0m[2m:[0m in run_flowgraph
+[2m2026-02-10T14:55:28.570265Z[0m [34mDEBUG[0m smol-26 [2mfuturesdr::runtime::runtime[0m[2m:[0m init blocks
+[2m2026-02-10T14:55:28.570333Z[0m [34mDEBUG[0m smol-26 [2mfuturesdr::runtime::runtime[0m[2m:[0m wait for blocks init
+[2m2026-02-10T14:55:28.639075Z[0m [34mDEBUG[0m smol-21 [2mfuturesdr::runtime::runtime[0m[2m:[0m running blocks
+>>> Flowgraph running. Listening for reload signals...
+>>> Sent initialization signal to frontend via FlowgraphController
+[2m2026-02-10T15:00:17.615364Z[0m [31mERROR[0m blocking-1 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Error: Soapy(Error { code: Timeout, message: "" })
+[2m2026-02-10T15:00:17.615488Z[0m [34mDEBUG[0m blocking-1 [2mfuturesdr::runtime::block[0m[2m:[0m SeifySource-1 terminating 
+[2m2026-02-10T15:00:17.615652Z[0m [34mDEBUG[0m    smol-21 [2mfuturesdr::runtime::block[0m[2m:[0m Apply-2 terminating 
+[2m2026-02-10T15:00:17.615785Z[0m [34mDEBUG[0m    smol-23 [2mfuturesdr::runtime::block[0m[2m:[0m ClockRecoveryMm-3 terminating 
+[2m2026-02-10T15:00:17.615921Z[0m [34mDEBUG[0m    smol-25 [2mfuturesdr::runtime::block[0m[2m:[0m Decoder-4 terminating 
+[2m2026-02-10T15:00:17.616033Z[0m [34mDEBUG[0m    smol-23 [2mfuturesdr::runtime::block[0m[2m:[0m BlobToUdp-7 terminating 
+[2m2026-02-10T15:00:17.616034Z[0m [34mDEBUG[0m    smol-24 [2mfuturesdr::runtime::block[0m[2m:[0m Mac-5 terminating 
+[2m2026-02-10T15:00:17.616121Z[0m [34mDEBUG[0m    smol-23 [2mfuturesdr::runtime::block[0m[2m:[0m NullSink-6 terminating 
+[2m2026-02-10T15:00:17.616125Z[0m [34mDEBUG[0m    smol-21 [2mfuturesdr::runtime::block[0m[2m:[0m BlobToUdp-8 terminating 
