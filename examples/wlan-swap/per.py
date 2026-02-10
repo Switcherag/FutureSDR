@@ -23,7 +23,7 @@ def parse_packets(filename):
     
     # Pattern to match "This Message is18o" followed by 2 digits (gain value)
     # The packet may have binary garbage around it, so we search for the pattern
-    pattern = re.compile(rb'This Message is18o(\d{2})')
+    pattern = re.compile(rb'Message20o(\d{2})')
     
     try:
         with open(filename, 'rb') as f:

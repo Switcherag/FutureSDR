@@ -44,8 +44,8 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                     let mut fg = fg_handle_clone.clone();
                     let gain = benchmark_gain.get();
                     let packets_at_gain = benchmark_packets_at_gain.get();
-                    // Send message "Message 18oGG" where GG is current gain
-                    let msg = format!("This Message is18o{:02}", gain);
+                    // Send message "Message 20oGG" where GG is current gain
+                    let msg = format!("Message20o{:02}", gain);
                     let msg_for_display = msg.clone();
                     let pmt = Pmt::Blob(msg.as_bytes().to_vec());
                     
@@ -325,7 +325,8 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                 </div>
             </div>
             
-            // TX Messages Display
+            // TX Messages Display - DISABLED TO PREVENT MEMORY LEAKS
+            /*
             <div class="flex-1 mb-4 flex flex-col">
                 <h3 class="text-white mb-2">"Transmitted Messages:"</h3>
                 <div class="flex-1 bg-black border border-gray-600 rounded p-2 overflow-y-auto font-mono text-sm">
@@ -340,10 +341,9 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                             view! {
                                 <div>
                                     {messages.iter().rev().take(20).enumerate().map(|(i, msg)| {
-                                        let max_idx = std::cmp::min(20, messages.len());
                                         view! {
                                             <div class="text-blue-400 mb-1">
-                                                <span class="text-gray-400">{format!("[{}] ", max_idx - i - 1)}</span>
+                                                <span class="text-gray-400">{format!("[{}] ", messages.len() - i - 1)}</span>
                                                 {msg.clone()}
                                             </div>
                                         }
@@ -354,8 +354,10 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                     }}
                 </div>
             </div>
+            */
             
-            // RX Messages Display
+            // RX Messages Display - DISABLED TO PREVENT MEMORY LEAKS
+            /*
             <div class="flex-1 mb-4 flex flex-col">
                 <h3 class="text-white mb-2">"Received Messages (Decoder):"</h3>
                 <div class="flex-1 bg-black border border-gray-600 rounded p-2 overflow-y-auto font-mono text-sm">
@@ -369,10 +371,9 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                             view! {
                                 <div>
                                     {messages.iter().rev().take(20).enumerate().map(|(i, msg)| {
-                                        let max_idx = std::cmp::min(20, messages.len());
                                         view! {
                                             <div class="text-green-400 mb-1">
-                                                <span class="text-gray-400">{format!("[{}] ", max_idx - i - 1)}</span>
+                                                <span class="text-gray-400">{format!("[{}] ", messages.len() - i - 1)}</span>
                                                 {msg.clone()}
                                             </div>
                                         }
@@ -383,6 +384,7 @@ pub fn MacConsole(fg_handle: FlowgraphHandle) -> impl IntoView {
                     }}
                 </div>
             </div>
+            */
             
             // TX Message Input
             <div class="flex-shrink-0">

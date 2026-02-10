@@ -119,7 +119,7 @@ where
                     debug!("{}", s);
                     mio.post("rxed", Pmt::Blob(data)).await?;
                 } else {
-                    info!("received frame, crc wrong");
+                    debug!("received frame, crc wrong");
                     self.n_received += 1;
                     let s = String::from_iter(
                         data.iter()
@@ -133,7 +133,7 @@ where
                                 }
                             }),
                     );
-                    debug!("{}", s);
+                    info!("{}", s);
                     mio.post("rxed", Pmt::Blob(data)).await?;
                 }
             }
