@@ -149,7 +149,7 @@ where
                                 if len < 128 {
                                     info!("header found, frame len: {}", len);
                                     self.state = State::Decode {
-                                        len: (len as usize).saturating_sub(2),
+                                        len: len as usize,
                                         data: Vec::new(),
                                         byte: None,
                                     };

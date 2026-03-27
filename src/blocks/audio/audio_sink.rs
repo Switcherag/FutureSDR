@@ -19,6 +19,7 @@ where
 {
     #[input]
     input: I,
+    input_channels: u16,
     sample_rate: u32,
     channels: u16,
     stream: Option<Stream>,
@@ -39,18 +40,47 @@ impl<I> AudioSink<I>
 where
     I: CpuBufferReader<Item = f32>,
 {
+    fn supports_config(sample_rate: u32, channels: u16) -> bool {
+        let Some(device) = cpal::default_host().default_output_device() else {
+            return false;
+        };
+
+        let Ok(configs) = device.supported_output_configs() else {
+            return false;
+        };
+
+        configs.into_iter().any(|config| {
+            config.channels() == channels
+                && sample_rate >= config.min_sample_rate().0
+                && sample_rate <= config.max_sample_rate().0
+        })
+    }
+
     /// Create AudioSink block
-    pub fn new(sample_rate: u32, channels: u16) -> Self {
-        AudioSink {
+    pub fn new(sample_rate: u32, channels: u16) -> Result<Self> {
+        let output_channels = if Self::supports_config(sample_rate, channels) {
+            channels
+        } else if channels == 1 && Self::supports_config(sample_rate, 2) {
+            warn!(
+                "audio sink requested mono output at {} Hz, but only stereo is supported; duplicating samples to both channels",
+                sample_rate
+            );
+            2
+        } else {
+            return Err(Error::InvalidParameter.into());
+        };
+
+        Ok(AudioSink {
             input: I::default(),
+            input_channels: channels,
             sample_rate,
-            channels,
+            channels: output_channels,
             stream: None,
             min_buffer_size: 2048,
             vec: Vec::new(),
             terminated: None,
             tx: None,
-        }
+        })
     }
 }
 
@@ -98,10 +128,10 @@ where
     I: CpuBufferReader<Item = f32>,
 {
     async fn init(&mut self, _m: &mut MessageOutputs, _b: &mut BlockMeta) -> Result<()> {
-        let host = cpal::default_host();
-        let device = host
+        let device = cpal::default_host()
             .default_output_device()
             .expect("no output device available");
+        let duplicate_mono = self.input_channels == 1 && self.channels == 2;
 
         let config = StreamConfig {
             channels: self.channels,
@@ -128,17 +158,33 @@ where
                             }
                             return;
                         }
-                        let n = std::cmp::min(v.len(), data.len() - i);
-                        data[i..i + n].copy_from_slice(&v[..n]);
-                        i += n;
-
-                        if n < v.len() {
-                            iter = Some(v.split_off(n));
-                            debug_assert!(!iter.as_ref().unwrap().is_empty());
-                            debug_assert_eq!(i, data.len());
-                            return;
-                        } else if i == data.len() {
-                            return;
+                        if duplicate_mono {
+                            let n = std::cmp::min(v.len(), (data.len() - i) / 2);
+                            for j in 0..(n) {
+                                data[i + 2 * j] = v[j];
+                                data[i + 2 * j + 1] = v[j];
+                            }
+                            i += 2 * n;
+                            if n < v.len() {
+                                iter = Some(v.split_off(n));
+                                debug_assert!(!iter.as_ref().unwrap().is_empty());
+                                debug_assert_eq!(i, data.len());
+                                return;
+                            } else if i == data.len() {
+                                return;
+                            }
+                        } else {
+                            let n = std::cmp::min(v.len(), data.len() - i);
+                            data[i..i + n].copy_from_slice(&v[..n]);
+                            i += n;
+                            if n < v.len() {
+                                iter = Some(v.split_off(n));
+                                debug_assert!(!iter.as_ref().unwrap().is_empty());
+                                debug_assert_eq!(i, data.len());
+                                return;
+                            } else if i == data.len() {
+                                return;
+                            }
                         }
                     }
                 },
