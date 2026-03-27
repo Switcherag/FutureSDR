@@ -4,10 +4,8 @@ version = "0.0.1"
 edition = "2024"
 default-run = "rx"
 
-[workspace]
-
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["dylib", "rlib"]
 
 [features]
 default = ["soapy"]

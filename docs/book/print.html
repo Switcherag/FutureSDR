@@ -1,0 +1,2783 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>FutureSDR Dynamic Plugin Architecture</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+        <!-- MathJax -->
+        <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-2621cb30.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-1033f7d8.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">FutureSDR Dynamic Plugin Architecture</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="futuresdr-dynamic-plugin-architecture"><a class="header" href="#futuresdr-dynamic-plugin-architecture">FutureSDR Dynamic Plugin Architecture</a></h1>
+<p>This book provides an in-depth technical reference for the FutureSDR framework
+and its dynamic plugin system. It is written for computer engineers who want to
+understand not just <em>how</em> to use the framework, but <em>why</em> it works the way it
+does at the systems level.</p>
+<h2 id="what-is-futuresdr"><a class="header" href="#what-is-futuresdr">What is FutureSDR?</a></h2>
+<p>FutureSDR is an asynchronous Software-Defined Radio (SDR) runtime for
+heterogeneous architectures. It provides a dataflow programming model where
+signal processing is expressed as a directed graph of <strong>blocks</strong> connected by
+<strong>streams</strong> (typed sample buffers) and <strong>messages</strong> (polymorphic control data).</p>
+<p>Key properties:</p>
+<ul>
+<li><strong>Asynchronous</strong>: Built on Rust’s <code>async</code>/<code>await</code> with the <code>smol</code> executor.
+Blocks yield cooperatively, enabling efficient multiplexing of I/O-bound and
+compute-bound work on a small thread pool.</li>
+<li><strong>Extensible</strong>: Custom buffer backends (GPU, FPGA, DMA) and custom schedulers
+can be plugged in without modifying the core runtime.</li>
+<li><strong>Portable</strong>: Runs on Linux, Windows, macOS, Android, WebAssembly, and
+bare-metal embedded (via REST/WebSocket control).</li>
+<li><strong>Fast</strong>: Zero-copy circular buffers using double-mapped virtual memory,
+SIMD-friendly contiguous slices, and minimal runtime overhead.</li>
+</ul>
+<h2 id="what-is-the-dynamic-plugin-system"><a class="header" href="#what-is-the-dynamic-plugin-system">What is the Dynamic Plugin System?</a></h2>
+<p>The plugin system allows FutureSDR blocks to be compiled as separate shared
+libraries (<code>.so</code> files on Linux) and loaded at runtime via <code>dlopen</code>. This
+enables:</p>
+<ol>
+<li><strong>Hot-swappable PHY layers</strong> — switch from one radio standard to another
+without restarting the application.</li>
+<li><strong>A-posteriori extensibility</strong> — build new blocks after the runtime is
+deployed, without access to the full source tree.</li>
+<li><strong>Reduced compile times</strong> — change one block, rebuild one <code>.so</code>, reload.</li>
+<li><strong>Third-party plugins</strong> — distribute blocks as binary artifacts.</li>
+</ol>
+<h2 id="how-this-book-is-organized"><a class="header" href="#how-this-book-is-organized">How This Book is Organized</a></h2>
+<p><strong>Part I</strong> covers the FutureSDR framework internals: the runtime engine,
+flowgraph construction, block lifecycle, buffer system, and message passing.
+You need this foundation to understand how plugins integrate.</p>
+<p><strong>Part II</strong> covers the dynamic plugin system itself: the plugin ABI, how to
+write plugins, the ABI fingerprint mechanism, external library rules, and the
+SDK for a-posteriori compilation.</p>
+<p><strong>Part III</strong> is a complete case study: dynamically swapping from a ZigBee
+802.15.4 TX chain to a WLAN 802.11 TX chain, with every block loaded as a
+plugin at runtime.</p>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<p>This book assumes familiarity with:</p>
+<ul>
+<li>Rust (ownership, traits, generics, async/await, dynamic dispatch)</li>
+<li>Basic DSP concepts (samples, sample rates, modulation)</li>
+<li>Linux shared libraries (ELF, <code>dlopen</code>, symbol resolution, <code>LD_LIBRARY_PATH</code>)</li>
+<li>The concept of SDR flowgraphs (if you’ve used GNU Radio, you’re set)</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="architecture-overview"><a class="header" href="#architecture-overview">Architecture Overview</a></h1>
+<p>FutureSDR’s architecture is a layered dataflow system. This chapter provides
+the 30,000-foot view before we dive into each layer in subsequent chapters.</p>
+<h2 id="layered-architecture"><a class="header" href="#layered-architecture">Layered Architecture</a></h2>
+<pre><code>┌─────────────────────────────────────────────────┐
+│                  User Application                │
+│    (builds flowgraph, sends messages, reads UI)  │
+├─────────────────────────────────────────────────┤
+│                    Runtime                       │
+│  (scheduler, task spawning, control port/REST)   │
+├─────────────────────────────────────────────────┤
+│                   Flowgraph                      │
+│  (block registry, connection topology, startup)  │
+├─────────────────────────────────────────────────┤
+│                     Blocks                       │
+│  (WrappedKernel&lt;K&gt;, message dispatch, work loop) │
+├─────────────────────────────────────────────────┤
+│                    Kernels                       │
+│  (user-defined work(), init(), deinit())         │
+├─────────────────────────────────────────────────┤
+│                    Buffers                        │
+│  (circular, slab, in-place, GPU, FPGA)           │
+├──────────────────────┬──────────────────────────┤
+│    Plugin Loader     │      Plugin .so files     │
+│  (dlopen, ABI check) │  (BlockFactory, kernel)   │
+└──────────────────────┴──────────────────────────┘
+</code></pre>
+<h2 id="core-abstractions"><a class="header" href="#core-abstractions">Core Abstractions</a></h2>
+<h3 id="flowgraph"><a class="header" href="#flowgraph">Flowgraph</a></h3>
+<p>A <code>Flowgraph</code> is a directed graph where nodes are blocks and edges are either
+<strong>stream connections</strong> (typed sample buffers) or <strong>message connections</strong>
+(asynchronous PMT messages). The user constructs a flowgraph, adds blocks,
+connects them, and hands it to the runtime.</p>
+<h3 id="block"><a class="header" href="#block">Block</a></h3>
+<p>A <code>Block</code> is the runtime’s unit of execution. It wraps a user-defined <code>Kernel</code>
+with infrastructure for message dispatch, port management, and lifecycle
+control. Blocks communicate through two mechanisms:</p>
+<ul>
+<li><strong>Stream ports</strong>: high-throughput, typed, zero-copy circular buffers</li>
+<li><strong>Message ports</strong>: low-throughput, polymorphic, asynchronous messages</li>
+</ul>
+<h3 id="kernel"><a class="header" href="#kernel">Kernel</a></h3>
+<p>A <code>Kernel</code> is a user-defined struct that implements the actual signal
+processing. The user writes <code>work()</code>, <code>init()</code>, and <code>deinit()</code> methods. The
+<code>#[derive(Block)]</code> macro generates all the boilerplate (port management,
+message routing, type metadata).</p>
+<h3 id="runtime"><a class="header" href="#runtime">Runtime</a></h3>
+<p>The <code>Runtime</code> owns the async executor (based on <code>smol</code>), manages flowgraph
+lifecycles, and exposes a REST/WebSocket control port. It can run multiple
+flowgraphs concurrently.</p>
+<h3 id="buffer"><a class="header" href="#buffer">Buffer</a></h3>
+<p>Buffers connect stream ports between blocks. The default buffer is a
+double-mapped circular buffer (<code>vmcircbuffer</code>) that provides zero-copy,
+contiguous slices even when wrapping around the end of the buffer. Alternative
+buffer backends can be plugged in for GPUs (Vulkan, WGPU), FPGAs (Zynq DMA),
+or in-place processing.</p>
+<h2 id="data-flow"><a class="header" href="#data-flow">Data Flow</a></h2>
+<pre><code>           ┌─────────┐    stream     ┌─────────┐    stream     ┌─────────┐
+           │  Source  │─────────────→│  Filter  │─────────────→│  Sink   │
+           │         │  [Complex32]  │         │  [Complex32]  │         │
+           └─────────┘              └─────────┘              └─────────┘
+                │                        │
+                │ message "tx"           │ message "ctrl"
+                ↓                        ↓
+           ┌─────────┐              ┌─────────┐
+           │   MAC   │              │  Config  │
+           └─────────┘              └─────────┘
+</code></pre>
+<p>Stream data flows in a push model: a block calls <code>self.output.produce(n)</code> to
+make <code>n</code> samples available downstream. The downstream block sees them in
+<code>self.input.slice()</code>. The buffer notifies the downstream block via
+<code>BlockMessage::Notify</code> so the scheduler knows to call its <code>work()</code> method.</p>
+<p>Messages flow asynchronously: <code>mio.post("port_name", Pmt::...)</code> sends a
+message to all connected handlers. Message handlers are async methods that
+return <code>Result&lt;Pmt&gt;</code>.</p>
+<h2 id="type-system"><a class="header" href="#type-system">Type System</a></h2>
+<p>FutureSDR uses Rust’s type system extensively:</p>
+<ul>
+<li>
+<p><strong>Stream ports are generic over sample type <code>D</code></strong>: <code>Writer&lt;D&gt;</code> / <code>Reader&lt;D&gt;</code>
+where <code>D: CpuSample</code> (= <code>Default + Clone + Debug + Send + Sync + 'static</code>).
+Common types: <code>u8</code>, <code>f32</code>, <code>Complex32</code>.</p>
+</li>
+<li>
+<p><strong>Message ports use <code>Pmt</code></strong> (Polymorphic Message Type): an enum covering
+common SDR data types plus <code>Pmt::Any(Box&lt;dyn PmtAny&gt;)</code> for arbitrary types.</p>
+</li>
+<li>
+<p><strong>Blocks are generic over their I/O types</strong>: <code>MyBlock&lt;I, O&gt;</code> where
+<code>I: CpuBufferReader&lt;Item = f32&gt;</code>, <code>O: CpuBufferWriter&lt;Item = Complex32&gt;</code>.
+The <code>#[derive(Block)]</code> macro provides sensible defaults.</p>
+</li>
+</ul>
+<h2 id="compilation-model"><a class="header" href="#compilation-model">Compilation Model</a></h2>
+<p>FutureSDR compiles as:</p>
+<pre><code class="language-toml">crate-type = ["dylib", "rlib"]
+</code></pre>
+<ul>
+<li><strong><code>rlib</code></strong>: standard Rust static library, used by regular (non-plugin) builds</li>
+<li><strong><code>dylib</code></strong>: Rust dynamic library (<code>libfuturesdr.so</code>), used by plugins</li>
+</ul>
+<p>When the <code>plugin</code> feature is enabled, <code>impl Block for Box&lt;dyn Block&gt;</code> is
+generated, allowing trait objects to be used as blocks. This is the mechanism
+that lets dynamically loaded plugins return <code>Box&lt;dyn Block&gt;</code> through the
+factory interface.</p>
+<p>All plugins and the binary link against the same <code>libfuturesdr.so</code> at runtime,
+sharing type definitions, vtable layouts, and generic instantiations.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="runtime-engine"><a class="header" href="#runtime-engine">Runtime Engine</a></h1>
+<p>The <code>Runtime</code> is the top-level object that owns the async executor and manages
+flowgraph lifecycles.</p>
+<h2 id="structure"><a class="header" href="#structure">Structure</a></h2>
+<pre><code class="language-rust">pub struct Runtime&lt;S = SmolScheduler&gt; {
+    scheduler: S,
+    flowgraphs: Arc&lt;Mutex&lt;Vec&lt;FlowgraphHandle&gt;&gt;&gt;,
+    ctrl_port: ControlPort,
+}</code></pre>
+<ul>
+<li><strong><code>scheduler</code></strong>: Executes async tasks. The default <code>SmolScheduler</code> uses the
+<code>smol</code> crate’s multi-threaded executor. Custom schedulers can be plugged in.</li>
+<li><strong><code>flowgraphs</code></strong>: Running flowgraph handles, accessible via REST API.</li>
+<li><strong><code>ctrl_port</code></strong>: HTTP/WebSocket server for runtime introspection and control.</li>
+</ul>
+<h2 id="creating-a-runtime"><a class="header" href="#creating-a-runtime">Creating a Runtime</a></h2>
+<pre><code class="language-rust">// Default: SmolScheduler, no custom routes
+let rt = Runtime::new();
+
+// Custom scheduler
+let rt = Runtime::with_scheduler(MyScheduler::new());
+
+// Custom REST routes
+let rt = Runtime::with_custom_routes(my_router);</code></pre>
+<p><code>Runtime::new()</code> also calls <code>init()</code> internally, which sets up logging via
+<code>tracing-subscriber</code> (console output with ANSI colors, configured by
+<code>RUST_LOG</code> environment variable).</p>
+<h2 id="running-flowgraphs"><a class="header" href="#running-flowgraphs">Running Flowgraphs</a></h2>
+<p>There are several ways to execute a flowgraph:</p>
+<h3 id="runfg--blocking-run-to-completion"><a class="header" href="#runfg--blocking-run-to-completion"><code>run(fg)</code> — Blocking, Run to Completion</a></h3>
+<pre><code class="language-rust">rt.run(fg)?;  // Blocks until all blocks finish</code></pre>
+<p>This is the simplest mode. The flowgraph runs until all blocks signal
+<code>finished</code>, then <code>run</code> returns.</p>
+<h3 id="start_syncfg--non-blocking-start"><a class="header" href="#start_syncfg--non-blocking-start"><code>start_sync(fg)</code> — Non-blocking Start</a></h3>
+<pre><code class="language-rust">let (task, mut handle) = rt.start_sync(fg)?;</code></pre>
+<p>Returns immediately with:</p>
+<ul>
+<li><code>task</code>: A <code>JoinHandle</code> for the flowgraph’s background task</li>
+<li><code>handle</code>: A <code>FlowgraphHandle</code> for sending messages and controlling the
+flowgraph</li>
+</ul>
+<p>This is the mode used in the PHY swap example, where we need to send frames
+and then terminate the flowgraph programmatically.</p>
+<h3 id="startfg--async-start"><a class="header" href="#startfg--async-start"><code>start(fg)</code> — Async Start</a></h3>
+<pre><code class="language-rust">let (task, handle) = rt.start(fg).await?;</code></pre>
+<p>Same as <code>start_sync</code> but for use inside async contexts.</p>
+<h2 id="flowgraphhandle"><a class="header" href="#flowgraphhandle">FlowgraphHandle</a></h2>
+<p>The <code>FlowgraphHandle</code> is the control interface to a running flowgraph:</p>
+<pre><code class="language-rust">// Send a message to a block's handler (fire-and-forget)
+handle.call(block_id, "tx", Pmt::Blob(data)).await?;
+
+// Send a message and wait for response
+let response = handle.callback(block_id, "stats", Pmt::Null).await?;
+
+// Get flowgraph topology description
+let desc = handle.description().await?;
+
+// Terminate the flowgraph
+handle.terminate_and_wait().await?;</code></pre>
+<h2 id="flowgraph-execution-internals"><a class="header" href="#flowgraph-execution-internals">Flowgraph Execution Internals</a></h2>
+<p>When a flowgraph is started, the runtime:</p>
+<ol>
+<li>
+<p><strong>Validates</strong> all stream and message connections (checks port existence,
+buffer type compatibility).</p>
+</li>
+<li>
+<p><strong>Initializes</strong> each block by sending <code>BlockMessage::Initialize</code>. Each block
+calls its kernel’s <code>init()</code> method, sets up buffer connections, and reports
+back with <code>FlowgraphMessage::Initialized</code>.</p>
+</li>
+<li>
+<p><strong>Kicks off</strong> the work loop by sending <code>BlockMessage::Notify</code> to all blocks.</p>
+</li>
+<li>
+<p><strong>Enters the main loop</strong>: dispatches incoming <code>FlowgraphMessage</code>s:</p>
+<ul>
+<li><code>BlockDone { block_id }</code> — decrements active block count</li>
+<li><code>BlockError { block_id }</code> — logs error, decrements count</li>
+<li><code>BlockCall/BlockCallback</code> — forwards to the target block</li>
+<li><code>Terminate</code> — sends <code>BlockMessage::Terminate</code> to all blocks</li>
+<li><code>FlowgraphDescription/BlockDescription</code> — introspection queries</li>
+</ul>
+</li>
+<li>
+<p><strong>Terminates</strong> when the active block count reaches zero.</p>
+</li>
+</ol>
+<h2 id="task-spawning"><a class="header" href="#task-spawning">Task Spawning</a></h2>
+<p>The runtime exposes task spawning for use in blocks or application code:</p>
+<pre><code class="language-rust">rt.spawn(async { /* ... */ });           // Spawn async task
+rt.spawn_blocking(|| { /* ... */ });     // Spawn on blocking thread pool
+rt.spawn_background(async { /* ... */ }); // Detached (no join handle)
+rt.block_on(async { /* ... */ });        // Block current thread</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="flowgraph--connections"><a class="header" href="#flowgraph--connections">Flowgraph &amp; Connections</a></h1>
+<p>A <code>Flowgraph</code> is a directed graph where nodes are blocks and edges are either
+<strong>stream connections</strong> (typed sample buffers) or <strong>message connections</strong>
+(asynchronous PMT messages).</p>
+<h2 id="structure-1"><a class="header" href="#structure-1">Structure</a></h2>
+<pre><code class="language-rust">pub struct Flowgraph {
+    blocks: Vec&lt;Arc&lt;Mutex&lt;dyn Block&gt;&gt;&gt;,
+    stream_edges: Vec&lt;(BlockId, PortId, BlockId, PortId)&gt;,
+    message_edges: Vec&lt;(BlockId, PortId, BlockId, PortId)&gt;,
+}</code></pre>
+<ul>
+<li><strong><code>blocks</code></strong>: All registered blocks, stored as trait objects behind
+<code>Arc&lt;Mutex&lt;dyn Block&gt;&gt;</code>. The index in this vector is the block’s <code>BlockId</code>.</li>
+<li><strong><code>stream_edges</code></strong>: <code>(src_block, src_port, dst_block, dst_port)</code> tuples for
+high-throughput sample connections.</li>
+<li><strong><code>message_edges</code></strong>: Same layout for asynchronous message connections.</li>
+</ul>
+<h2 id="adding-blocks"><a class="header" href="#adding-blocks">Adding Blocks</a></h2>
+<pre><code class="language-rust">let mut fg = Flowgraph::new();
+
+// Typed: returns a BlockRef&lt;K&gt; with compile-time access to the kernel
+let src = fg.add_block(NullSource::&lt;f32&gt;::new());
+
+// Dynamic (plugin feature): accepts a closure that returns Box&lt;dyn Block&gt;
+let blk_id = fg.add_block_dyn(plugin.prepare(Box::new(config)));</code></pre>
+<p><code>add_block</code> wraps the kernel in a <code>WrappedKernel&lt;K&gt;</code>, assigns it a <code>BlockId</code>
+(its index in the <code>blocks</code> vector), and returns a <code>BlockRef&lt;K&gt;</code>.</p>
+<h3 id="blockref"><a class="header" href="#blockref">BlockRef</a></h3>
+<p><code>BlockRef&lt;K&gt;</code> is a typed handle to a block inside the flowgraph:</p>
+<pre><code class="language-rust">pub struct BlockRef&lt;K: Kernel&gt; {
+    id: BlockId,
+    block: Arc&lt;Mutex&lt;WrappedKernel&lt;K&gt;&gt;&gt;,
+}</code></pre>
+<p>It implements <code>Into&lt;BlockId&gt;</code>, so you can pass it directly to connection methods.
+The <code>get()</code> method returns a <code>MutexGuard</code> for accessing the kernel before the
+flowgraph starts running.</p>
+<h2 id="stream-connections"><a class="header" href="#stream-connections">Stream Connections</a></h2>
+<p>Stream connections carry typed sample data through circular buffers.</p>
+<h3 id="typed-connections"><a class="header" href="#typed-connections">Typed Connections</a></h3>
+<pre><code class="language-rust">let src = fg.add_block(NullSource::&lt;f32&gt;::new());
+let sink = fg.add_block(NullSink::&lt;f32&gt;::new());
+
+// Connect src's output port to sink's input port
+fg.connect_stream(&amp;mut src.get()?.output, &amp;mut sink.get()?.input);</code></pre>
+<p><code>connect_stream</code> is fully typed: the compiler verifies that the writer’s sample
+type matches the reader’s sample type. The buffer writer’s <code>connect()</code> method
+wires up the shared circular buffer state between the two blocks.</p>
+<h3 id="dynamic-connections"><a class="header" href="#dynamic-connections">Dynamic Connections</a></h3>
+<p>When block types are erased (plugins, runtime-constructed graphs), use
+<code>connect_dyn</code>:</p>
+<pre><code class="language-rust">fg.connect_dyn(src_id, "output", dst_id, "input")?;</code></pre>
+<p>This resolves ports by name at runtime. It calls <code>connect_stream_output</code> on the
+source block and <code>stream_input</code> on the destination block, then wires them via
+<code>connect_dyn</code> on the buffer writer. If the sample types don’t match (different
+<code>TypeId</code>), this returns an error.</p>
+<h2 id="message-connections"><a class="header" href="#message-connections">Message Connections</a></h2>
+<p>Message connections route <code>Pmt</code> values between blocks asynchronously:</p>
+<pre><code class="language-rust">fg.connect_message(src_id, "tx_status", mac_id, "rx_status")?;</code></pre>
+<p>This registers the destination block’s inbox sender on the source block’s
+<code>MessageOutput</code> for the given port. When the source block calls
+<code>mio.post("tx_status", pmt)</code>, the message is delivered to all connected
+handlers.</p>
+<p>Message connections are many-to-many: a single output port can fan out to
+multiple destination handlers, and a single input handler can receive from
+multiple sources.</p>
+<h2 id="topology-validation"><a class="header" href="#topology-validation">Topology Validation</a></h2>
+<p>Validation happens in two stages:</p>
+<ol>
+<li>
+<p><strong>At connection time</strong>: <code>connect_dyn</code> checks that the named ports exist on
+both blocks. Missing ports produce <code>Error::InvalidStreamPort</code> or
+<code>Error::InvalidMessagePort</code>.</p>
+</li>
+<li>
+<p><strong>At startup</strong>: When the runtime initializes a flowgraph, each block’s
+<code>stream_ports_validate()</code> method is called. This checks that all declared
+stream ports have been connected. Unconnected ports are an error.</p>
+</li>
+</ol>
+<h2 id="flowgraph-lifecycle"><a class="header" href="#flowgraph-lifecycle">Flowgraph Lifecycle</a></h2>
+<pre><code>    new()  →  add blocks  →  connect  →  hand to Runtime
+                                              │
+                                              ▼
+                                     validate &amp; initialize
+                                              │
+                                              ▼
+                                        run work loops
+                                              │
+                                              ▼
+                                     all blocks finish
+</code></pre>
+<p>Once a flowgraph is handed to the runtime (via <code>rt.run(fg)</code> or
+<code>rt.start(fg)</code>), it is consumed. The user interacts with the running flowgraph
+through the <code>FlowgraphHandle</code> returned by <code>start</code>/<code>start_sync</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="block-lifecycle"><a class="header" href="#block-lifecycle">Block Lifecycle</a></h1>
+<p>A <code>Block</code> is the runtime’s unit of execution. It wraps a user-defined <code>Kernel</code>
+with infrastructure for message dispatch, port management, and lifecycle
+control.</p>
+<h2 id="the-block-trait"><a class="header" href="#the-block-trait">The Block Trait</a></h2>
+<pre><code class="language-rust">#[async_trait]
+pub trait Block: Send + Any {
+    // Identity
+    fn id(&amp;self) -&gt; BlockId;
+    fn instance_name(&amp;self) -&gt; Option&lt;&amp;str&gt;;
+    fn set_instance_name(&amp;mut self, name: &amp;str);
+    fn type_name(&amp;self) -&gt; &amp;str;
+    fn is_blocking(&amp;self) -&gt; bool;
+
+    // Stream ports
+    fn stream_input(&amp;mut self, name: &amp;str) -&gt; Option&lt;&amp;mut dyn BufferReader&gt;;
+    fn connect_stream_output(
+        &amp;mut self, name: &amp;str, reader: &amp;mut dyn BufferReader,
+    ) -&gt; Result&lt;(), Error&gt;;
+
+    // Message ports
+    fn message_inputs(&amp;self) -&gt; &amp;'static [&amp;'static str];
+    fn connect(
+        &amp;mut self, src_port: &amp;PortId,
+        sender: Sender&lt;BlockMessage&gt;, dst_port: &amp;PortId,
+    ) -&gt; Result&lt;(), Error&gt;;
+
+    // Execution
+    fn inbox(&amp;self) -&gt; Sender&lt;BlockMessage&gt;;
+    async fn run(&amp;mut self, main_inbox: Sender&lt;FlowgraphMessage&gt;);
+}</code></pre>
+<p>This trait is object-safe (with <code>async_trait</code>), which allows <code>dyn Block</code> to be
+used for dynamically loaded plugins.</p>
+<h2 id="wrappedkernel"><a class="header" href="#wrappedkernel">WrappedKernel</a></h2>
+<p>Every block in the flowgraph is actually a <code>WrappedKernel&lt;K&gt;</code>:</p>
+<pre><code class="language-rust">pub struct WrappedKernel&lt;K: Kernel&gt; {
+    pub meta: BlockMeta,
+    pub mio: MessageOutputs,
+    pub kernel: K,
+    pub id: BlockId,
+    pub inbox: mpsc::Receiver&lt;BlockMessage&gt;,
+    pub inbox_tx: mpsc::Sender&lt;BlockMessage&gt;,
+}</code></pre>
+<ul>
+<li><strong><code>meta</code></strong>: Instance name and other metadata.</li>
+<li><strong><code>mio</code></strong>: Message output ports with their connected destinations.</li>
+<li><strong><code>kernel</code></strong>: The user-defined kernel struct.</li>
+<li><strong><code>inbox</code> / <code>inbox_tx</code></strong>: MPSC channel for receiving <code>BlockMessage</code>s from the
+runtime and other blocks.</li>
+</ul>
+<p><code>WrappedKernel&lt;K&gt;</code> implements <code>Block</code> by delegating to the kernel’s
+<code>KernelInterface</code> methods (generated by <code>#[derive(Block)]</code>).</p>
+<p>It also implements <code>Deref&lt;Target = K&gt;</code> and <code>DerefMut</code>, so you can access the
+kernel’s fields and methods directly through a <code>BlockRef</code>.</p>
+<h2 id="lifecycle-states"><a class="header" href="#lifecycle-states">Lifecycle States</a></h2>
+<p>A block goes through four states during its lifetime:</p>
+<pre><code>  Created  →  Initialized  →  Running  →  Shutdown
+</code></pre>
+<h3 id="1-created"><a class="header" href="#1-created">1. Created</a></h3>
+<p>The kernel is constructed and wrapped in <code>WrappedKernel::new()</code>. Stream ports
+are initialized with their block ID and inbox sender. The block is registered
+in the flowgraph but not yet running.</p>
+<h3 id="2-initialized"><a class="header" href="#2-initialized">2. Initialized</a></h3>
+<p>The runtime sends <code>BlockMessage::Initialize</code>. The block calls
+<code>kernel.init(&amp;mut mio, &amp;mut meta)</code>, which lets the kernel perform one-time
+setup (opening files, allocating resources, etc.). The block reports back to
+the flowgraph with <code>FlowgraphMessage::Initialized</code>.</p>
+<h3 id="3-running"><a class="header" href="#3-running">3. Running</a></h3>
+<p>The block enters its main work loop, alternating between processing messages
+and calling <code>kernel.work()</code>.</p>
+<h3 id="4-shutdown"><a class="header" href="#4-shutdown">4. Shutdown</a></h3>
+<p>When <code>work_io.finished</code> is set to <code>true</code> (by the kernel or by a
+<code>BlockMessage::Terminate</code>), the block:</p>
+<ol>
+<li>Notifies all connected stream ports that it’s done</li>
+<li>Calls <code>kernel.deinit(&amp;mut mio, &amp;mut meta)</code> for cleanup</li>
+<li>Sends <code>FlowgraphMessage::BlockDone</code> to the runtime</li>
+</ol>
+<h2 id="the-work-loop"><a class="header" href="#the-work-loop">The Work Loop</a></h2>
+<p>The <code>run_impl</code> method implements the main event loop:</p>
+<pre><code>loop {
+    ┌─ 1. Drain messages (non-blocking) ──────────────┐
+    │   Notify         → (no-op, just wake up)        │
+    │   Call           → kernel.call_handler(port, p)  │
+    │   Callback       → same, but send response back  │
+    │   StreamInputDone  → mark input as finished      │
+    │   StreamOutputDone → set work_io.finished        │
+    │   Terminate      → set work_io.finished          │
+    │   BlockDescription → return port metadata        │
+    └─────────────────────────────────────────────────┘
+                         │
+    ┌─ 2. Check shutdown ─┘
+    │   if finished → notify ports, deinit, send BlockDone, return
+    └─────────────────────────────────────────────────┘
+                         │
+    ┌─ 3. Handle blocking ┘
+    │   if work_io.block_on is Some → select(inbox, future)
+    │   if inbox message → process it, loop back to 1
+    │   if future completes → clear block_on, continue
+    └─────────────────────────────────────────────────┘
+                         │
+    ┌─ 4. Call work() ────┘
+    │   kernel.work(&amp;mut io, &amp;mut mio, &amp;mut meta)
+    │   if !call_again → yield, then wait for Notify
+    └─────────────────────────────────────────────────┘
+}
+</code></pre>
+<h3 id="message-dispatch"><a class="header" href="#message-dispatch">Message Dispatch</a></h3>
+<p>Messages are processed non-blockingly via <code>try_recv</code> on the inbox. This means
+the block never blocks waiting for a message when there’s <code>work()</code> to do.</p>
+<p><code>BlockMessage::Call</code> invokes a message handler (fire-and-forget).
+<code>BlockMessage::Callback</code> does the same but sends the return value back through
+a oneshot channel.</p>
+<h3 id="the-work_ioblock_on-mechanism"><a class="header" href="#the-work_ioblock_on-mechanism">The <code>work_io.block_on</code> Mechanism</a></h3>
+<p>A kernel can set <code>work_io.block_on = Some(future)</code> in its <code>work()</code> method to
+suspend until an external event completes (e.g., waiting for hardware). The
+work loop uses <code>futures::future::select</code> to race the future against incoming
+inbox messages, so the block remains responsive.</p>
+<h3 id="the-call_again-flag"><a class="header" href="#the-call_again-flag">The <code>call_again</code> Flag</a></h3>
+<p>After <code>work()</code> returns, if <code>work_io.call_again</code> is <code>false</code>, the block yields
+and waits for the next <code>BlockMessage::Notify</code> before calling <code>work()</code> again.
+Buffer producers send <code>Notify</code> when new data is available, so blocks only wake
+up when there’s something to process.</p>
+<h2 id="blockmessage-and-flowgraphmessage"><a class="header" href="#blockmessage-and-flowgraphmessage">BlockMessage and FlowgraphMessage</a></h2>
+<p>Communication between blocks and the runtime uses two message enums:</p>
+<h3 id="blockmessage-runtime--block"><a class="header" href="#blockmessage-runtime--block">BlockMessage (runtime → block)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Initialize</code></td><td>Start the block’s init sequence</td></tr>
+<tr><td><code>Terminate</code></td><td>Request graceful shutdown</td></tr>
+<tr><td><code>Notify</code></td><td>Wake up the work loop (new data available)</td></tr>
+<tr><td><code>Call { port_id, data }</code></td><td>Fire-and-forget message handler call</td></tr>
+<tr><td><code>Callback { port_id, data, tx }</code></td><td>Message handler call with response</td></tr>
+<tr><td><code>StreamInputDone { input_id }</code></td><td>Upstream finished producing</td></tr>
+<tr><td><code>StreamOutputDone { output_id }</code></td><td>Downstream finished consuming</td></tr>
+<tr><td><code>BlockDescription { tx }</code></td><td>Introspection query</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="flowgraphmessage-block--runtime"><a class="header" href="#flowgraphmessage-block--runtime">FlowgraphMessage (block → runtime)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Initialized</code></td><td>Block completed initialization</td></tr>
+<tr><td><code>BlockDone { block_id }</code></td><td>Block finished normally</td></tr>
+<tr><td><code>BlockError { block_id }</code></td><td>Block finished with error</td></tr>
+<tr><td><code>BlockCall / BlockCallback</code></td><td>Forwarded from <code>FlowgraphHandle</code></td></tr>
+<tr><td><code>Terminate</code></td><td>Shutdown all blocks</td></tr>
+<tr><td><code>FlowgraphDescription / BlockDescription</code></td><td>Introspection</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="blocking-blocks"><a class="header" href="#blocking-blocks">Blocking Blocks</a></h2>
+<p>Blocks marked with <code>#[blocking]</code> run their <code>work()</code> method on a dedicated
+thread (via <code>spawn_blocking</code>) rather than on the async executor. This is for
+blocks that perform long-running synchronous I/O (e.g., reading from hardware)
+that would starve other async tasks.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="kernel--the-derive-macro"><a class="header" href="#kernel--the-derive-macro">Kernel &amp; the Derive Macro</a></h1>
+<p>A <code>Kernel</code> is a user-defined struct that implements the actual signal
+processing. The <code>#[derive(Block)]</code> macro generates all the boilerplate for port
+management, message routing, and type metadata.</p>
+<h2 id="the-kernel-trait"><a class="header" href="#the-kernel-trait">The Kernel Trait</a></h2>
+<pre><code class="language-rust">pub trait Kernel: Send {
+    fn work(
+        &amp;mut self,
+        io: &amp;mut WorkIo,
+        mio: &amp;mut MessageOutputs,
+        meta: &amp;mut BlockMeta,
+    ) -&gt; impl Future&lt;Output = Result&lt;()&gt;&gt; + Send {
+        async { Ok(()) }
+    }
+
+    fn init(
+        &amp;mut self,
+        mio: &amp;mut MessageOutputs,
+        meta: &amp;mut BlockMeta,
+    ) -&gt; impl Future&lt;Output = Result&lt;()&gt;&gt; + Send {
+        async { Ok(()) }
+    }
+
+    fn deinit(
+        &amp;mut self,
+        mio: &amp;mut MessageOutputs,
+        meta: &amp;mut BlockMeta,
+    ) -&gt; impl Future&lt;Output = Result&lt;()&gt;&gt; + Send {
+        async { Ok(()) }
+    }
+}</code></pre>
+<p>All three methods have default no-op implementations, so you only override what
+you need.</p>
+<ul>
+<li><strong><code>work()</code></strong>: Called repeatedly by the work loop. Read from input buffers,
+process, write to output buffers, and control flow via <code>WorkIo</code>.</li>
+<li><strong><code>init()</code></strong>: Called once before the first <code>work()</code>. Open files, allocate
+resources, set instance names.</li>
+<li><strong><code>deinit()</code></strong>: Called once after the last <code>work()</code>. Close files, flush
+buffers, report statistics.</li>
+</ul>
+<h2 id="workio"><a class="header" href="#workio">WorkIo</a></h2>
+<p>The <code>WorkIo</code> struct controls the work loop’s behavior:</p>
+<pre><code class="language-rust">pub struct WorkIo {
+    pub call_again: bool,
+    pub finished: bool,
+    pub block_on: Option&lt;Pin&lt;Box&lt;dyn Future&lt;Output = ()&gt; + Send&gt;&gt;&gt;,
+}</code></pre>
+<ul>
+<li><strong><code>call_again</code></strong>: If <code>true</code> after <code>work()</code> returns, <code>work()</code> is called again
+immediately without waiting for a <code>Notify</code>. Useful when a block has more data
+to produce than fits in one buffer slice.</li>
+<li><strong><code>finished</code></strong>: Set to <code>true</code> to signal that this block is done. Triggers the
+shutdown sequence.</li>
+<li><strong><code>block_on</code></strong>: Set to <code>Some(future)</code> to suspend the work loop until the
+future completes (while still processing messages).</li>
+</ul>
+<h2 id="the-kernelinterface-trait"><a class="header" href="#the-kernelinterface-trait">The KernelInterface Trait</a></h2>
+<p><code>KernelInterface</code> is the companion trait that handles port plumbing:</p>
+<pre><code class="language-rust">pub trait KernelInterface {
+    fn is_blocking() -&gt; bool;
+    fn type_name() -&gt; &amp;'static str;
+    fn stream_inputs(&amp;self) -&gt; Vec&lt;String&gt;;
+    fn stream_outputs(&amp;self) -&gt; Vec&lt;String&gt;;
+    fn stream_ports_init(&amp;mut self, block_id: BlockId, inbox: Sender&lt;BlockMessage&gt;);
+    fn stream_ports_validate(&amp;self) -&gt; Result&lt;(), Error&gt;;
+    fn stream_input(&amp;mut self, name: &amp;str) -&gt; Option&lt;&amp;mut dyn BufferReader&gt;;
+    fn connect_stream_output(
+        &amp;mut self, name: &amp;str, reader: &amp;mut dyn BufferReader,
+    ) -&gt; Result&lt;(), Error&gt;;
+    fn message_inputs() -&gt; &amp;'static [&amp;'static str];
+    fn message_outputs() -&gt; &amp;'static [&amp;'static str];
+    fn call_handler(
+        &amp;mut self, io: &amp;mut WorkIo, mio: &amp;mut MessageOutputs,
+        meta: &amp;mut BlockMeta, id: PortId, p: Pmt,
+    ) -&gt; impl Future&lt;Output = Result&lt;Pmt, Error&gt;&gt; + Send;
+    // ...
+}</code></pre>
+<p>You never implement <code>KernelInterface</code> by hand. The <code>#[derive(Block)]</code> macro
+generates it entirely.</p>
+<h2 id="the-deriveblock-macro"><a class="header" href="#the-deriveblock-macro">The <code>#[derive(Block)]</code> Macro</a></h2>
+<h3 id="attributes"><a class="header" href="#attributes">Attributes</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attribute</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>#[input]</code></td><td>Marks a field as a stream input port</td></tr>
+<tr><td><code>#[output]</code></td><td>Marks a field as a stream output port</td></tr>
+<tr><td><code>#[message_inputs(handler1, handler2)]</code></td><td>Declares message input handlers</td></tr>
+<tr><td><code>#[message_outputs(port1, port2)]</code></td><td>Declares message output ports</td></tr>
+<tr><td><code>#[blocking]</code></td><td>Block runs <code>work()</code> on a blocking thread</td></tr>
+<tr><td><code>#[type_name = "MyBlock"]</code></td><td>Custom type name for introspection</td></tr>
+<tr><td><code>#[null_kernel]</code></td><td>Generate an empty <code>Kernel</code> impl (message-only blocks)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="example-filter-block"><a class="header" href="#example-filter-block">Example: Filter Block</a></h3>
+<pre><code class="language-rust">#[derive(Block)]
+pub struct Copy&lt;
+    T: Send + Sync + 'static,
+    I: CpuBufferReader&lt;Item = T&gt; = DefaultCpuReader&lt;T&gt;,
+    O: CpuBufferWriter&lt;Item = T&gt; = DefaultCpuWriter&lt;T&gt;,
+&gt; {
+    #[input]
+    input: I,
+    #[output]
+    output: O,
+}
+
+impl&lt;T, I, O&gt; Kernel for Copy&lt;T, I, O&gt;
+where
+    T: Send + Sync + Clone + 'static,
+    I: CpuBufferReader&lt;Item = T&gt;,
+    O: CpuBufferWriter&lt;Item = T&gt;,
+{
+    async fn work(
+        &amp;mut self, io: &amp;mut WorkIo, _mio: &amp;mut MessageOutputs,
+        _meta: &amp;mut BlockMeta,
+    ) -&gt; Result&lt;()&gt; {
+        let i = self.input.slice();
+        let o = self.output.slice();
+        let m = std::cmp::min(i.len(), o.len());
+        if m &gt; 0 {
+            o[..m].copy_from_slice(&amp;i[..m]);
+            self.input.consume(m);
+            self.output.produce(m);
+        }
+        if self.input.finished() &amp;&amp; m == i.len() {
+            io.finished = true;
+        }
+        Ok(())
+    }
+}</code></pre>
+<h3 id="what-the-macro-generates"><a class="header" href="#what-the-macro-generates">What the Macro Generates</a></h3>
+<p>For the <code>Copy</code> block above, the macro generates:</p>
+<ol>
+<li>
+<p><strong>Port accessor methods</strong>: <code>pub fn input(&amp;mut self) -&gt; &amp;mut I</code> and
+<code>pub fn output(&amp;mut self) -&gt; &amp;mut O</code>.</p>
+</li>
+<li>
+<p><strong><code>stream_inputs()</code></strong>: Returns <code>vec!["input".to_string()]</code>.</p>
+</li>
+<li>
+<p><strong><code>stream_outputs()</code></strong>: Returns <code>vec!["output".to_string()]</code>.</p>
+</li>
+<li>
+<p><strong><code>stream_ports_init()</code></strong>: Calls <code>self.input.init(block_id, port_id, inbox)</code>
+and <code>self.output.init(...)</code>.</p>
+</li>
+<li>
+<p><strong><code>stream_input(name)</code></strong>: Matches <code>"input"</code> and returns
+<code>Some(&amp;mut self.input as &amp;mut dyn BufferReader)</code>.</p>
+</li>
+<li>
+<p><strong><code>connect_stream_output(name, reader)</code></strong>: Matches <code>"output"</code> and calls
+<code>self.output.connect_dyn(reader)</code>.</p>
+</li>
+<li>
+<p><strong><code>stream_ports_validate()</code></strong>: Checks that all ports have been connected.</p>
+</li>
+<li>
+<p><strong><code>call_handler(id, p)</code></strong>: Matches port names to message handler methods.</p>
+</li>
+</ol>
+<h3 id="message-handlers"><a class="header" href="#message-handlers">Message Handlers</a></h3>
+<p>Message handlers are async methods with this exact signature:</p>
+<pre><code class="language-rust">async fn handler_name(
+    &amp;mut self,
+    io: &amp;mut WorkIo,
+    mio: &amp;mut MessageOutputs,
+    meta: &amp;mut BlockMeta,
+    p: Pmt,
+) -&gt; Result&lt;Pmt&gt;</code></pre>
+<p>Example:</p>
+<pre><code class="language-rust">#[derive(Block)]
+#[message_inputs(freq)]
+#[message_outputs(status)]
+#[null_kernel]
+pub struct Controller {
+    current_freq: f64,
+}
+
+impl Controller {
+    async fn freq(
+        &amp;mut self, _io: &amp;mut WorkIo, mio: &amp;mut MessageOutputs,
+        _meta: &amp;mut BlockMeta, p: Pmt,
+    ) -&gt; Result&lt;Pmt&gt; {
+        if let Pmt::F64(f) = p {
+            self.current_freq = f;
+            mio.post("status", Pmt::String(format!("tuned to {f}"))).await?;
+            Ok(Pmt::Ok)
+        } else {
+            Ok(Pmt::InvalidValue)
+        }
+    }
+}</code></pre>
+<p>The <code>#[null_kernel]</code> attribute generates an empty <code>impl Kernel</code> so you don’t
+have to write one for message-only blocks.</p>
+<h3 id="container-ports"><a class="header" href="#container-ports">Container Ports</a></h3>
+<p>The macro supports multiple ports via containers:</p>
+<pre><code class="language-rust">#[derive(Block)]
+pub struct Interleaver&lt;T: Send + 'static&gt; {
+    #[input]
+    inputs: Vec&lt;DefaultCpuReader&lt;T&gt;&gt;,   // ports: "inputs[0]", "inputs[1]", ...
+    #[output]
+    output: DefaultCpuWriter&lt;T&gt;,
+}</code></pre>
+<p>Supported containers: <code>Vec&lt;T&gt;</code>, <code>[T; N]</code>, and tuples <code>(T1, T2, ...)</code>.</p>
+<h2 id="the-generic-pattern"><a class="header" href="#the-generic-pattern">The Generic Pattern</a></h2>
+<p>Most FutureSDR blocks are generic over their buffer types:</p>
+<pre><code class="language-rust">pub struct MyBlock&lt;
+    T: Send + 'static,
+    I: CpuBufferReader&lt;Item = T&gt; = DefaultCpuReader&lt;T&gt;,
+    O: CpuBufferWriter&lt;Item = T&gt; = DefaultCpuWriter&lt;T&gt;,
+&gt; { ... }</code></pre>
+<p>The defaults (<code>DefaultCpuReader&lt;T&gt;</code>, <code>DefaultCpuWriter&lt;T&gt;</code>) resolve to
+<code>circular::Reader&lt;T&gt;</code> on native and <code>slab::Reader&lt;T&gt;</code> on WASM. Users can
+substitute custom buffer types (GPU, FPGA) without changing the block’s logic.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="buffer-system"><a class="header" href="#buffer-system">Buffer System</a></h1>
+<p>Buffers are the data transport layer between stream-connected blocks. They
+provide zero-copy, typed access to contiguous sample slices.</p>
+<h2 id="buffer-trait-hierarchy"><a class="header" href="#buffer-trait-hierarchy">Buffer Trait Hierarchy</a></h2>
+<pre><code>                    BufferReader          BufferWriter
+                   (Any + async)         (type Reader)
+                    /         \            /         \
+          CpuBufferReader   InplaceReader  CpuBufferWriter  InplaceWriter
+           (slice/consume)  (get/put buf)  (slice/produce)  (get/put buf)
+</code></pre>
+<h3 id="bufferreader"><a class="header" href="#bufferreader">BufferReader</a></h3>
+<p>The base trait for all buffer readers:</p>
+<pre><code class="language-rust">#[async_trait]
+pub trait BufferReader: Any {
+    fn as_any_mut(&amp;mut self) -&gt; &amp;mut dyn Any;
+    fn init(&amp;mut self, block_id: BlockId, port_id: PortId, inbox: Sender&lt;BlockMessage&gt;);
+    fn validate(&amp;self) -&gt; Result&lt;(), Error&gt;;
+    async fn notify_finished(&amp;mut self);
+    fn finish(&amp;mut self);
+    fn finished(&amp;self) -&gt; bool;
+}</code></pre>
+<h3 id="bufferwriter"><a class="header" href="#bufferwriter">BufferWriter</a></h3>
+<p>The base trait for all buffer writers:</p>
+<pre><code class="language-rust">pub trait BufferWriter {
+    type Reader: BufferReader;
+    fn init(&amp;mut self, block_id: BlockId, port_id: PortId, inbox: Sender&lt;BlockMessage&gt;);
+    fn validate(&amp;self) -&gt; Result&lt;(), Error&gt;;
+    fn connect(&amp;mut self, dest: &amp;mut Self::Reader);
+    fn connect_dyn(&amp;mut self, dest: &amp;mut dyn BufferReader) -&gt; Result&lt;(), Error&gt;;
+}</code></pre>
+<p><code>connect_dyn</code> uses <code>Any::downcast_mut</code> to recover the concrete reader type. If
+the types don’t match, it returns an error — this is the mechanism that catches
+sample type mismatches at connection time.</p>
+<h3 id="cpubufferreader--cpubufferwriter"><a class="header" href="#cpubufferreader--cpubufferwriter">CpuBufferReader / CpuBufferWriter</a></h3>
+<p>The CPU-specific traits add the slice-based API:</p>
+<pre><code class="language-rust">pub trait CpuBufferReader: BufferReader + Default + Send {
+    type Item: CpuSample;
+    fn slice(&amp;mut self) -&gt; &amp;[Self::Item];
+    fn slice_with_tags(&amp;mut self) -&gt; (&amp;[Self::Item], &amp;Vec&lt;ItemTag&gt;);
+    fn consume(&amp;mut self, n: usize);
+    fn set_min_items(&amp;mut self, n: usize);
+    fn max_items(&amp;self) -&gt; usize;
+}
+
+pub trait CpuBufferWriter: BufferWriter + Default + Send {
+    type Item: CpuSample;
+    fn slice(&amp;mut self) -&gt; &amp;mut [Self::Item];
+    fn slice_with_tags(&amp;mut self) -&gt; (&amp;mut [Self::Item], Tags&lt;'_&gt;);
+    fn produce(&amp;mut self, n: usize);
+    fn set_min_items(&amp;mut self, n: usize);
+    fn max_items(&amp;self) -&gt; usize;
+}</code></pre>
+<p><code>CpuSample</code> is <code>Default + Clone + Debug + Send + Sync + 'static</code>. Common
+types: <code>u8</code>, <code>f32</code>, <code>Complex32</code>.</p>
+<h2 id="default-buffers"><a class="header" href="#default-buffers">Default Buffers</a></h2>
+<pre><code class="language-rust">// Native (Linux, Windows, macOS)
+type DefaultCpuReader&lt;D&gt; = circular::Reader&lt;D&gt;;
+type DefaultCpuWriter&lt;D&gt; = circular::Writer&lt;D&gt;;
+
+// WebAssembly
+type DefaultCpuReader&lt;D&gt; = slab::Reader&lt;D&gt;;
+type DefaultCpuWriter&lt;D&gt; = slab::Writer&lt;D&gt;;</code></pre>
+<h2 id="circular-buffer-circular"><a class="header" href="#circular-buffer-circular">Circular Buffer (<code>circular</code>)</a></h2>
+<p>The default buffer on native platforms. Uses <code>vmcircbuffer</code> — a double-mapped
+virtual memory circular buffer.</p>
+<h3 id="how-double-mapping-works"><a class="header" href="#how-double-mapping-works">How Double Mapping Works</a></h3>
+<p>The buffer allocates <code>2 * capacity</code> bytes of virtual address space but maps
+the same physical pages to both halves:</p>
+<pre><code>Virtual addresses:  [ page A | page B | page A | page B ]
+Physical pages:     [ page A | page B ]
+</code></pre>
+<p>This means a read or write that wraps around the end of the buffer still
+appears as a contiguous slice in memory. No copies are needed, no special
+wrap-around handling.</p>
+<h3 id="writer"><a class="header" href="#writer">Writer</a></h3>
+<pre><code class="language-rust">pub struct Writer&lt;D: CpuSample&gt; {
+    writer: vmcircbuffer::Writer&lt;D&gt;,
+    readers: Vec&lt;circular::Reader&lt;D&gt;&gt;,
+    tags: Vec&lt;ItemTag&gt;,
+    // ...
+}</code></pre>
+<ul>
+<li><code>slice()</code> returns a mutable slice of available space for writing.</li>
+<li><code>produce(n)</code> advances the write pointer by <code>n</code> items and sends
+<code>BlockMessage::Notify</code> to connected downstream blocks.</li>
+<li>Tags are attached to produced items via <code>slice_with_tags()</code>.</li>
+</ul>
+<h3 id="reader"><a class="header" href="#reader">Reader</a></h3>
+<pre><code class="language-rust">pub struct Reader&lt;D: CpuSample&gt; {
+    reader: vmcircbuffer::Reader&lt;D&gt;,
+    tags: Vec&lt;ItemTag&gt;,
+    // ...
+}</code></pre>
+<ul>
+<li><code>slice()</code> returns an immutable slice of available items to read.</li>
+<li><code>consume(n)</code> advances the read pointer, freeing space for the writer.</li>
+<li><code>finished()</code> returns <code>true</code> when the upstream writer has signaled completion
+and all remaining items have been consumed.</li>
+</ul>
+<h3 id="buffer-sizing"><a class="header" href="#buffer-sizing">Buffer Sizing</a></h3>
+<p><code>set_min_buffer_size_in_items(n)</code> ensures the buffer is at least <code>n</code> items
+large. <code>set_min_items(n)</code> means <code>slice()</code> won’t return fewer than <code>n</code> items
+(the block won’t be woken until enough data is available).</p>
+<h2 id="slab-buffer-slab"><a class="header" href="#slab-buffer-slab">Slab Buffer (<code>slab</code>)</a></h2>
+<p>Used on WASM (where <code>mmap</code> is unavailable). Allocates fixed-size slabs from a
+pool and passes them between writer and reader via async channels.</p>
+<pre><code>Writer:  get empty slab → fill → put full slab
+Reader:  get full slab  → read → put empty slab
+</code></pre>
+<p>Each slab is a contiguous <code>Vec&lt;D&gt;</code>, so slices are naturally contiguous without
+double mapping.</p>
+<h2 id="circuit-buffer-circuit"><a class="header" href="#circuit-buffer-circuit">Circuit Buffer (<code>circuit</code>)</a></h2>
+<p>An in-place buffer for blocks that process data without changing the number of
+items (e.g., applying a gain). The same buffer object is passed from writer to
+reader and back in a closed loop:</p>
+<pre><code>Writer → put_full_buffer → Reader → get_full_buffer → process → put_empty_buffer → Writer
+</code></pre>
+<p>This avoids all copies — the block modifies samples in place.</p>
+<h3 id="inplacebuffer--inplacereader--inplacewriter"><a class="header" href="#inplacebuffer--inplacereader--inplacewriter">InplaceBuffer / InplaceReader / InplaceWriter</a></h3>
+<pre><code class="language-rust">pub trait InplaceBuffer {
+    type Item: CpuSample;
+    fn set_valid(&amp;mut self, valid: usize);
+    fn slice(&amp;mut self) -&gt; &amp;mut [Self::Item];
+    fn slice_with_tags(&amp;mut self) -&gt; (&amp;mut [Self::Item], &amp;mut Vec&lt;ItemTag&gt;);
+}</code></pre>
+<h2 id="gpu-and-fpga-buffers"><a class="header" href="#gpu-and-fpga-buffers">GPU and FPGA Buffers</a></h2>
+<p>FutureSDR provides buffer backends for heterogeneous computing:</p>
+<h3 id="wgpu-buffer"><a class="header" href="#wgpu-buffer">WGPU Buffer</a></h3>
+<p>For GPU compute shaders via the WebGPU API:</p>
+<ul>
+<li>Host-to-device (H2D) and device-to-host (D2H) transfer</li>
+<li><code>InputBufferFull&lt;D&gt;</code> / <code>OutputBufferFull&lt;D&gt;</code> carry GPU buffer handles</li>
+<li><code>Instance</code> holds the wgpu <code>Device</code>, <code>Queue</code>, and <code>Adapter</code></li>
+</ul>
+<h3 id="vulkan-buffer"><a class="header" href="#vulkan-buffer">Vulkan Buffer</a></h3>
+<p>For GPU compute via Vulkano:</p>
+<ul>
+<li><code>Buffer&lt;T&gt;</code> wraps a Vulkano <code>Subbuffer</code></li>
+<li><code>Instance</code> provides <code>Device</code>, <code>Queue</code>, and <code>MemoryAllocator</code></li>
+</ul>
+<h3 id="zynq-dma-buffer"><a class="header" href="#zynq-dma-buffer">Zynq DMA Buffer</a></h3>
+<p>For FPGA accelerators on Xilinx Zynq platforms, using DMA transfers between
+the ARM CPU and programmable logic.</p>
+<h2 id="tags"><a class="header" href="#tags">Tags</a></h2>
+<p>Tags are metadata attached to specific sample positions in a buffer:</p>
+<pre><code class="language-rust">pub struct ItemTag {
+    pub index: usize,    // sample index within the current slice
+    pub tag: Tag,
+}
+
+pub enum Tag {
+    Id(u64),
+    String(String),
+    Data(Pmt),
+    NamedUsize(String, usize),
+    NamedF32(String, f32),
+    NamedAny(String, Box&lt;dyn TagAny&gt;),
+}</code></pre>
+<p>Writers attach tags via <code>slice_with_tags()</code>:</p>
+<pre><code class="language-rust">let (samples, mut tags) = self.output.slice_with_tags();
+// ... fill samples ...
+tags.add_tag(42, Tag::String("burst_start".into()));
+self.output.produce(n);</code></pre>
+<p>Readers retrieve them:</p>
+<pre><code class="language-rust">let (samples, tags) = self.input.slice_with_tags();
+for tag in tags {
+    if tag.index &lt; n_consumed {
+        // process tag
+    }
+}
+self.input.consume(n);</code></pre>
+<p>Tags flow downstream with the sample stream. The buffer infrastructure
+adjusts tag indices as samples are consumed and produced.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="message-passing--pmt"><a class="header" href="#message-passing--pmt">Message Passing &amp; PMT</a></h1>
+<p>Messages provide an asynchronous, low-throughput control plane alongside the
+high-throughput stream data plane. They are used for configuration, control,
+status reporting, and inter-block coordination.</p>
+<h2 id="pmt-polymorphic-message-type"><a class="header" href="#pmt-polymorphic-message-type">PMT (Polymorphic Message Type)</a></h2>
+<p><code>Pmt</code> is an enum covering common SDR data types:</p>
+<pre><code class="language-rust">#[non_exhaustive]
+pub enum Pmt {
+    // Signals
+    Ok,
+    InvalidValue,
+    Null,
+    Finished,
+
+    // Scalars
+    Bool(bool),
+    Usize(usize),
+    Isize(isize),
+    U32(u32),
+    U64(u64),
+    F32(f32),
+    F64(f64),
+    String(String),
+
+    // Vectors
+    VecF32(Vec&lt;f32&gt;),
+    VecCF32(Vec&lt;Complex32&gt;),
+    VecU64(Vec&lt;u64&gt;),
+    Blob(Vec&lt;u8&gt;),
+    VecPmt(Vec&lt;Pmt&gt;),
+
+    // Structured
+    MapStrPmt(HashMap&lt;String, Pmt&gt;),
+
+    // Type-erased
+    Any(Box&lt;dyn PmtAny&gt;),
+}</code></pre>
+<h3 id="pmtkind"><a class="header" href="#pmtkind">PmtKind</a></h3>
+<p>Each <code>Pmt</code> variant has a corresponding <code>PmtKind</code> discriminant, useful for
+runtime type checking without accessing the value:</p>
+<pre><code class="language-rust">let kind: PmtKind = pmt.kind();
+match kind {
+    PmtKind::F32 =&gt; { /* ... */ },
+    PmtKind::Blob =&gt; { /* ... */ },
+    _ =&gt; { /* ... */ },
+}</code></pre>
+<h3 id="conversions"><a class="header" href="#conversions">Conversions</a></h3>
+<p><code>Pmt</code> implements <code>From&lt;T&gt;</code> for common types:</p>
+<pre><code class="language-rust">let p: Pmt = 42u64.into();           // Pmt::U64(42)
+let p: Pmt = 3.14f32.into();         // Pmt::F32(3.14)
+let p: Pmt = "hello".to_string().into(); // Pmt::String("hello")
+let p: Pmt = vec![1.0f32, 2.0].into();  // Pmt::VecF32(...)</code></pre>
+<p>And <code>TryFrom&lt;Pmt&gt;</code> for extracting values:</p>
+<pre><code class="language-rust">let val: f64 = pmt.try_into()?;      // fails if not Pmt::F64
+let val: usize = pmt.try_into()?;    // fails if not Pmt::Usize</code></pre>
+<h3 id="pmtany"><a class="header" href="#pmtany">Pmt::Any</a></h3>
+<p>For types not covered by the standard variants, <code>Pmt::Any</code> wraps any type
+that implements <code>PmtAny</code>:</p>
+<pre><code class="language-rust">pub trait PmtAny: Any + DynClone + Send + Sync + 'static {
+    fn as_any(&amp;self) -&gt; &amp;dyn Any;
+    fn as_any_mut(&amp;mut self) -&gt; &amp;mut dyn Any;
+    fn to_any(self: Box&lt;Self&gt;) -&gt; Box&lt;dyn Any&gt;;
+}</code></pre>
+<p>This is automatically implemented for any <code>T: Any + Clone + Send + Sync + 'static</code>.</p>
+<pre><code class="language-rust">// Sending
+let msg = Pmt::Any(Box::new(MyConfig { freq: 915e6 }));
+
+// Receiving
+if let Pmt::Any(ref any) = msg {
+    if let Some(cfg) = any.downcast_ref::&lt;MyConfig&gt;() {
+        // use cfg.freq
+    }
+}</code></pre>
+<p><strong>ABI warning</strong>: <code>Pmt::Any</code> relies on <code>TypeId</code>, which is not stable across
+different compilation units. When using plugins, both sides must link against
+the same <code>libfuturesdr.so</code> for <code>TypeId</code> to match.</p>
+<h2 id="message-ports"><a class="header" href="#message-ports">Message Ports</a></h2>
+<h3 id="declaring-ports"><a class="header" href="#declaring-ports">Declaring Ports</a></h3>
+<p>Message ports are declared via attributes on the kernel struct:</p>
+<pre><code class="language-rust">#[derive(Block)]
+#[message_inputs(rx, ctrl)]     // input handlers
+#[message_outputs(tx, status)]  // output ports
+pub struct MyBlock { /* ... */ }</code></pre>
+<h3 id="message-handlers-1"><a class="header" href="#message-handlers-1">Message Handlers</a></h3>
+<p>Each input port name corresponds to a method on the kernel:</p>
+<pre><code class="language-rust">impl MyBlock {
+    async fn rx(
+        &amp;mut self,
+        io: &amp;mut WorkIo,
+        mio: &amp;mut MessageOutputs,
+        meta: &amp;mut BlockMeta,
+        p: Pmt,
+    ) -&gt; Result&lt;Pmt&gt; {
+        // Process incoming message
+        // Optionally post to output ports
+        mio.post("tx", Pmt::Ok).await?;
+        Ok(Pmt::Ok)
+    }
+
+    async fn ctrl(
+        &amp;mut self, _io: &amp;mut WorkIo, _mio: &amp;mut MessageOutputs,
+        _meta: &amp;mut BlockMeta, p: Pmt,
+    ) -&gt; Result&lt;Pmt&gt; {
+        // Handle control messages
+        Ok(Pmt::Ok)
+    }
+}</code></pre>
+<p>The <code>#[derive(Block)]</code> macro generates the dispatch table that routes incoming
+<code>BlockMessage::Call</code> / <code>BlockMessage::Callback</code> to the correct handler method.</p>
+<h3 id="sending-messages"><a class="header" href="#sending-messages">Sending Messages</a></h3>
+<p>From inside a block’s <code>work()</code> or message handler:</p>
+<pre><code class="language-rust">// Post to a named output port (fire-and-forget)
+mio.post("tx", Pmt::Blob(frame_data)).await?;</code></pre>
+<p><code>post</code> sends <code>BlockMessage::Call</code> to every block connected to this output port.</p>
+<h3 id="message-connections-1"><a class="header" href="#message-connections-1">Message Connections</a></h3>
+<p>In the flowgraph:</p>
+<pre><code class="language-rust">fg.connect_message(src_id, "tx", dst_id, "rx")?;</code></pre>
+<p>This registers the destination block’s inbox on the source’s <code>MessageOutput</code>
+for port <code>"tx"</code>. Multiple destinations can be connected to the same output
+(fan-out), and a single input handler can receive from multiple sources.</p>
+<h2 id="messageoutput--messageoutputs"><a class="header" href="#messageoutput--messageoutputs">MessageOutput / MessageOutputs</a></h2>
+<pre><code class="language-rust">pub struct MessageOutput {
+    name: String,
+    handlers: Vec&lt;(PortId, Sender&lt;BlockMessage&gt;)&gt;,
+}
+
+pub struct MessageOutputs {
+    block_id: BlockId,
+    outputs: Vec&lt;MessageOutput&gt;,
+}</code></pre>
+<p><code>MessageOutputs</code> is the <code>mio</code> parameter passed to <code>work()</code>, <code>init()</code>, and
+message handlers. It provides:</p>
+<ul>
+<li><code>post(port_name, pmt)</code> — send to all connected handlers</li>
+<li><code>connect(src_port, dst_inbox, dst_port)</code> — wire up a connection</li>
+<li><code>notify_finished()</code> — send <code>Pmt::Finished</code> to all connected handlers</li>
+</ul>
+<h2 id="external-message-access-flowgraphhandle"><a class="header" href="#external-message-access-flowgraphhandle">External Message Access (FlowgraphHandle)</a></h2>
+<p>From outside the flowgraph, messages are sent through the <code>FlowgraphHandle</code>:</p>
+<pre><code class="language-rust">// Fire-and-forget
+handle.call(block_id, "ctrl", Pmt::F64(915e6)).await?;
+
+// Request-response
+let response = handle.callback(block_id, "stats", Pmt::Null).await?;</code></pre>
+<p>These go through the flowgraph’s main loop:</p>
+<ol>
+<li><code>FlowgraphHandle</code> sends <code>FlowgraphMessage::BlockCall</code> to the flowgraph</li>
+<li>The flowgraph forwards it as <code>BlockMessage::Call</code> to the target block</li>
+<li>For <code>callback</code>, the response travels back through a oneshot channel</li>
+</ol>
+<h2 id="common-patterns"><a class="header" href="#common-patterns">Common Patterns</a></h2>
+<h3 id="configuration-update"><a class="header" href="#configuration-update">Configuration Update</a></h3>
+<pre><code class="language-rust">// Application code
+handle.call(filter_id, "set_freq", Pmt::F64(new_freq)).await?;
+
+// Inside the filter block
+async fn set_freq(&amp;mut self, ..., p: Pmt) -&gt; Result&lt;Pmt&gt; {
+    if let Pmt::F64(f) = p {
+        self.center_freq = f;
+        self.recalculate_taps();
+        Ok(Pmt::Ok)
+    } else {
+        Ok(Pmt::InvalidValue)
+    }
+}</code></pre>
+<h3 id="frame-transmission"><a class="header" href="#frame-transmission">Frame Transmission</a></h3>
+<pre><code class="language-rust">// Send a frame as a blob
+handle.call(mac_id, "tx", Pmt::Blob(frame_bytes)).await?;</code></pre>
+<h3 id="status-query"><a class="header" href="#status-query">Status Query</a></h3>
+<pre><code class="language-rust">let stats = handle.callback(block_id, "stats", Pmt::Null).await?;
+if let Pmt::MapStrPmt(map) = stats {
+    println!("packets: {:?}", map.get("packets"));
+}</code></pre>
+<h3 id="finished-signal"><a class="header" href="#finished-signal">Finished Signal</a></h3>
+<p>The <code>Pmt::Finished</code> value is a convention for signaling end-of-stream through
+the message plane. Blocks that receive it typically set <code>io.finished = true</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="plugin-architecture"><a class="header" href="#plugin-architecture">Plugin Architecture</a></h1>
+<p>The plugin system allows FutureSDR blocks to be compiled as separate shared
+libraries (<code>.so</code> files) and loaded at runtime via <code>dlopen</code>.</p>
+<h2 id="design-goals"><a class="header" href="#design-goals">Design Goals</a></h2>
+<ol>
+<li><strong>Same <code>Block</code> trait</strong> — plugins produce <code>Box&lt;dyn Block&gt;</code>, identical to
+statically linked blocks. The runtime doesn’t know or care whether a block
+came from a plugin.</li>
+<li><strong>Minimal ABI surface</strong> — only two C-compatible symbols are exported per
+plugin: <code>create_block_factory</code> and <code>plugin_abi_fingerprint</code>.</li>
+<li><strong>Load-time validation</strong> — an ABI fingerprint is checked before any code
+from the plugin executes, catching toolchain/version mismatches early.</li>
+<li><strong>A-posteriori compilation</strong> — a third party can build a new plugin against
+a deployed runtime without the full workspace, using the Plugin SDK.</li>
+</ol>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
+<pre><code>  ┌──────────────────────┐       ┌──────────────────────┐
+  │   Application Binary │       │   Plugin .so          │
+  │                      │       │                       │
+  │  LoadedPlugin::load()│──────→│  create_block_factory │
+  │                      │  abi  │  plugin_abi_fingerprint│
+  │  fg.add_block_dyn()  │ check │                       │
+  │  fg.connect_dyn()    │       │  impl BlockFactory    │
+  └──────┬───────────────┘       └───────┬───────────────┘
+         │                               │
+         │         links at runtime       │
+         └───────────┬───────────────────┘
+                     ▼
+           ┌─────────────────┐
+           │ libfuturesdr.so │
+           │  (shared types) │
+           └─────────────────┘
+</code></pre>
+<p>Both the application binary and all plugin <code>.so</code> files link against the same
+<code>libfuturesdr.so</code> at runtime. This is critical: it ensures that <code>TypeId</code>
+values, vtable layouts, and generic instantiations are identical across the
+binary boundary.</p>
+<h2 id="compilation-model-1"><a class="header" href="#compilation-model-1">Compilation Model</a></h2>
+<p>FutureSDR builds as both <code>rlib</code> (static) and <code>dylib</code> (dynamic):</p>
+<pre><code class="language-toml"># Cargo.toml
+[lib]
+crate-type = ["dylib", "rlib"]
+</code></pre>
+<ul>
+<li><strong><code>rlib</code></strong>: Used by normal (non-plugin) builds. Everything is statically
+linked into a single binary.</li>
+<li><strong><code>dylib</code></strong>: Produces <code>libfuturesdr.so</code>. Used when building plugins.</li>
+</ul>
+<p>Plugins are built with:</p>
+<pre><code class="language-toml"># plugins/my_plugin/Cargo.toml
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+futuresdr = { path = "../../", features = ["plugin"] }
+plugin_api = { path = "../../crates/plugin_api" }
+</code></pre>
+<p>The <code>plugin</code> feature flag is currently a marker — it signals that this build
+participates in the dynamic linking scheme. The <code>-C prefer-dynamic</code> RUSTFLAG
+ensures the Rust standard library is also loaded from a shared <code>.so</code>.</p>
+<h2 id="key-crates"><a class="header" href="#key-crates">Key Crates</a></h2>
+<h3 id="plugin_api"><a class="header" href="#plugin_api"><code>plugin_api</code></a></h3>
+<p>The API crate that both plugins and the host binary depend on:</p>
+<ul>
+<li><strong><code>BlockFactory</code> trait</strong>: The interface plugins implement to create blocks.</li>
+<li><strong><code>export_plugin!</code> macro</strong>: Generates the two <code>#[no_mangle]</code> symbols that
+the loader expects.</li>
+<li><strong><code>LoadedPlugin</code></strong>: The host-side loader that <code>dlopen</code>s a <code>.so</code>, validates
+the ABI fingerprint, and extracts the <code>BlockFactory</code>.</li>
+</ul>
+<h3 id="plugin_gen"><a class="header" href="#plugin_gen"><code>plugin_gen</code></a></h3>
+<p>A code generator that reads a block’s source file, detects the
+<code>#[derive(Block)]</code> struct and its <code>new()</code> constructor, and generates a
+complete plugin crate (Cargo.toml + src/lib.rs) with the correct
+<code>export_plugin!</code> invocation.</p>
+<h2 id="the-blockfactory-trait"><a class="header" href="#the-blockfactory-trait">The BlockFactory Trait</a></h2>
+<pre><code class="language-rust">pub trait BlockFactory: Send + Sync {
+    fn create_block(&amp;self, id: BlockId, config: Box&lt;dyn Any + Send&gt;) -&gt; Box&lt;dyn Block&gt;;
+    fn block_name(&amp;self) -&gt; &amp;'static str;
+    fn block_description(&amp;self) -&gt; &amp;'static str;
+}</code></pre>
+<ul>
+<li><code>create_block</code> receives a type-erased config (<code>Box&lt;dyn Any + Send&gt;</code>) and a
+<code>BlockId</code>. It downcasts the config to the expected type, constructs the
+kernel, wraps it in <code>WrappedKernel</code>, and returns <code>Box&lt;dyn Block&gt;</code>.</li>
+<li><code>block_name</code> and <code>block_description</code> provide metadata for introspection.</li>
+</ul>
+<h2 id="the-two-exported-symbols"><a class="header" href="#the-two-exported-symbols">The Two Exported Symbols</a></h2>
+<p>Every plugin <code>.so</code> exports exactly two functions:</p>
+<pre><code class="language-rust">#[unsafe(no_mangle)]
+pub fn create_block_factory() -&gt; Box&lt;dyn BlockFactory&gt;
+
+#[unsafe(no_mangle)]
+pub fn plugin_abi_fingerprint() -&gt; (&amp;'static str, &amp;'static str)</code></pre>
+<p>The first returns the factory. The second returns <code>(hash, detail)</code> for ABI
+validation.</p>
+<h2 id="loading-a-plugin"><a class="header" href="#loading-a-plugin">Loading a Plugin</a></h2>
+<pre><code class="language-rust">// Safe: validates ABI fingerprint, panics on mismatch
+let plugin = unsafe { LoadedPlugin::load("./libmy_plugin.so") };
+
+// Safe: returns Result instead of panicking
+let plugin = unsafe { LoadedPlugin::try_load("./libmy_plugin.so") }?;
+
+// Unsafe: skips ABI validation (development only)
+let plugin = unsafe { LoadedPlugin::load_unchecked("./libmy_plugin.so") };</code></pre>
+<p>The <code>load</code> sequence:</p>
+<ol>
+<li><code>dlopen</code> the <code>.so</code> via <code>libloading::Library::new(path)</code></li>
+<li>Look up the <code>plugin_abi_fingerprint</code> symbol</li>
+<li>Compare the plugin’s fingerprint against the runtime’s
+<code>abi_fingerprint::ABI_FINGERPRINT</code></li>
+<li>On mismatch, return <code>AbiMismatchError</code> with both fingerprints and their
+human-readable details</li>
+<li>On match, look up <code>create_block_factory</code> and call it</li>
+<li>Return <code>LoadedPlugin { factory, _lib }</code> — <code>_lib</code> is kept alive to prevent
+the OS from unloading the <code>.so</code></li>
+</ol>
+<h2 id="using-a-loaded-plugin"><a class="header" href="#using-a-loaded-plugin">Using a Loaded Plugin</a></h2>
+<pre><code class="language-rust">let plugin = unsafe { LoadedPlugin::load("./libhead_plugin.so") };
+
+let mut fg = Flowgraph::new();
+let src = fg.add_block(NullSource::&lt;u8&gt;::new());
+
+// Create block from plugin with config
+let head = fg.add_block_dyn(plugin.prepare(Box::new(12u64)));
+
+fg.connect_dyn(src, "output", head, "input")?;</code></pre>
+<p><code>prepare(config)</code> returns a closure <code>FnOnce(BlockId) -&gt; Box&lt;dyn Block&gt;</code> that
+the flowgraph calls when assigning the block its ID.</p>
+<h2 id="dynamic-connections-1"><a class="header" href="#dynamic-connections-1">Dynamic Connections</a></h2>
+<p>Plugin-created blocks use <code>connect_dyn</code> instead of <code>connect_stream</code>:</p>
+<pre><code class="language-rust">fg.connect_dyn(src_id, "output", dst_id, "input")?;</code></pre>
+<p>This resolves ports by name at runtime and uses <code>Any::downcast_mut</code> to verify
+type compatibility. If the buffer reader’s concrete type doesn’t match the
+writer’s expected reader type, the connection fails with an error rather than
+causing undefined behavior.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="writing-a-plugin"><a class="header" href="#writing-a-plugin">Writing a Plugin</a></h1>
+<p>This chapter walks through creating a plugin from scratch and using the
+<code>plugin_gen</code> code generator.</p>
+<h2 id="quick-start-the-export_plugin-macro"><a class="header" href="#quick-start-the-export_plugin-macro">Quick Start: The <code>export_plugin!</code> Macro</a></h2>
+<p>The simplest plugin wraps an existing FutureSDR block:</p>
+<pre><code class="language-rust">// plugins/head_plugin/src/lib.rs
+use futuresdr::blocks::Head;
+
+plugin_api::export_plugin! {
+    name: "Head",
+    description: "Head block plugin",
+    config: u64,
+    create: |cfg, _id| {
+        Head::&lt;u8&gt;::new(cfg)
+    }
+}</code></pre>
+<p>The macro parameters:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name</code></td><td><code>&amp;str</code></td><td>Block name for introspection</td></tr>
+<tr><td><code>description</code></td><td><code>&amp;str</code></td><td>Human-readable description</td></tr>
+<tr><td><code>config</code></td><td>type</td><td>The concrete type the caller passes in <code>Box&lt;dyn Any&gt;</code></td></tr>
+<tr><td><code>create</code></td><td>closure</td><td><code>|config: ConfigType, id: BlockId| -&gt; KernelType</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The macro generates:</p>
+<ol>
+<li>A <code>__PluginFactory</code> struct implementing <code>BlockFactory</code></li>
+<li><code>create_block_factory()</code> — the <code>#[no_mangle]</code> entry point</li>
+<li><code>plugin_abi_fingerprint()</code> — the ABI validation symbol</li>
+</ol>
+<h2 id="plugin-cargotoml"><a class="header" href="#plugin-cargotoml">Plugin Cargo.toml</a></h2>
+<pre><code class="language-toml">[package]
+name = "head_plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+plugin_api = { path = "../../crates/plugin_api" }
+futuresdr = { path = "../../", features = ["plugin"] }
+</code></pre>
+<p>Key requirements:</p>
+<ul>
+<li><code>crate-type = ["dylib"]</code> — produces a <code>.so</code> file</li>
+<li><code>features = ["plugin"]</code> — participates in the dynamic linking scheme</li>
+<li>Both <code>plugin_api</code> and <code>futuresdr</code> as dependencies</li>
+</ul>
+<h2 id="config-types"><a class="header" href="#config-types">Config Types</a></h2>
+<p>The config is passed as <code>Box&lt;dyn Any + Send&gt;</code> and downcast inside the factory.
+Choose the type based on what your block’s constructor needs:</p>
+<h3 id="no-config"><a class="header" href="#no-config">No Config</a></h3>
+<pre><code class="language-rust">plugin_api::export_plugin! {
+    name: "Increment",
+    description: "Increments each sample by one",
+    config: (),
+    create: |_cfg, _id| {
+        Increment::&lt;f32&gt;::new()
+    }
+}</code></pre>
+<p>The caller passes <code>Box::new(())</code>.</p>
+<h3 id="scalar-config"><a class="header" href="#scalar-config">Scalar Config</a></h3>
+<pre><code class="language-rust">config: u64,
+create: |n_items, _id| {
+    Head::&lt;u8&gt;::new(n_items)
+}</code></pre>
+<p>The caller passes <code>Box::new(12u64)</code>.</p>
+<h3 id="tuple-config"><a class="header" href="#tuple-config">Tuple Config</a></h3>
+<pre><code class="language-rust">config: (f32, usize),
+create: |(cutoff, n_taps), _id| {
+    LowPassFilter::new(cutoff, n_taps)
+}</code></pre>
+<p>The caller passes <code>Box::new((0.25f32, 64usize))</code>.</p>
+<h3 id="string-config-for-type-selection"><a class="header" href="#string-config-for-type-selection">String Config (for type selection)</a></h3>
+<p>When a plugin supports multiple sample types:</p>
+<pre><code class="language-rust">config: String,
+create: |type_name, _id| {
+    match type_name.as_str() {
+        "f32"  =&gt; NullSink::&lt;f32&gt;::new(),
+        "u8"   =&gt; NullSink::&lt;u8&gt;::new(),
+        "c32"  =&gt; NullSink::&lt;Complex32&gt;::new(),
+        _ =&gt; panic!("unsupported type: {type_name}"),
+    }
+}</code></pre>
+<h2 id="custom-blocks-in-plugins"><a class="header" href="#custom-blocks-in-plugins">Custom Blocks in Plugins</a></h2>
+<p>You can define a block directly inside a plugin crate:</p>
+<pre><code class="language-rust">// plugins/increment_plugin/src/lib.rs
+use futuresdr::macros::Block;
+use futuresdr::runtime::*;
+use futuresdr::runtime::buffer::*;
+
+#[derive(Block)]
+pub struct Increment&lt;
+    T: Send + Sync + 'static + std::ops::AddAssign + From&lt;u8&gt;,
+    I: CpuBufferReader&lt;Item = T&gt; = DefaultCpuReader&lt;T&gt;,
+    O: CpuBufferWriter&lt;Item = T&gt; = DefaultCpuWriter&lt;T&gt;,
+&gt; {
+    #[input]
+    input: I,
+    #[output]
+    output: O,
+}
+
+impl&lt;T, I, O&gt; Increment&lt;T, I, O&gt;
+where
+    T: Send + Sync + 'static + Clone + std::ops::AddAssign + From&lt;u8&gt;,
+    I: CpuBufferReader&lt;Item = T&gt;,
+    O: CpuBufferWriter&lt;Item = T&gt;,
+{
+    pub fn new() -&gt; Self {
+        Self {
+            input: I::default(),
+            output: O::default(),
+        }
+    }
+}
+
+impl&lt;T, I, O&gt; Kernel for Increment&lt;T, I, O&gt;
+where
+    T: Send + Sync + 'static + Clone + std::ops::AddAssign + From&lt;u8&gt;,
+    I: CpuBufferReader&lt;Item = T&gt;,
+    O: CpuBufferWriter&lt;Item = T&gt;,
+{
+    async fn work(
+        &amp;mut self, io: &amp;mut WorkIo, _mio: &amp;mut MessageOutputs,
+        _meta: &amp;mut BlockMeta,
+    ) -&gt; Result&lt;()&gt; {
+        let i = self.input.slice();
+        let o = self.output.slice();
+        let m = std::cmp::min(i.len(), o.len());
+        if m &gt; 0 {
+            for idx in 0..m {
+                o[idx] = i[idx].clone();
+                o[idx] += T::from(1u8);
+            }
+            self.input.consume(m);
+            self.output.produce(m);
+        }
+        if self.input.finished() &amp;&amp; m == i.len() {
+            io.finished = true;
+        }
+        Ok(())
+    }
+}
+
+plugin_api::export_plugin! {
+    name: "Increment",
+    description: "Adds 1 to each sample",
+    config: (),
+    create: |_cfg, _id| {
+        Increment::&lt;f32&gt;::new()
+    }
+}</code></pre>
+<h2 id="generic-plugins-manual-blockfactory"><a class="header" href="#generic-plugins-manual-blockfactory">Generic Plugins (Manual BlockFactory)</a></h2>
+<p>When <code>export_plugin!</code> isn’t flexible enough (e.g., multiple sample types
+selected at runtime), implement <code>BlockFactory</code> manually:</p>
+<pre><code class="language-rust">use futuresdr::runtime::*;
+use plugin_api::BlockFactory;
+
+struct NullSinkFactory;
+
+impl BlockFactory for NullSinkFactory {
+    fn create_block(&amp;self, id: BlockId, config: Box&lt;dyn std::any::Any + Send&gt;) -&gt; Box&lt;dyn Block&gt; {
+        let type_name = *config.downcast::&lt;String&gt;().expect("config must be String");
+        match type_name.as_str() {
+            "f32" =&gt; {
+                let kernel = futuresdr::blocks::NullSink::&lt;f32&gt;::new();
+                Box::new(WrappedKernel::new(kernel, id))
+            }
+            "c32" =&gt; {
+                let kernel = futuresdr::blocks::NullSink::&lt;num_complex::Complex32&gt;::new();
+                Box::new(WrappedKernel::new(kernel, id))
+            }
+            _ =&gt; panic!("unsupported type: {type_name}"),
+        }
+    }
+
+    fn block_name(&amp;self) -&gt; &amp;'static str { "NullSink" }
+    fn block_description(&amp;self) -&gt; &amp;'static str { "Generic null sink" }
+}
+
+#[unsafe(no_mangle)]
+pub fn create_block_factory() -&gt; Box&lt;dyn BlockFactory&gt; {
+    Box::new(NullSinkFactory)
+}
+
+#[unsafe(no_mangle)]
+pub fn plugin_abi_fingerprint() -&gt; (&amp;'static str, &amp;'static str) {
+    (
+        futuresdr::runtime::abi_fingerprint::ABI_FINGERPRINT,
+        futuresdr::runtime::abi_fingerprint::ABI_FINGERPRINT_DETAIL,
+    )
+}</code></pre>
+<p>When implementing <code>BlockFactory</code> manually, you <strong>must</strong> also export
+<code>plugin_abi_fingerprint</code> yourself.</p>
+<h2 id="using-plugin_gen"><a class="header" href="#using-plugin_gen">Using <code>plugin_gen</code></a></h2>
+<p>The <code>plugin_gen</code> tool automates plugin crate creation:</p>
+<pre><code class="language-bash">cargo run -p plugin_gen -- --block-src src/blocks/head.rs
+</code></pre>
+<p>It:</p>
+<ol>
+<li>Parses the source file for <code>#[derive(Block)]</code> structs</li>
+<li>Extracts the first generic type parameter (for monomorphization)</li>
+<li>Finds <code>pub fn new(...)</code> and maps parameter types to plugin-compatible types</li>
+<li>Generates <code>plugins/&lt;block_name&gt;_plugin/Cargo.toml</code> and <code>src/lib.rs</code></li>
+</ol>
+<h3 id="type-mapping-rules"><a class="header" href="#type-mapping-rules">Type Mapping Rules</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Constructor type</th><th>Plugin config type</th></tr>
+</thead>
+<tbody>
+<tr><td><code>()</code> (no params)</td><td><code>()</code></td></tr>
+<tr><td><code>u64</code>, <code>f32</code>, etc.</td><td>Same type</td></tr>
+<tr><td><code>&amp;str</code>, <code>impl AsRef&lt;str&gt;</code></td><td><code>String</code></td></tr>
+<tr><td><code>impl AsRef&lt;Path&gt;</code></td><td><code>String</code></td></tr>
+<tr><td><code>&amp;[T]</code></td><td><code>Vec&lt;T&gt;</code></td></tr>
+<tr><td><code>Vec&lt;T&gt;</code></td><td><code>Vec&lt;T&gt;</code></td></tr>
+<tr><td><code>(A, B, ...)</code> multiple params</td><td><code>(A, B, ...)</code> tuple</td></tr>
+<tr><td><code>impl FnMut(...)</code></td><td><code>CLOSURE</code> (manual editing required)</td></tr>
+</tbody>
+</table>
+</div>
+<p>When the generator encounters a closure parameter, it emits a <code>CLOSURE</code>
+placeholder and a comment at the top of the file telling you to replace it
+manually.</p>
+<h2 id="building-plugins"><a class="header" href="#building-plugins">Building Plugins</a></h2>
+<p>Plugins must be built with matching RUSTFLAGS:</p>
+<pre><code class="language-bash">export RUSTFLAGS="-C prefer-dynamic -C panic=unwind -C lto=off"
+
+# Build futuresdr first (produces libfuturesdr.so)
+cargo build --release
+
+# Build the plugin
+cargo build --release -p head_plugin
+</code></pre>
+<p>The <code>setup_plugins.sh</code> script automates this for the entire workspace.</p>
+<h2 id="runtime-usage"><a class="header" href="#runtime-usage">Runtime Usage</a></h2>
+<pre><code class="language-rust">use plugin_api::LoadedPlugin;
+
+let plugin = unsafe { LoadedPlugin::load("./shared_libs/release/libhead_plugin.so") };
+println!("Loaded: {}", plugin.block_name());
+
+let mut fg = Flowgraph::new();
+let head = fg.add_block_dyn(plugin.prepare(Box::new(100u64)));</code></pre>
+<p>Set <code>LD_LIBRARY_PATH</code> to include the directory containing <code>libfuturesdr.so</code>
+and <code>libstd-*.so</code>:</p>
+<pre><code class="language-bash">export LD_LIBRARY_PATH=./shared_libs/release:$LD_LIBRARY_PATH
+./target/release/my_app
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="abi-contract--fingerprint"><a class="header" href="#abi-contract--fingerprint">ABI Contract &amp; Fingerprint</a></h1>
+<p>Dynamic plugins share a binary interface with the runtime. If any part of that
+interface changes between compilation of the runtime and the plugin, the result
+is undefined behavior — usually silent memory corruption. This chapter
+explains the ABI contract and the fingerprint mechanism that enforces it.</p>
+<h2 id="what-crosses-the-abi-boundary"><a class="header" href="#what-crosses-the-abi-boundary">What Crosses the ABI Boundary</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Component</th><th>Crosses?</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Block</code> trait vtable</td><td>Yes</td><td>Plugin returns <code>Box&lt;dyn Block&gt;</code></td></tr>
+<tr><td><code>BufferReader</code> / <code>BufferWriter</code></td><td>Yes</td><td><code>connect_dyn</code> downcasts via <code>TypeId</code></td></tr>
+<tr><td><code>Pmt</code> enum layout</td><td>Yes</td><td>Messages flow between blocks</td></tr>
+<tr><td><code>Tag</code> enum layout</td><td>Yes</td><td>Tags travel with buffer data</td></tr>
+<tr><td><code>Error</code> enum layout</td><td>Yes</td><td>Returned from handlers</td></tr>
+<tr><td><code>BlockMessage</code> / <code>FlowgraphMessage</code></td><td>Yes</td><td>Sent via channels</td></tr>
+<tr><td><code>BlockFactory</code> trait vtable</td><td>Yes</td><td>Plugin exports <code>Box&lt;dyn BlockFactory&gt;</code></td></tr>
+<tr><td>Plugin-internal types</td><td>No</td><td>Stay inside <code>work()</code> / handlers</td></tr>
+<tr><td>External crate types (internal)</td><td>No</td><td>Never cross the <code>.so</code> boundary</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="the-abi-contract"><a class="header" href="#the-abi-contract">The ABI Contract</a></h2>
+<p>For a plugin to be binary-compatible with the runtime, <strong>all</strong> of the
+following must match:</p>
+<ol>
+<li>
+<p><strong>Rust toolchain</strong> — exact nightly version (including commit hash). Rust’s
+nightly ABI can change between any two versions.</p>
+</li>
+<li>
+<p><strong>FutureSDR version</strong> — the <code>Cargo.toml</code> version string. Any change to
+public types, enum variants, or trait signatures breaks compatibility.</p>
+</li>
+<li>
+<p><strong>Target triple</strong> — e.g., <code>x86_64-unknown-linux-gnu</code>. Cross-platform
+plugins are not supported.</p>
+</li>
+<li>
+<p><strong>RUSTFLAGS</strong> — flags like <code>-C prefer-dynamic</code>, <code>-C panic=unwind</code>,
+<code>-C lto=off</code> affect code generation and must match.</p>
+</li>
+<li>
+<p><strong>ABI-affecting features</strong> — features that change enum layouts. Currently,
+only <code>seify</code> was historically relevant, but the <code>Error</code> enum has been fixed
+to have a stable layout regardless of features (see below).</p>
+</li>
+</ol>
+<h2 id="the-error-enum-fix"><a class="header" href="#the-error-enum-fix">The Error Enum Fix</a></h2>
+<p>The <code>Error</code> enum previously had <code>#[cfg(feature = "seify")]</code> on two variants:</p>
+<pre><code class="language-rust">// BEFORE (broken): variant positions shift based on features
+pub enum Error {
+    // ...
+    #[cfg(feature = "seify")]
+    SeifyArgsConversionError,
+    #[cfg(feature = "seify")]
+    SeifyError(String),
+}</code></pre>
+<p>If the runtime was built with <code>seify</code> but a plugin was built without it (or
+vice versa), the enum discriminant values would differ, causing silent memory
+corruption when <code>Error</code> values crossed the boundary.</p>
+<p>The fix: both variants are now always present, regardless of features. Only the
+<code>From&lt;seify::Error&gt;</code> impl is feature-gated:</p>
+<pre><code class="language-rust">// AFTER (safe): layout is identical regardless of features
+#[non_exhaustive]
+pub enum Error {
+    // ...
+    SeifyArgsConversionError,
+    SeifyError(String),
+}
+
+#[cfg(feature = "seify")]
+impl From&lt;seify::Error&gt; for Error { /* ... */ }</code></pre>
+<h2 id="abi-fingerprint"><a class="header" href="#abi-fingerprint">ABI Fingerprint</a></h2>
+<p>The fingerprint is a compile-time hash that captures all ABI-affecting
+parameters. It is generated in <code>build.rs</code> and embedded in both the runtime
+and every plugin.</p>
+<h3 id="generation-buildrs"><a class="header" href="#generation-buildrs">Generation (build.rs)</a></h3>
+<pre><code class="language-rust">let fingerprint_source = format!(
+    "rustc={};futuresdr={};target={};seify={}",
+    rustc_version,
+    futuresdr_version,
+    target,
+    has_seify_feature,
+);
+
+let mut hasher = DefaultHasher::new();
+fingerprint_source.hash(&amp;mut hasher);
+let hash = format!("{:016x}", hasher.finish());</code></pre>
+<p>Two environment variables are emitted:</p>
+<ul>
+<li><code>FUTURESDR_ABI_FINGERPRINT</code> — 16-character hex hash (for fast comparison)</li>
+<li><code>FUTURESDR_ABI_FINGERPRINT_DETAIL</code> — human-readable source string (for
+error messages)</li>
+</ul>
+<h3 id="runtime-side"><a class="header" href="#runtime-side">Runtime Side</a></h3>
+<pre><code class="language-rust">// src/runtime/abi_fingerprint.rs
+pub const ABI_FINGERPRINT: &amp;str = env!("FUTURESDR_ABI_FINGERPRINT");
+pub const ABI_FINGERPRINT_DETAIL: &amp;str = env!("FUTURESDR_ABI_FINGERPRINT_DETAIL");</code></pre>
+<h3 id="plugin-side"><a class="header" href="#plugin-side">Plugin Side</a></h3>
+<p>The <code>export_plugin!</code> macro generates:</p>
+<pre><code class="language-rust">#[unsafe(no_mangle)]
+pub fn plugin_abi_fingerprint() -&gt; (&amp;'static str, &amp;'static str) {
+    (
+        futuresdr::runtime::abi_fingerprint::ABI_FINGERPRINT,
+        futuresdr::runtime::abi_fingerprint::ABI_FINGERPRINT_DETAIL,
+    )
+}</code></pre>
+<p>Since both the runtime and the plugin link against <code>libfuturesdr.so</code>, and the
+constants are baked in at compile time, the fingerprints will match if and only
+if they were built from the same <code>libfuturesdr.so</code>.</p>
+<h3 id="validation-at-load-time"><a class="header" href="#validation-at-load-time">Validation at Load Time</a></h3>
+<p><code>LoadedPlugin::try_load()</code> performs this check:</p>
+<pre><code class="language-rust">let fp_fn: Symbol&lt;AbiFingerPrintFn&gt; = lib.get(b"plugin_abi_fingerprint")?;
+let (plugin_hash, plugin_detail) = fp_fn();
+
+if plugin_hash != abi_fingerprint::ABI_FINGERPRINT {
+    return Err(AbiMismatchError {
+        plugin_path: path.into(),
+        plugin_fingerprint: plugin_hash.into(),
+        plugin_detail: plugin_detail.into(),
+        runtime_fingerprint: abi_fingerprint::ABI_FINGERPRINT.into(),
+        runtime_detail: abi_fingerprint::ABI_FINGERPRINT_DETAIL.into(),
+    }.into());
+}</code></pre>
+<h3 id="error-message"><a class="header" href="#error-message">Error Message</a></h3>
+<p>On mismatch, you get a clear diagnostic:</p>
+<pre><code>ABI mismatch loading plugin `./libmy_plugin.so`:
+  plugin:  a1b2c3d4e5f67890 (rustc=1.84.0-nightly(abc1234);futuresdr=0.1.0;target=x86_64-unknown-linux-gnu;seify=false)
+  runtime: f0e1d2c3b4a59687 (rustc=1.85.0-nightly(def5678);futuresdr=0.1.0;target=x86_64-unknown-linux-gnu;seify=false)
+</code></pre>
+<p>This tells you exactly what differs (in this example, the Rust toolchain
+version).</p>
+<h2 id="toolchain-pinning"><a class="header" href="#toolchain-pinning">Toolchain Pinning</a></h2>
+<p>To prevent accidental toolchain drift, the workspace includes a
+<code>rust-toolchain.toml</code>:</p>
+<pre><code class="language-toml">[toolchain]
+channel = "nightly-2025-11-18"
+components = ["rustfmt", "clippy"]
+</code></pre>
+<p>Anyone building in the workspace directory automatically uses this exact
+nightly. Plugins built outside the workspace must use the same version.</p>
+<h2 id="load_unchecked"><a class="header" href="#load_unchecked"><code>load_unchecked</code></a></h2>
+<p>For development iteration where you’re rebuilding everything together and
+don’t want the fingerprint check overhead:</p>
+<pre><code class="language-rust">let plugin = unsafe { LoadedPlugin::load_unchecked("./libmy_plugin.so") };</code></pre>
+<p>This skips the fingerprint symbol lookup entirely. Use this only during
+development — never in production.</p>
+<h2 id="practical-implications"><a class="header" href="#practical-implications">Practical Implications</a></h2>
+<h3 id="what-triggers-a-fingerprint-mismatch"><a class="header" href="#what-triggers-a-fingerprint-mismatch">What Triggers a Fingerprint Mismatch</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Change</th><th>Mismatch?</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rustup update</code> (new nightly)</td><td>Yes</td></tr>
+<tr><td>Edit a block’s <code>work()</code> logic</td><td>No (rebuild both)</td></tr>
+<tr><td>Add a new <code>Pmt</code> variant</td><td>Yes (version bump)</td></tr>
+<tr><td>Change RUSTFLAGS</td><td>Yes</td></tr>
+<tr><td>Build on a different machine (same toolchain)</td><td>No</td></tr>
+<tr><td>Build plugin without <code>seify</code> feature</td><td>No (layout is stable)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="recommended-workflow"><a class="header" href="#recommended-workflow">Recommended Workflow</a></h3>
+<ol>
+<li>Pin the toolchain with <code>rust-toolchain.toml</code></li>
+<li>Build everything together with <code>setup_plugins.sh</code></li>
+<li>Use <code>LoadedPlugin::load()</code> (not <code>load_unchecked</code>) in production</li>
+<li>When distributing plugins separately, use the Plugin SDK (next chapter)</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="external-libraries-in-plugins"><a class="header" href="#external-libraries-in-plugins">External Libraries in Plugins</a></h1>
+<p>Plugins can use external crates (crates.io dependencies). The key question is
+whether any types from those crates cross the ABI boundary.</p>
+<h2 id="the-rule"><a class="header" href="#the-rule">The Rule</a></h2>
+<blockquote>
+<p>If a type stays entirely inside your plugin’s <code>work()</code>, <code>init()</code>, <code>deinit()</code>,
+or message handler methods, it is <strong>safe</strong> to use any crate. If a type flows
+through buffers (<code>Reader&lt;T&gt;</code> / <code>Writer&lt;T&gt;</code>), <code>Pmt::Any</code>, or <code>Tag::NamedAny</code>
+to another block, it must come from <code>libfuturesdr.so</code>.</p>
+</blockquote>
+<h2 id="safe-types-stay-internal"><a class="header" href="#safe-types-stay-internal">Safe: Types Stay Internal</a></h2>
+<p>These patterns are always safe because the external types never cross the
+<code>.so</code> boundary:</p>
+<h3 id="computation-libraries"><a class="header" href="#computation-libraries">Computation Libraries</a></h3>
+<pre><code class="language-rust">// Inside work()
+use nalgebra::Matrix4;
+let transform = Matrix4::identity();
+// ... use it for internal math, write results as f32 to output buffer</code></pre>
+<h3 id="serialization"><a class="header" href="#serialization">Serialization</a></h3>
+<pre><code class="language-rust">use serde_json;
+async fn config_handler(&amp;mut self, ..., p: Pmt) -&gt; Result&lt;Pmt&gt; {
+    if let Pmt::String(json) = p {
+        let cfg: MyConfig = serde_json::from_str(&amp;json)?;
+        self.apply_config(cfg);
+    }
+    Ok(Pmt::Ok)
+}</code></pre>
+<h3 id="crc--checksums"><a class="header" href="#crc--checksums">CRC / Checksums</a></h3>
+<pre><code class="language-rust">// wlan_mac plugin uses crc32fast internally
+use crc32fast::Hasher;
+let mut h = Hasher::new();
+h.update(&amp;frame_bytes);
+let checksum = h.finalize();</code></pre>
+<h3 id="io-and-networking"><a class="header" href="#io-and-networking">I/O and Networking</a></h3>
+<pre><code class="language-rust">use tokio::net::UdpSocket;
+// Open socket in init(), read/write in work()</code></pre>
+<h3 id="regex-logging-random-numbers"><a class="header" href="#regex-logging-random-numbers">Regex, Logging, Random Numbers</a></h3>
+<p>Any utility crate whose types don’t appear in the block’s port interfaces.</p>
+<h2 id="unsafe-types-cross-the-boundary"><a class="header" href="#unsafe-types-cross-the-boundary">Unsafe: Types Cross the Boundary</a></h2>
+<p>These patterns are <strong>not safe</strong> without extra care:</p>
+<h3 id="stream-buffer-types"><a class="header" href="#stream-buffer-types">Stream Buffer Types</a></h3>
+<p>The <code>D</code> in <code>Reader&lt;D&gt;</code> / <code>Writer&lt;D&gt;</code> must be the same concrete type in both
+the producing and consuming block. If two plugins define their own
+<code>MyComplex32</code> type independently, they’ll have different <code>TypeId</code>s even if the
+struct layout is identical. The connection will fail at <code>connect_dyn</code>.</p>
+<p><strong>Solution</strong>: Use types already in <code>libfuturesdr.so</code>:</p>
+<ul>
+<li>Primitives: <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>f32</code>, <code>f64</code></li>
+<li><code>num_complex::Complex32</code></li>
+<li><code>Vec&lt;u8&gt;</code> (via <code>Pmt::Blob</code>)</li>
+</ul>
+<h3 id="pmtany-1"><a class="header" href="#pmtany-1">Pmt::Any</a></h3>
+<pre><code class="language-rust">// Plugin A sends
+mio.post("out", Pmt::Any(Box::new(MyStruct { ... }))).await?;
+
+// Plugin B receives
+if let Pmt::Any(ref any) = p {
+    let val = any.downcast_ref::&lt;MyStruct&gt;()?; // FAILS: different TypeId
+}</code></pre>
+<p><code>Pmt::Any</code> relies on <code>TypeId</code> for downcasting. If <code>MyStruct</code> is defined in
+plugin A’s crate, plugin B has a different <code>TypeId</code> for it — even if the
+definition is textually identical.</p>
+<p><strong>Solution</strong>: Define the shared type in <code>futuresdr</code> itself (or a shared crate
+that both plugins depend on via <code>libfuturesdr.so</code>), or use a standard <code>Pmt</code>
+variant instead of <code>Pmt::Any</code>.</p>
+<h3 id="tagnamedany"><a class="header" href="#tagnamedany">Tag::NamedAny</a></h3>
+<p>Same issue as <code>Pmt::Any</code> — the <code>Box&lt;dyn TagAny&gt;</code> uses <code>Any::downcast</code>, which
+requires matching <code>TypeId</code>s.</p>
+<h2 id="when-to-add-dependencies-to-futuresdr"><a class="header" href="#when-to-add-dependencies-to-futuresdr">When to Add Dependencies to FutureSDR</a></h2>
+<p>You need to add a dependency to FutureSDR (so it’s part of <code>libfuturesdr.so</code>)
+only when:</p>
+<ol>
+<li>A new sample type (the <code>D</code> in <code>Reader&lt;D&gt;</code>) is needed that isn’t already
+available (e.g., a custom <code>Complex64</code> type).</li>
+<li>A new type needs to flow through <code>Pmt::Any</code> between plugins from different
+crates.</li>
+<li>A new type needs to flow through <code>Tag::NamedAny</code> between plugins.</li>
+</ol>
+<p>In all other cases, just add the dependency to your plugin’s <code>Cargo.toml</code>.</p>
+<h2 id="static-vs-dynamic-linking-of-external-crates"><a class="header" href="#static-vs-dynamic-linking-of-external-crates">Static vs Dynamic Linking of External Crates</a></h2>
+<p>External crates in plugins are statically linked into the plugin <code>.so</code>. They
+do <strong>not</strong> need to be in <code>libfuturesdr.so</code>. Each plugin can have its own
+version of <code>serde</code>, <code>crc32fast</code>, etc. without conflict, as long as those
+types stay internal.</p>
+<pre><code>┌─────────────────────────┐     ┌─────────────────────────┐
+│  wlan_mac_plugin.so     │     │  zigbee_mac_plugin.so   │
+│  ┌───────────────────┐  │     │  ┌───────────────────┐  │
+│  │ crc32fast (static) │  │     │  │ crc32fast (static) │  │
+│  └───────────────────┘  │     │  └───────────────────┘  │
+│  ┌───────────────────┐  │     │  ┌───────────────────┐  │
+│  │ block logic       │  │     │  │ block logic       │  │
+│  └───────────────────┘  │     │  └───────────────────┘  │
+└──────────┬──────────────┘     └──────────┬──────────────┘
+           │                               │
+           └───────────┬───────────────────┘
+                       ▼
+             ┌─────────────────┐
+             │ libfuturesdr.so │  ← shared types only
+             └─────────────────┘
+</code></pre>
+<h2 id="summary"><a class="header" href="#summary">Summary</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Pattern</th><th>Safe?</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td><code>nalgebra</code> math inside <code>work()</code></td><td>Yes</td><td>Types stay internal</td></tr>
+<tr><td><code>serde_json</code> for config parsing</td><td>Yes</td><td>JSON string crosses boundary, not serde types</td></tr>
+<tr><td><code>crc32fast</code> for checksums</td><td>Yes</td><td>Only <code>u32</code> result crosses boundary</td></tr>
+<tr><td>Custom struct in <code>Pmt::Any</code> between plugins</td><td>No</td><td><code>TypeId</code> mismatch</td></tr>
+<tr><td>Custom struct as buffer sample type</td><td>No</td><td><code>TypeId</code> mismatch in <code>connect_dyn</code></td></tr>
+<tr><td><code>f32</code> / <code>Complex32</code> as buffer type</td><td>Yes</td><td>Defined in <code>libfuturesdr.so</code></td></tr>
+<tr><td>Standard <code>Pmt</code> variants (<code>Pmt::Blob</code>, etc.)</td><td>Yes</td><td>Enum layout shared</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="a-posteriori-compilation--sdk"><a class="header" href="#a-posteriori-compilation--sdk">A-Posteriori Compilation &amp; SDK</a></h1>
+<p>A-posteriori compilation means building a plugin <em>after</em> the runtime has been
+deployed, without the full FutureSDR workspace. The Plugin SDK makes this
+practical.</p>
+<h2 id="the-problem"><a class="header" href="#the-problem">The Problem</a></h2>
+<p>To build a compatible plugin, you need:</p>
+<ol>
+<li>The exact Rust nightly toolchain</li>
+<li>The exact FutureSDR source (or at least the dylib)</li>
+<li>The same RUSTFLAGS</li>
+<li>The same ABI-affecting feature configuration</li>
+</ol>
+<p>Without coordination, getting all four right is fragile.</p>
+<h2 id="the-plugin-sdk"><a class="header" href="#the-plugin-sdk">The Plugin SDK</a></h2>
+<p>The <code>setup_plugins.sh</code> script packages everything needed into a self-contained
+<code>plugin_sdk/</code> directory:</p>
+<pre><code>plugin_sdk/
+├── libfuturesdr.so              # The exact runtime binary
+├── libstd-*.so                  # Matching nightly stdlib
+├── rust-toolchain.toml          # Exact nightly version
+├── build.env                    # RUSTFLAGS
+├── plugin_template_Cargo.toml   # Template for new plugin crates
+└── manifest.json                # ABI metadata
+</code></pre>
+<h3 id="contents"><a class="header" href="#contents">Contents</a></h3>
+<p><strong><code>libfuturesdr.so</code></strong> — the release build of the FutureSDR dynamic library.
+This is the binary your plugin will link against at runtime.</p>
+<p><strong><code>libstd-*.so</code></strong> — the Rust standard library from the pinned nightly. Needed
+because <code>-C prefer-dynamic</code> makes the binary depend on the stdlib <code>.so</code>.</p>
+<p><strong><code>rust-toolchain.toml</code></strong> — pins the exact nightly version:</p>
+<pre><code class="language-toml">[toolchain]
+channel = "nightly-2025-11-18"
+components = ["rustfmt", "clippy"]
+</code></pre>
+<p><strong><code>build.env</code></strong> — the RUSTFLAGS used to build the runtime:</p>
+<pre><code class="language-bash">export RUSTFLAGS="-C prefer-dynamic -C panic=unwind -C lto=off"
+</code></pre>
+<p><strong><code>plugin_template_Cargo.toml</code></strong> — a template for new plugin crates:</p>
+<pre><code class="language-toml">[package]
+name = "my_plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+plugin_api = { path = "path/to/crates/plugin_api" }
+futuresdr = { path = "path/to/futuresdr", features = ["plugin"] }
+</code></pre>
+<p><strong><code>manifest.json</code></strong> — machine-readable metadata:</p>
+<pre><code class="language-json">{
+    "rustc_version": "1.84.0-nightly",
+    "futuresdr_version": "0.1.0",
+    "target": "x86_64-unknown-linux-gnu",
+    "rustflags": "-C prefer-dynamic -C panic=unwind -C lto=off",
+    "created": "2025-11-20T14:30:00Z"
+}
+</code></pre>
+<h2 id="third-party-plugin-development-workflow"><a class="header" href="#third-party-plugin-development-workflow">Third-Party Plugin Development Workflow</a></h2>
+<h3 id="step-1-install-the-pinned-toolchain"><a class="header" href="#step-1-install-the-pinned-toolchain">Step 1: Install the Pinned Toolchain</a></h3>
+<pre><code class="language-bash"># Copy rust-toolchain.toml to your plugin directory
+cp plugin_sdk/rust-toolchain.toml ./
+
+# Rustup will install the correct nightly automatically
+rustc --version  # Verify it matches manifest.json
+</code></pre>
+<h3 id="step-2-create-the-plugin-crate"><a class="header" href="#step-2-create-the-plugin-crate">Step 2: Create the Plugin Crate</a></h3>
+<pre><code class="language-bash">cargo init --lib my_plugin
+</code></pre>
+<p>Edit <code>Cargo.toml</code> based on the template:</p>
+<pre><code class="language-toml">[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+plugin_api = { path = "/path/to/crates/plugin_api" }
+futuresdr = { path = "/path/to/futuresdr", features = ["plugin"] }
+</code></pre>
+<h3 id="step-3-write-the-plugin"><a class="header" href="#step-3-write-the-plugin">Step 3: Write the Plugin</a></h3>
+<pre><code class="language-rust">// src/lib.rs
+use futuresdr::blocks::Apply;
+use futuresdr::num_complex::Complex32;
+
+plugin_api::export_plugin! {
+    name: "MyFilter",
+    description: "Custom frequency-domain filter",
+    config: f32,
+    create: |cutoff, _id| {
+        Apply::&lt;Complex32, Complex32, _, _&gt;::new(move |x: &amp;Complex32| {
+            if x.norm() &gt; cutoff { *x } else { Complex32::new(0.0, 0.0) }
+        })
+    }
+}</code></pre>
+<h3 id="step-4-build-with-matching-flags"><a class="header" href="#step-4-build-with-matching-flags">Step 4: Build with Matching Flags</a></h3>
+<pre><code class="language-bash">source plugin_sdk/build.env  # Sets RUSTFLAGS
+cargo build --release
+</code></pre>
+<h3 id="step-5-deploy"><a class="header" href="#step-5-deploy">Step 5: Deploy</a></h3>
+<p>Copy the resulting <code>.so</code> to the target system alongside <code>libfuturesdr.so</code> and
+<code>libstd-*.so</code>:</p>
+<pre><code class="language-bash">cp target/release/libmy_plugin.so /deploy/shared_libs/
+</code></pre>
+<p>The runtime validates the ABI fingerprint at load time:</p>
+<pre><code class="language-rust">// This will succeed if everything matches
+let plugin = unsafe { LoadedPlugin::load("/deploy/shared_libs/libmy_plugin.so") };</code></pre>
+<p>If the toolchain or FutureSDR version doesn’t match, you get a clear error
+message instead of silent corruption.</p>
+<h2 id="generating-the-sdk"><a class="header" href="#generating-the-sdk">Generating the SDK</a></h2>
+<p>The SDK is generated as part of the <code>setup_plugins.sh</code> build:</p>
+<pre><code class="language-bash">./setup_plugins.sh
+# SDK is created at ./plugin_sdk/
+</code></pre>
+<p>The relevant section of the script:</p>
+<ol>
+<li>Creates the <code>plugin_sdk/</code> directory</li>
+<li>Copies <code>libfuturesdr.so</code> from <code>target/release/</code></li>
+<li>Copies <code>libstd-*.so</code> from the rustup sysroot</li>
+<li>Copies <code>rust-toolchain.toml</code> from the workspace root</li>
+<li>Writes <code>build.env</code> with the current RUSTFLAGS</li>
+<li>Writes <code>plugin_template_Cargo.toml</code> with correct dependency paths</li>
+<li>Writes <code>manifest.json</code> with version metadata and timestamp</li>
+</ol>
+<h2 id="verification"><a class="header" href="#verification">Verification</a></h2>
+<p>After building a third-party plugin:</p>
+<pre><code class="language-rust">// This validates the ABI fingerprint
+match unsafe { LoadedPlugin::try_load("./libmy_plugin.so") } {
+    Ok(plugin) =&gt; println!("Plugin loaded: {}", plugin.block_name()),
+    Err(e) =&gt; eprintln!("Load failed: {e}"),
+}</code></pre>
+<p>Common failure modes:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+</thead>
+<tbody>
+<tr><td>“ABI mismatch” with different rustc</td><td>Wrong nightly</td><td>Install from <code>rust-toolchain.toml</code></td></tr>
+<tr><td>“ABI mismatch” with different futuresdr</td><td>Source drift</td><td>Rebuild against SDK’s <code>libfuturesdr.so</code></td></tr>
+<tr><td><code>dlopen</code> fails: “libfuturesdr.so not found”</td><td>Missing library path</td><td>Set <code>LD_LIBRARY_PATH</code></td></tr>
+<tr><td><code>dlopen</code> fails: “libstd not found”</td><td>Missing stdlib</td><td>Copy <code>libstd-*.so</code> to library path</td></tr>
+<tr><td>“dyn BufferReader has wrong type”</td><td>RUSTFLAGS mismatch</td><td>Source <code>build.env</code> before building</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<ul>
+<li>Plugins cannot use Rust stable — nightly is required for the <code>dylib</code>
+crate type to produce ABI-compatible output.</li>
+<li>The SDK assumes the same target triple. Cross-compilation of plugins is
+not supported.</li>
+<li>LTO must be disabled (<code>-C lto=off</code>) for dynamic linking to work correctly.</li>
+<li>Each plugin SDK is tied to a specific FutureSDR build. Updating the runtime
+requires regenerating the SDK and rebuilding all third-party plugins.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="dynamic-phy-tx-swap-zigbee-to-wlan"><a class="header" href="#dynamic-phy-tx-swap-zigbee-to-wlan">Dynamic PHY TX Swap: ZigBee to WLAN</a></h1>
+<p>This chapter walks through the <code>dyn_phy-swap</code> example — a complete
+demonstration of runtime PHY switching from a ZigBee 802.15.4 TX chain to a
+WLAN 802.11 TX chain, with every block loaded as a dynamic plugin.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p>The example runs two sequential flowgraphs:</p>
+<ol>
+<li><strong>Phase 1</strong>: Build a ZigBee TX flowgraph from plugins, transmit N frames,
+terminate.</li>
+<li><strong>Phase 2</strong>: Build a WLAN TX flowgraph from plugins, transmit N frames,
+terminate.</li>
+</ol>
+<p>No hardware is used — output goes to a <code>NullSink</code>. The point is to
+demonstrate that the full TX pipeline for two different radio standards can be
+assembled at runtime from separately compiled <code>.so</code> files.</p>
+<h2 id="plugin-loading"><a class="header" href="#plugin-loading">Plugin Loading</a></h2>
+<p>All plugins are loaded at startup, before any flowgraph is built:</p>
+<pre><code class="language-rust">let zigbee_mac = unsafe { LoadedPlugin::load("./libzigbee_mac_plugin.so") };
+let zigbee_mod = unsafe { LoadedPlugin::load("./libzigbee_modulator_plugin.so") };
+let zigbee_delay = unsafe { LoadedPlugin::load("./libzigbee_iq_delay_plugin.so") };
+let null_sink = unsafe { LoadedPlugin::load("./libnull_sink_plugin.so") };
+
+let wlan_mac = unsafe { LoadedPlugin::load("./libwlan_mac_plugin.so") };
+let wlan_enc = unsafe { LoadedPlugin::load("./libwlan_encoder_plugin.so") };
+let wlan_map = unsafe { LoadedPlugin::load("./libwlan_mapper_plugin.so") };
+let fft = unsafe { LoadedPlugin::load("./libfft_complex_plugin.so") };
+let wlan_pfx = unsafe { LoadedPlugin::load("./libwlan_prefix_plugin.so") };</code></pre>
+<p>Each <code>LoadedPlugin::load()</code> call:</p>
+<ol>
+<li>Opens the <code>.so</code> with <code>dlopen</code></li>
+<li>Validates the ABI fingerprint against the runtime</li>
+<li>Calls <code>create_block_factory()</code> to get the <code>BlockFactory</code></li>
+</ol>
+<h2 id="phase-1-zigbee-tx"><a class="header" href="#phase-1-zigbee-tx">Phase 1: ZigBee TX</a></h2>
+<h3 id="zigbee-tx-chain"><a class="header" href="#zigbee-tx-chain">ZigBee TX Chain</a></h3>
+<pre><code>ZigbeeMac  →  ZigbeeModulator  →  ZigbeeIqDelay  →  NullSink
+  (msg "tx")     (DSSS encode)      (I/Q offset)     (discard)
+</code></pre>
+<h3 id="building-the-flowgraph"><a class="header" href="#building-the-flowgraph">Building the Flowgraph</a></h3>
+<pre><code class="language-rust">let mut fg = Flowgraph::new();
+
+let mac = fg.add_block_dyn(zigbee_mac.prepare(Box::new(())));
+let modulator = fg.add_block_dyn(zigbee_mod.prepare(Box::new(())));
+let delay = fg.add_block_dyn(zigbee_delay.prepare(Box::new(())));
+let sink = fg.add_block_dyn(null_sink.prepare(Box::new("c32".to_string())));
+
+fg.connect_message(mac, "tx", modulator, "tx")?;
+fg.connect_dyn(modulator, "output", delay, "input")?;
+fg.connect_dyn(delay, "output", sink, "input")?;</code></pre>
+<p>Note the mix of connection types:</p>
+<ul>
+<li><strong>Message connection</strong>: <code>mac → modulator</code> (frame data as <code>Pmt::Blob</code>)</li>
+<li><strong>Stream connections</strong>: <code>modulator → delay → sink</code> (Complex32 samples)</li>
+</ul>
+<h3 id="zigbee-modulation-dsss"><a class="header" href="#zigbee-modulation-dsss">ZigBee Modulation (DSSS)</a></h3>
+<p>The ZigBee modulator implements Direct Sequence Spread Spectrum:</p>
+<ol>
+<li>Each byte is split into two nibbles (4 bits each)</li>
+<li>Each nibble maps to a 32-chip spreading code (from a 16×16 lookup table)</li>
+<li>Each chip is pulse-shaped with <code>[0.0, 0.707, 1.0, 0.707]</code></li>
+<li>Output: Complex32 I/Q samples</li>
+</ol>
+<h3 id="transmitting-frames"><a class="header" href="#transmitting-frames">Transmitting Frames</a></h3>
+<pre><code class="language-rust">let rt = Runtime::new();
+let (task, mut handle) = rt.start_sync(fg)?;
+
+for _ in 0..n_frames {
+    let frame = vec![0u8; 20];  // 20-byte payload
+    handle.call(mac_id, "tx", Pmt::Blob(frame)).await?;
+}
+
+handle.terminate_and_wait().await?;</code></pre>
+<p>The <code>FlowgraphHandle</code> sends messages to the MAC block, which formats the
+frame and forwards it to the modulator via the message connection.</p>
+<h2 id="phase-2-wlan-tx"><a class="header" href="#phase-2-wlan-tx">Phase 2: WLAN TX</a></h2>
+<h3 id="wlan-tx-chain"><a class="header" href="#wlan-tx-chain">WLAN TX Chain</a></h3>
+<pre><code>WlanMac  →(msg)→  WlanEncoder  →  WlanMapper  →  IFFT(64)  →  WlanPrefix  →  NullSink
+                   (conv. code)    (OFDM map)    (freq→time)  (preamble)     (discard)
+</code></pre>
+<h3 id="building-the-flowgraph-1"><a class="header" href="#building-the-flowgraph-1">Building the Flowgraph</a></h3>
+<pre><code class="language-rust">let mut fg = Flowgraph::new();
+
+let mac = fg.add_block_dyn(wlan_mac.prepare(Box::new((
+    src_mac.to_string(),
+    dst_mac.to_string(),
+    bss_mac.to_string(),
+))));
+let encoder = fg.add_block_dyn(wlan_enc.prepare(Box::new("qpsk12".to_string())));
+let mapper = fg.add_block_dyn(wlan_map.prepare(Box::new(())));
+let ifft = fg.add_block_dyn(fft.prepare(Box::new((
+    64u64,           // FFT size
+    true,            // inverse
+    true,            // fft_shift
+    (1.0 / 52.0_f64.sqrt()),  // normalization
+))));
+let prefix = fg.add_block_dyn(wlan_pfx.prepare(Box::new((100usize, 100usize))));
+let sink = fg.add_block_dyn(null_sink.prepare(Box::new("c32".to_string())));
+
+fg.connect_message(mac, "tx", encoder, "tx")?;
+fg.connect_dyn(encoder, "output", mapper, "input")?;
+fg.connect_dyn(mapper, "output", ifft, "input")?;
+fg.connect_dyn(ifft, "output", prefix, "input")?;
+fg.connect_dyn(prefix, "output", sink, "input")?;</code></pre>
+<h3 id="wlan-encoding-pipeline"><a class="header" href="#wlan-encoding-pipeline">WLAN Encoding Pipeline</a></h3>
+<p><strong>Encoder</strong> (MCS: QPSK rate 1/2):</p>
+<ol>
+<li>Scramble the payload with an LFSR</li>
+<li>Convolutional encoding (rate 1/2, generators 0o133/0o171)</li>
+<li>Puncturing (optional, based on MCS)</li>
+<li>Interleaving (frequency-domain spreading for fading resistance)</li>
+<li>Output: u8 symbols, one per OFDM subcarrier</li>
+</ol>
+<p><strong>Mapper</strong> (64-point OFDM):</p>
+<ul>
+<li>48 data subcarriers + 4 pilot subcarriers</li>
+<li>DC subcarrier and guard bands zeroed</li>
+<li>Pilot polarity sequence for channel estimation</li>
+<li>Output: Complex32 frequency-domain symbols, 64 per OFDM symbol</li>
+</ul>
+<p><strong>IFFT</strong> (64-point inverse FFT):</p>
+<ul>
+<li>Transforms frequency domain to time domain</li>
+<li>Normalization factor: \( 1/\sqrt{52} \)</li>
+<li>FFT shift applied</li>
+</ul>
+<p><strong>Prefix</strong> (preamble and cyclic prefix):</p>
+<ul>
+<li>Short training sequence (160 samples, repeated)</li>
+<li>Long training sequence (160 samples)</li>
+<li>Cyclic prefix for each OFDM symbol</li>
+<li>Front/tail zero-padding (100 samples each)</li>
+</ul>
+<h3 id="transmitting-wlan-frames"><a class="header" href="#transmitting-wlan-frames">Transmitting WLAN Frames</a></h3>
+<pre><code class="language-rust">let (task, mut handle) = rt.start_sync(fg)?;
+
+for _ in 0..n_frames {
+    let frame = vec![0u8; 100];  // 100-byte payload
+    handle.call(mac_id, "tx", Pmt::Blob(frame)).await?;
+}
+
+handle.terminate_and_wait().await?;</code></pre>
+<h2 id="the-swap"><a class="header" href="#the-swap">The Swap</a></h2>
+<p>The “swap” is simply terminating the first flowgraph and starting the second.
+There is no running flowgraph modification — each phase is a complete
+build-run-terminate cycle.</p>
+<pre><code> Phase 1 (ZigBee)                   Phase 2 (WLAN)
+┌──────────────────┐               ┌──────────────────┐
+│ load plugins     │               │ build WLAN fg    │
+│ build ZigBee fg  │               │ start runtime    │
+│ start runtime    │──terminate──→│ send WLAN frames │
+│ send ZB frames   │               │ terminate        │
+│ terminate        │               └──────────────────┘
+└──────────────────┘
+</code></pre>
+<p>This approach is simple and reliable:</p>
+<ul>
+<li>No need to hot-swap blocks in a running graph</li>
+<li>Each flowgraph is validated independently</li>
+<li>Plugin <code>.so</code> files stay loaded in memory across phases (the <code>LoadedPlugin</code>
+objects persist)</li>
+</ul>
+<h2 id="rx-variant"><a class="header" href="#rx-variant">RX Variant</a></h2>
+<p>The <code>main.rs</code> binary demonstrates the same concept for receive chains:</p>
+<p><strong>Phase 1 (WLAN RX)</strong>:</p>
+<pre><code>SeifySource → [power detection] → SyncShort → SyncLong → FFT(64) →
+FrameEqualizer → WlanDecoder → BlobToUdp
+</code></pre>
+<p><strong>Phase 2 (ZigBee RX)</strong>:</p>
+<pre><code>SeifySource → ZigbeeDemod → ClockRecoveryMm → ZigbeeDecoder → ZigbeeMac → NullSink
+                                                                  ↓ msg
+                                                              BlobToUdp
+</code></pre>
+<p>This variant uses a real SDR radio (via <code>SeifySource</code>) and outputs decoded
+frames over UDP.</p>
+<h2 id="running-the-example"><a class="header" href="#running-the-example">Running the Example</a></h2>
+<pre><code class="language-bash"># Build everything
+./setup_plugins.sh
+
+# Set library path
+export LD_LIBRARY_PATH=./shared_libs/release:$LD_LIBRARY_PATH
+
+# Run TX swap (no hardware needed)
+./target/release/dyn_phy-swap-tx
+
+# Run RX swap (requires SDR hardware)
+./target/release/dyn_phy-swap --freq 2437000000 --gain 30
+</code></pre>
+<h2 id="key-takeaways"><a class="header" href="#key-takeaways">Key Takeaways</a></h2>
+<ol>
+<li>
+<p><strong>Plugin-based assembly</strong>: Both PHY chains are built entirely from <code>.so</code>
+plugins — the binary contains no signal processing code.</p>
+</li>
+<li>
+<p><strong>Standard patterns work</strong>: <code>connect_dyn</code> and <code>connect_message</code> work
+identically to their static counterparts. The runtime doesn’t distinguish
+between static and dynamic blocks.</p>
+</li>
+<li>
+<p><strong>Type safety at connection time</strong>: <code>connect_dyn</code> validates that buffer
+types match. A misconfigured connection (e.g., connecting a <code>u8</code> output to
+a <code>Complex32</code> input) fails immediately with a clear error.</p>
+</li>
+<li>
+<p><strong>Config flexibility</strong>: Each plugin’s config type is chosen to match its
+constructor: <code>()</code> for no-config blocks, <code>String</code> for MCS selection,
+<code>(usize, usize)</code> for padding parameters, etc.</p>
+</li>
+<li>
+<p><strong>Message passing across plugins</strong>: The MAC-to-encoder message connection
+works across <code>.so</code> boundaries because <code>Pmt::Blob</code> is a standard variant
+defined in <code>libfuturesdr.so</code>.</p>
+</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h1>
+<p>Common issues when working with FutureSDR plugins and how to resolve them.</p>
+<h2 id="abi-mismatch-loading-plugin"><a class="header" href="#abi-mismatch-loading-plugin">“ABI mismatch loading plugin”</a></h2>
+<p><strong>Full error</strong>:</p>
+<pre><code>ABI mismatch loading plugin `./libmy_plugin.so`:
+  plugin:  a1b2c3d4e5f67890 (rustc=1.84.0-nightly(abc);futuresdr=0.1.0;target=x86_64-unknown-linux-gnu;seify=false)
+  runtime: f0e1d2c3b4a59687 (rustc=1.85.0-nightly(def);futuresdr=0.1.0;target=x86_64-unknown-linux-gnu;seify=false)
+</code></pre>
+<p><strong>Cause</strong>: The plugin and runtime were compiled with different parameters.
+Compare the detail strings to identify what differs:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field differs</th><th>Fix</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rustc</code> version</td><td>Rebuild plugin with the same nightly (use <code>rust-toolchain.toml</code>)</td></tr>
+<tr><td><code>futuresdr</code> version</td><td>Rebuild against the same FutureSDR source</td></tr>
+<tr><td><code>target</code></td><td>Build for the same platform</td></tr>
+<tr><td><code>seify</code></td><td>Rebuild with matching features</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Quick fix during development</strong>: Use <code>LoadedPlugin::load_unchecked()</code> to skip
+the check. Do not use this in production.</p>
+<h2 id="dyn-bufferreader-has-wrong-type"><a class="header" href="#dyn-bufferreader-has-wrong-type">“dyn BufferReader has wrong type”</a></h2>
+<p><strong>Cause</strong>: <code>connect_dyn</code> failed because the writer’s expected reader type
+doesn’t match the actual reader type. This happens when:</p>
+<ol>
+<li>
+<p><strong>Sample type mismatch</strong>: Source produces <code>f32</code>, sink expects <code>Complex32</code>.
+Fix: ensure both sides use the same sample type.</p>
+</li>
+<li>
+<p><strong>Different RUSTFLAGS</strong>: The plugin was built with different compiler flags
+than the runtime. Even with the same source code, different flags can
+produce different <code>TypeId</code> values. Fix: source <code>build.env</code> before building.</p>
+</li>
+<li>
+<p><strong>Different compiler version</strong>: Similar to RUSTFLAGS — <code>TypeId</code> is not
+stable across compiler versions. Fix: use <code>rust-toolchain.toml</code>.</p>
+</li>
+<li>
+<p><strong>Different buffer backends</strong>: Source uses <code>circular::Writer&lt;f32&gt;</code> but sink
+expects <code>slab::Reader&lt;f32&gt;</code>. This can happen if one was built for WASM and
+the other for native. Fix: ensure consistent platform targeting.</p>
+</li>
+</ol>
+<h2 id="libfuturesdrso-cannot-open-shared-object-file"><a class="header" href="#libfuturesdrso-cannot-open-shared-object-file">“libfuturesdr.so: cannot open shared object file”</a></h2>
+<p><strong>Cause</strong>: The dynamic linker can’t find <code>libfuturesdr.so</code>.</p>
+<p><strong>Fix</strong>:</p>
+<pre><code class="language-bash">export LD_LIBRARY_PATH=/path/to/shared_libs:$LD_LIBRARY_PATH
+</code></pre>
+<p>Or copy the <code>.so</code> files to a system library path and run <code>ldconfig</code>.</p>
+<h2 id="libstd-so-cannot-open-shared-object-file"><a class="header" href="#libstd-so-cannot-open-shared-object-file">“libstd-*.so: cannot open shared object file”</a></h2>
+<p><strong>Cause</strong>: The Rust standard library <code>.so</code> is missing. This happens when
+building with <code>-C prefer-dynamic</code>.</p>
+<p><strong>Fix</strong>: Copy <code>libstd-*.so</code> from the rustup sysroot to your library path:</p>
+<pre><code class="language-bash"># Find it
+find ~/.rustup -name "libstd-*.so" | grep nightly
+
+# Copy it
+cp ~/.rustup/toolchains/nightly-*/lib/libstd-*.so ./shared_libs/
+</code></pre>
+<h2 id="plugin-config-downcast-panic"><a class="header" href="#plugin-config-downcast-panic">Plugin config downcast panic</a></h2>
+<p><strong>Error</strong>:</p>
+<pre><code>thread 'main' panicked at 'config must be ...'
+</code></pre>
+<p><strong>Cause</strong>: The <code>Box&lt;dyn Any&gt;</code> passed to <code>prepare()</code> contains the wrong type.
+For example, the plugin expects <code>u64</code> but you passed <code>String</code>.</p>
+<p><strong>Fix</strong>: Check the plugin’s <code>export_plugin!</code> config type and pass the correct
+type:</p>
+<pre><code class="language-rust">// Plugin expects: config: u64
+plugin.prepare(Box::new(100u64))  // correct
+plugin.prepare(Box::new("100"))   // WRONG: &amp;str, not u64</code></pre>
+<h2 id="symbol-not-found-create_block_factory"><a class="header" href="#symbol-not-found-create_block_factory">“symbol not found: create_block_factory”</a></h2>
+<p><strong>Cause</strong>: The <code>.so</code> file doesn’t export the expected symbol. This can happen
+if:</p>
+<ol>
+<li>The plugin doesn’t use <code>export_plugin!</code> or manually export the symbol</li>
+<li>The <code>.so</code> is not a FutureSDR plugin (wrong file)</li>
+<li>Symbol stripping removed the export</li>
+</ol>
+<p><strong>Fix</strong>: Verify the <code>.so</code> exports the symbol:</p>
+<pre><code class="language-bash">nm -D libmy_plugin.so | grep create_block_factory
+</code></pre>
+<h2 id="symbol-not-found-plugin_abi_fingerprint"><a class="header" href="#symbol-not-found-plugin_abi_fingerprint">“symbol not found: plugin_abi_fingerprint”</a></h2>
+<p><strong>Cause</strong>: The plugin was built with an older version of <code>plugin_api</code> that
+doesn’t generate the fingerprint symbol.</p>
+<p><strong>Fix</strong>: Rebuild the plugin with the current <code>plugin_api</code>. If using manual
+<code>BlockFactory</code> implementation, add the fingerprint export:</p>
+<pre><code class="language-rust">#[unsafe(no_mangle)]
+pub fn plugin_abi_fingerprint() -&gt; (&amp;'static str, &amp;'static str) {
+    (
+        futuresdr::runtime::abi_fingerprint::ABI_FINGERPRINT,
+        futuresdr::runtime::abi_fingerprint::ABI_FINGERPRINT_DETAIL,
+    )
+}</code></pre>
+<p>Note: if the symbol is missing, <code>LoadedPlugin::load()</code> and <code>try_load()</code> will
+still load the plugin (the fingerprint check is skipped when the symbol isn’t
+found). However, you lose the safety guarantee.</p>
+<h2 id="blocks-finish-immediately"><a class="header" href="#blocks-finish-immediately">Blocks finish immediately</a></h2>
+<p><strong>Cause</strong>: A block’s <code>work()</code> sets <code>io.finished = true</code> on the first call
+because the input buffer is empty and <code>self.input.finished()</code> returns true.</p>
+<p>This often happens when the upstream block hasn’t produced any data yet. Check
+the shutdown condition:</p>
+<pre><code class="language-rust">// WRONG: finishes before any data arrives
+if self.input.finished() {
+    io.finished = true;
+}
+
+// CORRECT: only finish when all data has been consumed
+if self.input.finished() &amp;&amp; self.input.slice().is_empty() {
+    io.finished = true;
+}</code></pre>
+<h2 id="message-handler-not-called"><a class="header" href="#message-handler-not-called">Message handler not called</a></h2>
+<p><strong>Cause</strong>: The message connection is missing or the port name is wrong.</p>
+<p><strong>Check</strong>:</p>
+<ol>
+<li><code>fg.connect_message(src, "port_name", dst, "handler_name")?</code> — port names
+must match exactly.</li>
+<li>The handler method name must match the name in <code>#[message_inputs(...)]</code>.</li>
+<li>Rust reserved words need <code>r#</code> prefix: <code>#[message_inputs(r#in)]</code> →
+<code>async fn r#in(...)</code>.</li>
+</ol>
+<h2 id="segfault-or-memory-corruption"><a class="header" href="#segfault-or-memory-corruption">SEGFAULT or memory corruption</a></h2>
+<p>If you get a segfault when loading or using a plugin:</p>
+<ol>
+<li><strong>Check ABI compatibility</strong>: Use <code>LoadedPlugin::try_load()</code> instead of
+<code>load()</code> to get a proper error instead of undefined behavior.</li>
+<li><strong>Check RUSTFLAGS match</strong>: Different optimization levels or codegen options
+can cause subtle ABI differences.</li>
+<li><strong>Check for stale <code>.so</code> files</strong>: After rebuilding, make sure you’re loading
+the new <code>.so</code>, not a cached copy.</li>
+<li><strong>Run with <code>RUST_BACKTRACE=1</code></strong>: Get a stack trace to identify the crash
+location.</li>
+</ol>
+<h2 id="build-errors"><a class="header" href="#build-errors">Build errors</a></h2>
+<h3 id="cant-find-crate-for-std"><a class="header" href="#cant-find-crate-for-std">“can’t find crate for <code>std</code>”</a></h3>
+<p>You’re building a <code>dylib</code> crate without <code>-C prefer-dynamic</code>. Add it to
+RUSTFLAGS:</p>
+<pre><code class="language-bash">export RUSTFLAGS="-C prefer-dynamic -C panic=unwind -C lto=off"
+</code></pre>
+<h3 id="multiple-versions-of-crate-futuresdr"><a class="header" href="#multiple-versions-of-crate-futuresdr">“multiple versions of crate <code>futuresdr</code>”</a></h3>
+<p>A plugin’s <code>Cargo.toml</code> points to a different FutureSDR path or version than
+the main binary. Ensure all workspace members reference the same path.</p>
+<h3 id="lto-errors"><a class="header" href="#lto-errors">LTO errors</a></h3>
+<p>Dynamic libraries cannot use LTO. Ensure <code>-C lto=off</code> is in RUSTFLAGS.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="reference-key-types"><a class="header" href="#reference-key-types">Reference: Key Types</a></h1>
+<p>Quick reference for the most important types in FutureSDR.</p>
+<h2 id="runtime-layer"><a class="header" href="#runtime-layer">Runtime Layer</a></h2>
+<h3 id="runtime-1"><a class="header" href="#runtime-1">Runtime</a></h3>
+<pre><code class="language-rust">pub struct Runtime&lt;S = SmolScheduler&gt; {
+    scheduler: S,
+    flowgraphs: Arc&lt;Mutex&lt;Vec&lt;FlowgraphHandle&gt;&gt;&gt;,
+    ctrl_port: ControlPort,
+}</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Runtime::new()</code></td><td>Create with default scheduler, init logging</td></tr>
+<tr><td><code>run(fg)</code></td><td>Block until flowgraph completes</td></tr>
+<tr><td><code>start(fg).await</code></td><td>Async start, returns <code>(JoinHandle, FlowgraphHandle)</code></td></tr>
+<tr><td><code>start_sync(fg)</code></td><td>Sync start, returns <code>(JoinHandle, FlowgraphHandle)</code></td></tr>
+<tr><td><code>spawn(future)</code></td><td>Spawn async task</td></tr>
+<tr><td><code>spawn_blocking(closure)</code></td><td>Spawn on blocking thread pool</td></tr>
+<tr><td><code>block_on(future)</code></td><td>Block current thread on future</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="flowgraphhandle-1"><a class="header" href="#flowgraphhandle-1">FlowgraphHandle</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>call(block_id, port, pmt).await</code></td><td>Fire-and-forget message</td></tr>
+<tr><td><code>callback(block_id, port, pmt).await</code></td><td>Message with response</td></tr>
+<tr><td><code>description().await</code></td><td>Get flowgraph topology</td></tr>
+<tr><td><code>terminate_and_wait().await</code></td><td>Graceful shutdown</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="flowgraph-layer"><a class="header" href="#flowgraph-layer">Flowgraph Layer</a></h2>
+<h3 id="flowgraph-1"><a class="header" href="#flowgraph-1">Flowgraph</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>new()</code></td><td>Create empty flowgraph</td></tr>
+<tr><td><code>add_block(kernel)</code></td><td>Add typed block, returns <code>BlockRef&lt;K&gt;</code></td></tr>
+<tr><td><code>add_block_dyn(closure)</code></td><td>Add dynamic block (plugins), returns <code>BlockId</code></td></tr>
+<tr><td><code>connect_stream(writer, reader)</code></td><td>Typed stream connection</td></tr>
+<tr><td><code>connect_dyn(src, port, dst, port)</code></td><td>Dynamic stream connection by name</td></tr>
+<tr><td><code>connect_message(src, port, dst, port)</code></td><td>Message connection</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="blockrefk"><a class="header" href="#blockrefk">BlockRef&lt;K&gt;</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>get()</code></td><td>Lock and access the <code>WrappedKernel&lt;K&gt;</code></td></tr>
+<tr><td><code>Into&lt;BlockId&gt;</code></td><td>Convert to block ID for connections</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="blockid--portid"><a class="header" href="#blockid--portid">BlockId / PortId</a></h3>
+<pre><code class="language-rust">pub struct BlockId(usize);   // Index in flowgraph's block vector
+pub struct PortId(String);   // Port name (e.g., "input", "output")</code></pre>
+<p><code>PortId</code> implements <code>From&lt;&amp;str&gt;</code> and <code>From&lt;String&gt;</code>.</p>
+<h2 id="block-layer"><a class="header" href="#block-layer">Block Layer</a></h2>
+<h3 id="block-trait"><a class="header" href="#block-trait">Block (trait)</a></h3>
+<pre><code class="language-rust">#[async_trait]
+pub trait Block: Send + Any {
+    fn id(&amp;self) -&gt; BlockId;
+    fn type_name(&amp;self) -&gt; &amp;str;
+    fn instance_name(&amp;self) -&gt; Option&lt;&amp;str&gt;;
+    fn is_blocking(&amp;self) -&gt; bool;
+    fn inbox(&amp;self) -&gt; Sender&lt;BlockMessage&gt;;
+    async fn run(&amp;mut self, main_inbox: Sender&lt;FlowgraphMessage&gt;);
+    // + stream/message port methods
+}</code></pre>
+<h3 id="kernel-trait"><a class="header" href="#kernel-trait">Kernel (trait)</a></h3>
+<pre><code class="language-rust">pub trait Kernel: Send {
+    async fn work(&amp;mut self, io: &amp;mut WorkIo, mio: &amp;mut MessageOutputs,
+                  meta: &amp;mut BlockMeta) -&gt; Result&lt;()&gt;;
+    async fn init(&amp;mut self, mio: &amp;mut MessageOutputs,
+                  meta: &amp;mut BlockMeta) -&gt; Result&lt;()&gt;;
+    async fn deinit(&amp;mut self, mio: &amp;mut MessageOutputs,
+                    meta: &amp;mut BlockMeta) -&gt; Result&lt;()&gt;;
+}</code></pre>
+<h3 id="workio-1"><a class="header" href="#workio-1">WorkIo</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>call_again</code></td><td><code>bool</code></td><td>Call <code>work()</code> again immediately</td></tr>
+<tr><td><code>finished</code></td><td><code>bool</code></td><td>Signal block shutdown</td></tr>
+<tr><td><code>block_on</code></td><td><code>Option&lt;Pin&lt;Box&lt;dyn Future&gt;&gt;&gt;</code></td><td>Suspend until future completes</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="blockmeta"><a class="header" href="#blockmeta">BlockMeta</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>instance_name()</code></td><td>Get block’s instance name</td></tr>
+<tr><td><code>set_instance_name(name)</code></td><td>Set block’s instance name</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="messageoutputs"><a class="header" href="#messageoutputs">MessageOutputs</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>post(port, pmt).await</code></td><td>Send message to all connected handlers</td></tr>
+<tr><td><code>notify_finished()</code></td><td>Send <code>Pmt::Finished</code> to all connections</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="buffer-layer"><a class="header" href="#buffer-layer">Buffer Layer</a></h2>
+<h3 id="cpubufferreader"><a class="header" href="#cpubufferreader">CpuBufferReader</a></h3>
+<pre><code class="language-rust">pub trait CpuBufferReader: BufferReader + Default + Send {
+    type Item: CpuSample;
+    fn slice(&amp;mut self) -&gt; &amp;[Self::Item];
+    fn slice_with_tags(&amp;mut self) -&gt; (&amp;[Self::Item], &amp;Vec&lt;ItemTag&gt;);
+    fn consume(&amp;mut self, n: usize);
+    fn set_min_items(&amp;mut self, n: usize);
+    fn max_items(&amp;self) -&gt; usize;
+}</code></pre>
+<h3 id="cpubufferwriter"><a class="header" href="#cpubufferwriter">CpuBufferWriter</a></h3>
+<pre><code class="language-rust">pub trait CpuBufferWriter: BufferWriter + Default + Send {
+    type Item: CpuSample;
+    fn slice(&amp;mut self) -&gt; &amp;mut [Self::Item];
+    fn slice_with_tags(&amp;mut self) -&gt; (&amp;mut [Self::Item], Tags&lt;'_&gt;);
+    fn produce(&amp;mut self, n: usize);
+    fn set_min_items(&amp;mut self, n: usize);
+    fn max_items(&amp;self) -&gt; usize;
+}</code></pre>
+<h3 id="cpusample"><a class="header" href="#cpusample">CpuSample</a></h3>
+<pre><code class="language-rust">// Alias for:
+Default + Clone + Debug + Send + Sync + 'static</code></pre>
+<p>Common types: <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>f32</code>, <code>f64</code>, <code>Complex32</code>.</p>
+<h3 id="default-buffers-1"><a class="header" href="#default-buffers-1">Default Buffers</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Platform</th><th>Reader</th><th>Writer</th></tr>
+</thead>
+<tbody>
+<tr><td>Native</td><td><code>circular::Reader&lt;D&gt;</code></td><td><code>circular::Writer&lt;D&gt;</code></td></tr>
+<tr><td>WASM</td><td><code>slab::Reader&lt;D&gt;</code></td><td><code>slab::Writer&lt;D&gt;</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="message-layer"><a class="header" href="#message-layer">Message Layer</a></h2>
+<h3 id="pmt"><a class="header" href="#pmt">Pmt</a></h3>
+<pre><code class="language-rust">pub enum Pmt {
+    Ok, InvalidValue, Null, Finished,
+    Bool(bool), Usize(usize), Isize(isize),
+    U32(u32), U64(u64), F32(f32), F64(f64),
+    String(String),
+    VecF32(Vec&lt;f32&gt;), VecCF32(Vec&lt;Complex32&gt;),
+    VecU64(Vec&lt;u64&gt;), Blob(Vec&lt;u8&gt;), VecPmt(Vec&lt;Pmt&gt;),
+    MapStrPmt(HashMap&lt;String, Pmt&gt;),
+    Any(Box&lt;dyn PmtAny&gt;),
+}</code></pre>
+<h3 id="tag"><a class="header" href="#tag">Tag</a></h3>
+<pre><code class="language-rust">pub enum Tag {
+    Id(u64),
+    String(String),
+    Data(Pmt),
+    NamedUsize(String, usize),
+    NamedF32(String, f32),
+    NamedAny(String, Box&lt;dyn TagAny&gt;),
+}</code></pre>
+<h3 id="itemtag"><a class="header" href="#itemtag">ItemTag</a></h3>
+<pre><code class="language-rust">pub struct ItemTag {
+    pub index: usize,
+    pub tag: Tag,
+}</code></pre>
+<h2 id="plugin-layer"><a class="header" href="#plugin-layer">Plugin Layer</a></h2>
+<h3 id="blockfactory-trait"><a class="header" href="#blockfactory-trait">BlockFactory (trait)</a></h3>
+<pre><code class="language-rust">pub trait BlockFactory: Send + Sync {
+    fn create_block(&amp;self, id: BlockId, config: Box&lt;dyn Any + Send&gt;) -&gt; Box&lt;dyn Block&gt;;
+    fn block_name(&amp;self) -&gt; &amp;'static str;
+    fn block_description(&amp;self) -&gt; &amp;'static str;
+}</code></pre>
+<h3 id="loadedplugin"><a class="header" href="#loadedplugin">LoadedPlugin</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>load(path)</code></td><td>Load <code>.so</code>, validate ABI, panic on error</td></tr>
+<tr><td><code>try_load(path)</code></td><td>Load <code>.so</code>, validate ABI, return <code>Result</code></td></tr>
+<tr><td><code>load_unchecked(path)</code></td><td>Load <code>.so</code>, skip ABI check</td></tr>
+<tr><td><code>prepare(config)</code></td><td>Return closure for <code>add_block_dyn</code></td></tr>
+<tr><td><code>block_name()</code></td><td>Plugin’s block name</td></tr>
+<tr><td><code>block_description()</code></td><td>Plugin’s description</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="abi-fingerprint-1"><a class="header" href="#abi-fingerprint-1">ABI Fingerprint</a></h3>
+<pre><code class="language-rust">// src/runtime/abi_fingerprint.rs
+pub const ABI_FINGERPRINT: &amp;str;        // 16-char hex hash
+pub const ABI_FINGERPRINT_DETAIL: &amp;str; // "rustc=...;futuresdr=...;target=...;seify=..."</code></pre>
+<h2 id="error"><a class="header" href="#error">Error</a></h2>
+<pre><code class="language-rust">#[non_exhaustive]
+pub enum Error {
+    InvalidBlock(BlockId),
+    FlowgraphTerminated,
+    InvalidMessagePort(BlockPortCtx, PortId),
+    InvalidStreamPort(BlockPortCtx, PortId),
+    InvalidParameter,
+    HandlerError(String),
+    BlockTerminated,
+    RuntimeError(String),
+    ValidationError(String),
+    PmtConversionError,
+    DuplicateBlockName(String),
+    LockError,
+    SeifyArgsConversionError,
+    SeifyError(String),
+}</code></pre>
+<h2 id="derive-attributes"><a class="header" href="#derive-attributes">Derive Attributes</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attribute</th><th>Target</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>#[derive(Block)]</code></td><td>struct</td><td>Generate <code>KernelInterface</code> impl</td></tr>
+<tr><td><code>#[input]</code></td><td>field</td><td>Mark as stream input port</td></tr>
+<tr><td><code>#[output]</code></td><td>field</td><td>Mark as stream output port</td></tr>
+<tr><td><code>#[message_inputs(h1, h2)]</code></td><td>struct</td><td>Declare message input handlers</td></tr>
+<tr><td><code>#[message_outputs(p1, p2)]</code></td><td>struct</td><td>Declare message output ports</td></tr>
+<tr><td><code>#[blocking]</code></td><td>struct</td><td>Run <code>work()</code> on blocking thread</td></tr>
+<tr><td><code>#[type_name = "..."]</code></td><td>struct</td><td>Custom block type name</td></tr>
+<tr><td><code>#[null_kernel]</code></td><td>struct</td><td>Generate empty <code>Kernel</code> impl</td></tr>
+</tbody>
+</table>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            MathJax.Hub.Register.StartupHook('End', function() {
+                window.setTimeout(window.print, 100);
+            });
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>

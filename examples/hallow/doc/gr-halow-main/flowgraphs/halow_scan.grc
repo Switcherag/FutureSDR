@@ -1,0 +1,1261 @@
+options:
+  parameters:
+    author: ''
+    catch_exceptions: 'True'
+    category: Custom
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: ''
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: halow_rx
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: ''
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 12.0]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: activity_threshold
+  id: variable
+  parameters:
+    comment: power level greater than this value satisfies second condition
+    value: '-80'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1080, 636.0]
+    rotation: 0
+    state: enabled
+- name: correlation_threshold
+  id: variable
+  parameters:
+    comment: less that this value satisfies first condition
+    value: '0.4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [808, 636.0]
+    rotation: 0
+    state: enabled
+- name: driver
+  id: variable
+  parameters:
+    comment: ''
+    value: '"airspy"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 204.0]
+    rotation: 0
+    state: enabled
+- name: filter_cutoff
+  id: variable
+  parameters:
+    comment: ''
+    value: (samp_rate / 2) - (samp_rate /10)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 436.0]
+    rotation: 0
+    state: enabled
+- name: filter_transition
+  id: variable
+  parameters:
+    comment: ''
+    value: 10e3
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [456, 436.0]
+    rotation: 0
+    state: enabled
+- name: gain
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: ''
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0'
+    step: '1'
+    stop: '21'
+    value: '3'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [32, 92.0]
+    rotation: 0
+    state: enabled
+- name: guard_interval_size
+  id: variable
+  parameters:
+    comment: ''
+    value: '8'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1896, 60.0]
+    rotation: 0
+    state: enabled
+- name: halow_channel_json_filename
+  id: variable
+  parameters:
+    comment: location of JSON file for channels to scan
+    value: '''/home/dragon/Documents/gr-halow/flowgraphs/1mhz_halow_channels.json'''
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [944, 484.0]
+    rotation: 0
+    state: enabled
+- name: input_samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: 10e6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [80, 268.0]
+    rotation: 0
+    state: enabled
+- name: loiter_time
+  id: variable
+  parameters:
+    comment: in seconds, how long to wait on each channel
+    value: '0.5'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [968, 356.0]
+    rotation: 0
+    state: enabled
+- name: lpf_taps
+  id: variable
+  parameters:
+    comment: ''
+    value: firdes.low_pass(1, input_samp_rate, filter_cutoff, filter_transition)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 500.0]
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: 1e6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 268.0]
+    rotation: 0
+    state: enabled
+- name: sdr_center_freq
+  id: variable
+  parameters:
+    comment: ''
+    value: '918000000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [80, 204.0]
+    rotation: 0
+    state: enabled
+- name: start_time
+  id: variable
+  parameters:
+    comment: in seconds, 1mhz_mcs0 capture
+    value: '7.607'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [152, 764.0]
+    rotation: 0
+    state: disabled
+- name: stop_time
+  id: variable
+  parameters:
+    comment: in seconds, 1mhz_mcs0 capture
+    value: '7.674'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [248, 764.0]
+    rotation: 0
+    state: disabled
+- name: training_field_size
+  id: variable
+  parameters:
+    comment: in samples, length of STF + LTF
+    value: '320'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1880, 804.0]
+    rotation: 0
+    state: enabled
+- name: window_size
+  id: variable
+  parameters:
+    comment: ''
+    value: '24'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1896, 124.0]
+    rotation: 0
+    state: enabled
+- name: blocks_complex_to_mag_0
+  id: blocks_complex_to_mag
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1904, 328.0]
+    rotation: 0
+    state: enabled
+- name: blocks_complex_to_mag_squared_0
+  id: blocks_complex_to_mag_squared
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1592, 160.0]
+    rotation: 0
+    state: enabled
+- name: blocks_conjugate_cc_0
+  id: blocks_conjugate_cc
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1496.0, 416]
+    rotation: 90
+    state: enabled
+- name: blocks_delay_0_0
+  id: blocks_delay
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    delay: guard_interval_size
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_ports: '1'
+    showports: 'False'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1444.0, 512]
+    rotation: 270
+    state: enabled
+- name: blocks_delay_0_0_0
+  id: blocks_delay
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    delay: training_field_size
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_ports: '1'
+    showports: 'False'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1712, 836.0]
+    rotation: 180
+    state: enabled
+- name: blocks_divide_xx_0
+  id: blocks_divide_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_inputs: '2'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [2072.0, 424]
+    rotation: 270
+    state: enabled
+- name: blocks_file_source_0
+  id: blocks_file_source
+  parameters:
+    affinity: ''
+    alias: ''
+    begin_tag: pmt.PMT_NIL
+    comment: ''
+    file: /home/dragon/Documents/gr-halow/captures/1mhz-mcs0.sigmf-data
+    length: int((stop_time - start_time) * input_samp_rate)
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    offset: int(start_time * input_samp_rate)
+    repeat: 'False'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [168, 652.0]
+    rotation: 180
+    state: disabled
+- name: blocks_moving_average_xx_0
+  id: blocks_moving_average_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    length: window_size  + guard_interval_size
+    max_iter: '4000'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    scale: '1'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1896, 188.0]
+    rotation: 0
+    state: enabled
+- name: blocks_moving_average_xx_1
+  id: blocks_moving_average_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    length: window_size
+    max_iter: '4000'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    scale: '1'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1696, 300.0]
+    rotation: 0
+    state: enabled
+- name: blocks_multiply_xx_0
+  id: blocks_multiply_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_inputs: '2'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1568, 312.0]
+    rotation: 0
+    state: enabled
+- name: blocks_tag_gate_0
+  id: blocks_tag_gate
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    propagate_tags: 'False'
+    single_key: '""'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [600, 244.0]
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: input_samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [176, 588.0]
+    rotation: 0
+    state: disabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "import numpy as np\nfrom gnuradio import gr\nimport pmt\nimport\
+      \ json\nimport os\n\nclass blk(gr.sync_block):  \n\n\n    def __init__(self,\
+      \ upper_detection_threshold=0.2, correlation_threshold=0.2, halow_channel_json_filename=\"\
+      \"): \n        \"\"\"arguments to this function show up as parameters in GRC\"\
+      \"\"\n        gr.sync_block.__init__(\n            self,\n            name='HaLow\
+      \ Usage Detector',  \n            in_sig=[np.complex64],\n            out_sig=[np.complex64]\n\
+      \        )\n        self.upper_detection_threshold = upper_detection_threshold\n\
+      \        self.correlation_threshold = correlation_threshold\n        self.halow_channel_json_filename\
+      \ = halow_channel_json_filename\n        self.all_halow_channels = {}\n    \
+      \    if(os.path.isfile(halow_channel_json_filename)):\n            json_file\
+      \ = open(self.halow_channel_json_filename)\n            self.all_halow_channels\
+      \ = json.load(json_file)\n            json_file.close()\n        self.port_freq_in\
+      \ = \"freq_in\"\n        self.message_port_register_in(pmt.intern(self.port_freq_in))\n\
+      \        self.set_msg_handler(pmt.intern(self.port_freq_in), self.handle_freq_in)\n\
+      \        self.port_tune_in = \"tune_in\"\n        self.message_port_register_in(pmt.intern(self.port_tune_in))\n\
+      \        self.set_msg_handler(pmt.intern(self.port_tune_in), self.handle_tune_in)\n\
+      \        self.tune_frequency = 0\n        self.offset_frequency = 0\n\n    def\
+      \ handle_tune_in(self, msg):\n        key = pmt.intern(\"freq\")\n        value\
+      \ = pmt.dict_ref(msg, key, pmt.PMT_NIL) \n        if(value is not pmt.PMT_NIL):\n\
+      \            self.tune_frequency = pmt.to_double(value)\n    \n    def handle_freq_in(self,\
+      \ msg):\n        key = pmt.intern(\"freq\")\n        value = pmt.dict_ref(msg,\
+      \ key, pmt.PMT_NIL) \n        if(value is not pmt.PMT_NIL):\n            self.offset_frequency\
+      \ = pmt.to_double(value)\n\n    def channel_lookup(self):\n        channel_frequency\
+      \ = self.tune_frequency + self.offset_frequency\n        #print(f\"{self.tune_frequency}\
+      \ {self.offset_frequency}\")\n        for channel, value in self.all_halow_channels.items():\n\
+      \            if(value[\"freq\"] == channel_frequency):\n                return\
+      \ (channel, value)\n        return (-1, -1)\n\n    def work(self, input_items,\
+      \ output_items):\n        # this block does not operate on samples\n       \
+      \ output_items[0][:] = input_items[0]\n\n        # find any identified wifi\
+      \ frames and print out the current channel\n        \n        \n        \n \
+      \       tags = self.get_tags_in_window(0, 0, len(input_items[0]))\n        channel\
+      \ = self.channel_lookup()\n        for tag in tags:\n            key = pmt.to_python(tag.key)\n\
+      \            value = pmt.to_python(tag.value)\n            #print(f\"{value}\
+      \ {self.upper_detection_threshold} {channel[0]}\")\n            if(np.abs(value)\
+      \ < self.correlation_threshold and channel[0] != -1):\n                tag_index\
+      \ = tag.offset - self.nitems_read(0)\n                average = 0\n        \
+      \        for i in range(tag_index, tag_index + 10):\n                    if(i\
+      \ < len(input_items[0])):\n                        average += np.real(input_items[0][i])**2\
+      \ + np.imag(input_items[0][i])**2\n                average = 10 * np.log10(average/10)\n\
+      \                #print(average)\n                if(average > self.upper_detection_threshold):\n\
+      \                    channel_freq = channel[1][\"freq\"]/1e6\n             \
+      \       channel_bw   = channel[1][\"bw\"]/1e6\n                    print(f\"\
+      HaLow activity - channel {channel[0]:>4s}, freq {channel_freq:>6.1f} MHz, bw\
+      \ {channel_bw:>4.1f} MHz, power avg: {average:>6.2f} dB\")\n\n        return\
+      \ len(output_items[0])\n"
+    affinity: ''
+    alias: ''
+    comment: 'detections whose correlation is less than the correlation threshold
+
+      and whose power average exceeds the power threshold will be
+
+      perceived as HaLow activity'
+    correlation_threshold: correlation_threshold
+    halow_channel_json_filename: halow_channel_json_filename
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    upper_detection_threshold: activity_threshold
+  states:
+    _io_cache: ('HaLow Usage Detector', 'blk', [('upper_detection_threshold', '0.2'),
+      ('correlation_threshold', '0.2'), ('halow_channel_json_filename', "''")], [('0',
+      'complex', 1), ('tune_in', 'message', 1), ('freq_in', 'message', 1)], [('0',
+      'complex', 1)], 'arguments to this function show up as parameters in GRC', ['correlation_threshold',
+      'halow_channel_json_filename', 'upper_detection_threshold'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [784, 728.0]
+    rotation: 180
+    state: enabled
+- name: epy_block_1
+  id: epy_block
+  parameters:
+    _source_code: "import numpy as np\nfrom gnuradio import gr\nimport pmt\nimport\
+      \ json\nimport os\n\nclass blk(gr.sync_block): \n    \"\"\"Embedded Python Block\
+      \ example - a simple multiply const\"\"\"\n\n    def __init__(self, loiter_time=2,\
+      \ sdr_center_freq=902e6, sdr_samp_rate=10e6, samp_rate=1e6, debug=False, halow_channel_json_filename=\"\
+      \"):\n        \"\"\"arguments to this function show up as parameters in GRC\"\
+      \"\"\n        gr.sync_block.__init__(\n            self,\n            name='HaLow\
+      \ Scan Controller', \n            in_sig=[np.complex64],\n            out_sig=[np.complex64]\n\
+      \        )\n        self.halow_channel_json_filename = halow_channel_json_filename\n\
+      \        self.debug = debug\n        self.all_halow_channels = {}\n        if(os.path.isfile(halow_channel_json_filename)):\n\
+      \            json_file = open(self.halow_channel_json_filename)\n          \
+      \  self.all_halow_channels = json.load(json_file)\n            json_file.close()\n\
+      \        else:\n            print(\"incorrect file path!\")\n        self.sdr_center_freq\
+      \ = sdr_center_freq\n        self.samp_rate = samp_rate\n        self.sdr_samp_rate\
+      \ = sdr_samp_rate\n        self.port_freq_control = \"freq_control\"\n     \
+      \   self.port_tuning_control = \"tuning_control\"\n        self.message_port_register_out(pmt.intern(self.port_freq_control))\n\
+      \        self.message_port_register_out(pmt.intern(self.port_tuning_control))\n\
+      \        self.available_halow_channels = []\n        self.channel_index = 0\n\
+      \        self.loiter_samples = int(loiter_time * samp_rate) # how many samples\
+      \ to read before switching channels\n        self.sample_count = 0\n       \
+      \ self.freq_message = None\n        self.tune_message = None\n\n        # first\
+      \ time setup operations\n        self.find_available_channels()\n        freq_offset\
+      \ = 0 # initial offset of 0 unless there are available channels\n        if(len(self.available_halow_channels)\
+      \ > 0):\n            freq_offset = self.available_halow_channels[self.channel_index][1][\"\
+      freq\"] - self.sdr_center_freq\n        self.set_freq_message(freq_offset) #\
+      \ initial offset of 0\n        self.set_tune_message(self.sdr_center_freq)\n\
+      \        print(f\"{len(self.available_halow_channels)} available halow channels\
+      \ in the current range\")\n\n    def find_available_channels(self):\n      \
+      \  self.available_halow_channels = []\n        for channel, value in self.all_halow_channels.items():\n\
+      \            channel_lowerbound = value[\"freq\"] - value[\"bw\"]/2\n      \
+      \      channel_upperbound = value[\"freq\"] + value[\"bw\"]/2\n            radio_lowerbound\
+      \ = self.sdr_center_freq - self.sdr_samp_rate / 2\n            radio_upperbound\
+      \ = self.sdr_center_freq + self.sdr_samp_rate / 2\n            if(channel_lowerbound\
+      \ >= radio_lowerbound and channel_upperbound <= radio_upperbound):\n       \
+      \         self.available_halow_channels.append((channel, value))\n\n    def\
+      \ find_next_tuning_freq(self):\n        radio_lowerbound = self.sdr_center_freq\
+      \ - self.sdr_samp_rate / 2\n        radio_upperbound = self.sdr_center_freq\
+      \ + self.sdr_samp_rate / 2\n        search_lowerbound = radio_upperbound - 4e6\
+      \ # 4e6 because it is the maximum width of a HaLow channel that we care about\n\
+      \        first_channel_miss = None # we will set the radio lowerbound so that\
+      \ it captures the first missed channel\n        count = 0 # ensures we don't\
+      \ have endless while loop\n        if(search_lowerbound < radio_lowerbound):\n\
+      \            search_lowerbound = radio_lowerbound\n\n        # find first channel\
+      \ miss\n        while(first_channel_miss is None):\n            for channel,\
+      \ value in self.all_halow_channels.items():\n                # detect miss\n\
+      \                right_of_search_lowerbound = value[\"freq\"] >= search_lowerbound\n\
+      \                outside_current_range      = radio_upperbound < (value[\"freq\"\
+      ] + value[\"bw\"]/2)\n                sdr_can_capture            = value[\"\
+      bw\"] <= self.sdr_samp_rate\n                if(right_of_search_lowerbound and\
+      \ outside_current_range and sdr_can_capture):\n                    # new lowest\
+      \ miss\n                    if(first_channel_miss is None or value[\"freq\"\
+      ] < first_channel_miss[1][\"freq\"]):\n                        first_channel_miss\
+      \ = (channel, value)\n            # wraparound condition\n            if(first_channel_miss\
+      \ is None and count < 1):\n                search_lowerbound = 902e6 # lowest\
+      \ edge of ISM band\n                radio_upperbound = 901e6 # 1MHz lower than\
+      \ lowest edge of ISM band\n                count = count + 1\n            elif(first_channel_miss\
+      \ is None and count >= 1):\n                return self.sdr_center_freq\n  \
+      \      \n        new_tuning_freq = (self.sdr_samp_rate / 2) + (first_channel_miss[1][\"\
+      freq\"] - first_channel_miss[1][\"bw\"] / 2)\n        return new_tuning_freq\n\
+      \n\n    def set_freq_message(self, freq_offset):\n        self.freq_message\
+      \ = pmt.make_dict()\n        self.freq_message = pmt.dict_add(self.freq_message,\
+      \ pmt.intern(\"freq\"), pmt.from_double(freq_offset))\n\n    def set_tune_message(self,\
+      \ tuning_freq):\n        self.sdr_center_freq = tuning_freq\n        self.tune_message\
+      \ = pmt.make_dict()\n        self.tune_message = pmt.dict_add(self.tune_message,\
+      \ pmt.intern(\"freq\"), pmt.from_double(tuning_freq))\n        self.find_available_channels()\n\
+      \n    def work(self, input_items, output_items):\n        # pass all samples\
+      \ through; this block doesn't change samples, it just detects them for timing\n\
+      \        output_items[0][:] = input_items[0]\n\n        # increment sample count\
+      \ so we know how long we've stared at a channel before switching to the next\n\
+      \        self.sample_count = self.sample_count + len(input_items[0])\n     \
+      \   if(self.sample_count > self.loiter_samples):\n            self.sample_count\
+      \ = 0\n            self.channel_index = self.channel_index + 1\n           \
+      \ # check for rollover condition\n            if(self.channel_index >= len(self.available_halow_channels)):\n\
+      \                self.channel_index = 0\n                next_tuning_freq =\
+      \ self.find_next_tuning_freq()\n                if(self.debug):\n          \
+      \          print(f\"SDR frequency is {next_tuning_freq/1e6:.2f} MHz\")\n   \
+      \             self.set_tune_message(next_tuning_freq)\n            if(len(self.available_halow_channels)\
+      \ > 0):\n                if(self.debug):\n                    print(f\"current\
+      \ channel is {self.available_halow_channels[self.channel_index][0]} freq {self.available_halow_channels[self.channel_index][1]['freq']/1e6:.2f}\
+      \ MHz, bw {self.available_halow_channels[self.channel_index][1]['bw']/1e6:.2f}\
+      \ MHz\")\n                self.set_freq_message(self.available_halow_channels[self.channel_index][1][\"\
+      freq\"] - self.sdr_center_freq)\n\n        # control FIR filter and tuner\n\
+      \        self.message_port_pub(pmt.intern(self.port_freq_control), self.freq_message)\n\
+      \        self.message_port_pub(pmt.intern(self.port_tuning_control), self.tune_message)\n\
+      \        \n        # GRC expects this as a return value\n        return len(output_items[0])\n\
+      \n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    debug: 'True'
+    halow_channel_json_filename: halow_channel_json_filename
+    loiter_time: loiter_time
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: samp_rate
+    sdr_center_freq: sdr_center_freq
+    sdr_samp_rate: input_samp_rate
+  states:
+    _io_cache: ('HaLow Scan Controller', 'blk', [('loiter_time', '2'), ('sdr_center_freq',
+      '902000000.0'), ('sdr_samp_rate', '10000000.0'), ('samp_rate', '1000000.0'),
+      ('debug', 'False'), ('halow_channel_json_filename', "''")], [('0', 'complex',
+      1)], [('0', 'complex', 1), ('tuning_control', 'message', 1), ('freq_control',
+      'message', 1)], 'Embedded Python Block example - a simple multiply const', ['debug',
+      'halow_channel_json_filename', 'samp_rate', 'sdr_center_freq', 'sdr_samp_rate'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [808, 220.0]
+    rotation: 0
+    state: enabled
+- name: freq_xlating_fir_filter_xxx_0
+  id: freq_xlating_fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    center_freq: sdr_center_freq
+    comment: ''
+    decim: int(input_samp_rate/samp_rate)
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: input_samp_rate
+    taps: lpf_taps
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 340.0]
+    rotation: 0
+    state: true
+- name: ieee802_11_sync_long_0
+  id: ieee802_11_sync_long
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    debug: 'False'
+    log: 'False'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    sync_length: training_field_size
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1496, 716.0]
+    rotation: 180
+    state: enabled
+- name: ieee802_11_sync_short_0
+  id: ieee802_11_sync_short
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    debug: 'False'
+    log: 'False'
+    maxoutbuf: '0'
+    min_plateau: '2'
+    minoutbuf: '0'
+    threshold: '0.7'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1752.0, 576]
+    rotation: 270
+    state: enabled
+- name: qtgui_time_sink_x_0_0
+  id: qtgui_time_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: blue
+    color10: dark blue
+    color2: red
+    color3: green
+    color4: black
+    color5: cyan
+    color6: magenta
+    color7: yellow
+    color8: dark red
+    color9: dark green
+    comment: ''
+    ctrlpanel: 'True'
+    entags: 'False'
+    grid: 'False'
+    gui_hint: ''
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '-1'
+    marker10: '-1'
+    marker2: '-1'
+    marker3: '-1'
+    marker4: '-1'
+    marker5: '-1'
+    marker6: '-1'
+    marker7: '-1'
+    marker8: '-1'
+    marker9: '-1'
+    name: '"autocorrelation"'
+    nconnections: '1'
+    size: (int((stop_time - start_time) * samp_rate) - 8) * 5
+    srate: samp_rate
+    stemplot: 'False'
+    style1: '1'
+    style10: '1'
+    style2: '1'
+    style3: '1'
+    style4: '1'
+    style5: '1'
+    style6: '1'
+    style7: '1'
+    style8: '1'
+    style9: '1'
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: float
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    ylabel: Amplitude
+    ymax: '1'
+    ymin: '-1'
+    yunit: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1904, 580.0]
+    rotation: 180
+    state: disabled
+- name: qtgui_time_sink_x_1_0
+  id: qtgui_time_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: blue
+    color10: dark blue
+    color2: red
+    color3: green
+    color4: black
+    color5: cyan
+    color6: magenta
+    color7: yellow
+    color8: dark red
+    color9: dark green
+    comment: ''
+    ctrlpanel: 'True'
+    entags: 'True'
+    grid: 'False'
+    gui_hint: ''
+    label1: Signal 1
+    label10: Signal 10
+    label2: Signal 2
+    label3: Signal 3
+    label4: Signal 4
+    label5: Signal 5
+    label6: Signal 6
+    label7: Signal 7
+    label8: Signal 8
+    label9: Signal 9
+    legend: 'True'
+    marker1: '-1'
+    marker10: '-1'
+    marker2: '-1'
+    marker3: '-1'
+    marker4: '-1'
+    marker5: '-1'
+    marker6: '-1'
+    marker7: '-1'
+    marker8: '-1'
+    marker9: '-1'
+    name: '"post sync long"'
+    nconnections: '1'
+    size: '16500'
+    srate: samp_rate
+    stemplot: 'False'
+    style1: '1'
+    style10: '1'
+    style2: '1'
+    style3: '1'
+    style4: '1'
+    style5: '1'
+    style6: '1'
+    style7: '1'
+    style8: '1'
+    style9: '1'
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    ylabel: Amplitude
+    ymax: '1'
+    ymin: '-1'
+    yunit: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [552, 732.0]
+    rotation: 180
+    state: enabled
+- name: qtgui_time_sink_x_1_0_0
+  id: qtgui_time_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: blue
+    color10: dark blue
+    color2: red
+    color3: green
+    color4: black
+    color5: cyan
+    color6: magenta
+    color7: yellow
+    color8: dark red
+    color9: dark green
+    comment: ''
+    ctrlpanel: 'True'
+    entags: 'True'
+    grid: 'False'
+    gui_hint: ''
+    label1: Signal 1
+    label10: Signal 10
+    label2: Signal 2
+    label3: Signal 3
+    label4: Signal 4
+    label5: Signal 5
+    label6: Signal 6
+    label7: Signal 7
+    label8: Signal 8
+    label9: Signal 9
+    legend: 'True'
+    marker1: '-1'
+    marker10: '-1'
+    marker2: '-1'
+    marker3: '-1'
+    marker4: '-1'
+    marker5: '-1'
+    marker6: '-1'
+    marker7: '-1'
+    marker8: '-1'
+    marker9: '-1'
+    name: '"post sync short"'
+    nconnections: '1'
+    size: '16500'
+    srate: samp_rate
+    stemplot: 'False'
+    style1: '1'
+    style10: '1'
+    style2: '1'
+    style3: '1'
+    style4: '1'
+    style5: '1'
+    style6: '1'
+    style7: '1'
+    style8: '1'
+    style9: '1'
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    ylabel: Amplitude
+    ymax: '1'
+    ymin: '-1'
+    yunit: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1864, 700.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_time_sink_x_2
+  id: qtgui_time_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: blue
+    color10: dark blue
+    color2: red
+    color3: green
+    color4: black
+    color5: cyan
+    color6: magenta
+    color7: yellow
+    color8: dark red
+    color9: dark green
+    comment: ''
+    ctrlpanel: 'True'
+    entags: 'True'
+    grid: 'False'
+    gui_hint: ''
+    label1: Signal 1
+    label10: Signal 10
+    label2: Signal 2
+    label3: Signal 3
+    label4: Signal 4
+    label5: Signal 5
+    label6: Signal 6
+    label7: Signal 7
+    label8: Signal 8
+    label9: Signal 9
+    legend: 'True'
+    marker1: '-1'
+    marker10: '-1'
+    marker2: '-1'
+    marker3: '-1'
+    marker4: '-1'
+    marker5: '-1'
+    marker6: '-1'
+    marker7: '-1'
+    marker8: '-1'
+    marker9: '-1'
+    name: '"input signal"'
+    nconnections: '1'
+    size: int((stop_time - start_time) * samp_rate)
+    srate: samp_rate
+    stemplot: 'False'
+    style1: '1'
+    style10: '1'
+    style2: '1'
+    style3: '1'
+    style4: '1'
+    style5: '1'
+    style6: '1'
+    style7: '1'
+    style8: '1'
+    style9: '1'
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    ylabel: Amplitude
+    ymax: '1'
+    ymin: '-1'
+    yunit: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1592, 20.0]
+    rotation: 0
+    state: disabled
+- name: soapy_custom_source_0
+  id: soapy_custom_source
+  parameters:
+    affinity: ''
+    agc0: 'False'
+    agc1: 'False'
+    alias: ''
+    antenna0: RX
+    antenna1: ''
+    bandwidth0: '0'
+    bandwidth1: '0'
+    center_freq0: sdr_center_freq
+    center_freq1: '0'
+    comment: ''
+    dc_offset0: '0'
+    dc_offset1: '0'
+    dc_removal0: 'False'
+    dc_removal1: 'True'
+    dev_args: ''
+    driver: driver
+    freq_correction0: '0'
+    freq_correction1: '0'
+    gain0: gain
+    gain1: '0'
+    iq_balance0: '0'
+    iq_balance1: '0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nchan: '1'
+    samp_rate: input_samp_rate
+    settings0: ''
+    settings1: ''
+    stream_args: ''
+    tune_args0: ''
+    tune_args1: ''
+    type: fc32
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [96, 332.0]
+    rotation: 0
+    state: enabled
+- name: virtual_sink_0
+  id: virtual_sink
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: tuning_control
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1592, 204.0]
+    rotation: 0
+    state: enabled
+- name: virtual_sink_0_0
+  id: virtual_sink
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: freq_control
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1592, 252.0]
+    rotation: 0
+    state: enabled
+- name: virtual_source_0
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: tuning_control
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [12.0, 440]
+    rotation: 90
+    state: enabled
+- name: virtual_source_0_0
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: tuning_control
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1496, 796.0]
+    rotation: 180
+    state: enabled
+- name: virtual_source_0_0_0
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: freq_control
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1496, 852.0]
+    rotation: 180
+    state: enabled
+- name: virtual_source_0_0_0_0
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: freq_control
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [120, 420.0]
+    rotation: 0
+    state: enabled
+
+connections:
+- [blocks_complex_to_mag_0, '0', blocks_divide_xx_0, '0']
+- [blocks_complex_to_mag_squared_0, '0', blocks_moving_average_xx_0, '0']
+- [blocks_conjugate_cc_0, '0', blocks_multiply_xx_0, '1']
+- [blocks_delay_0_0, '0', blocks_conjugate_cc_0, '0']
+- [blocks_delay_0_0, '0', ieee802_11_sync_short_0, '0']
+- [blocks_delay_0_0_0, '0', ieee802_11_sync_long_0, '1']
+- [blocks_divide_xx_0, '0', ieee802_11_sync_short_0, '2']
+- [blocks_divide_xx_0, '0', qtgui_time_sink_x_0_0, '0']
+- [blocks_file_source_0, '0', blocks_throttle2_0, '0']
+- [blocks_moving_average_xx_0, '0', blocks_divide_xx_0, '1']
+- [blocks_moving_average_xx_1, '0', blocks_complex_to_mag_0, '0']
+- [blocks_moving_average_xx_1, '0', ieee802_11_sync_short_0, '1']
+- [blocks_multiply_xx_0, '0', blocks_moving_average_xx_1, '0']
+- [blocks_tag_gate_0, '0', epy_block_1, '0']
+- [blocks_throttle2_0, '0', freq_xlating_fir_filter_xxx_0, '0']
+- [epy_block_0, '0', qtgui_time_sink_x_1_0, '0']
+- [epy_block_1, '0', blocks_complex_to_mag_squared_0, '0']
+- [epy_block_1, '0', blocks_delay_0_0, '0']
+- [epy_block_1, '0', blocks_multiply_xx_0, '0']
+- [epy_block_1, '0', qtgui_time_sink_x_2, '0']
+- [epy_block_1, freq_control, virtual_sink_0_0, '0']
+- [epy_block_1, tuning_control, virtual_sink_0, '0']
+- [freq_xlating_fir_filter_xxx_0, '0', blocks_tag_gate_0, '0']
+- [ieee802_11_sync_long_0, '0', epy_block_0, '0']
+- [ieee802_11_sync_short_0, '0', blocks_delay_0_0_0, '0']
+- [ieee802_11_sync_short_0, '0', ieee802_11_sync_long_0, '0']
+- [ieee802_11_sync_short_0, '0', qtgui_time_sink_x_1_0_0, '0']
+- [soapy_custom_source_0, '0', freq_xlating_fir_filter_xxx_0, '0']
+- [virtual_source_0, '0', soapy_custom_source_0, cmd]
+- [virtual_source_0_0, '0', epy_block_0, tune_in]
+- [virtual_source_0_0_0, '0', epy_block_0, freq_in]
+- [virtual_source_0_0_0_0, '0', freq_xlating_fir_filter_xxx_0, freq]
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.10.0

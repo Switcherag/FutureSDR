@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FutureSDR :: HaLow (802.11ah)</title>
+
+    <link rel="icon" href="/favicon-baad1291935ce574.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
+    <link rel="stylesheet" href="/style-7905388cbb5d9fc5.css" integrity="sha384-GNuE9m+7XlOyv1RQ2ygMSO+Nfv6API1eWobqTM8vn6k8m63Nm/iLVAboIOdVHL1y"/>
+    <script src="/mermaid.min-44357080eeae6d17.js" integrity="sha384-22TIzueDpidabmrJrRZOuoeirwerzh0k58p3BiRQXtofpDZCl37VJCT0b1REkoAk"></script>
+    <script>mermaid.mermaidAPI.initialize({
+  theme: 'dark',
+});
+</script>
+    
+<script type="module">
+import init, * as bindings from '/frontend-fa46cd8cab767e65.js';
+const wasm = await init({ module_or_path: '/frontend-fa46cd8cab767e65_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <base href="/" />
+  <link rel="modulepreload" href="/frontend-fa46cd8cab767e65.js" crossorigin="anonymous" integrity="sha384-JGWkO4F8aeuuOoceorevf5Ans1P4xUQwePgtHRCwGLzCKVs+1eMRGAV3R4mdSu4O"><link rel="preload" href="/frontend-fa46cd8cab767e65_bg.wasm" crossorigin="anonymous" integrity="sha384-75FRTUTdUb+umT66hTdSJtLPkUZISwQ3sNvIKbLaEbn3RjUPT7HYvbgHPlVODTm4" as="fetch" type="application/wasm"></head>
+  <body class="bg-slate-900">
+  </body>
+</html>

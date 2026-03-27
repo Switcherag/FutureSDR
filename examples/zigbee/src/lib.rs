@@ -12,6 +12,9 @@ pub use mac::Mac;
 
 mod modulator;
 pub use modulator::modulator;
+pub use modulator::make_nibble;
+pub use modulator::DSSS;
+pub use modulator::SHAPE;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_gui;

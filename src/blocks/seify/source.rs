@@ -226,7 +226,9 @@ where
     }
 
     async fn init(&mut self, _mio: &mut MessageOutputs, _meta: &mut BlockMeta) -> Result<()> {
-        self.streamer = Some(self.dev.rx_streamer(&self.channels)?);
+        if self.streamer.is_none() {
+            self.streamer = Some(self.dev.rx_streamer(&self.channels)?);
+        }
         self.streamer
             .as_mut()
             .context("no stream")?

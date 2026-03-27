@@ -1,0 +1,23 @@
+[package]
+name = "sdr_tuning"
+version = "0.1.0"
+edition = "2021"
+build = "../../plugin_build.rs"
+
+[[bin]]
+name = "sdr-tuning-bench"
+path = "src/main.rs"
+
+[[bin]]
+name = "scope-rate-bench"
+path = "src/scope_bench.rs"
+
+[[bin]]
+name = "sdr-grid-bench"
+path = "src/grid_bench.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+futuresdr = { path = "../..", features = ["plugin", "soapy"] }
+plugin_api = { path = "../../crates/plugin_api" }

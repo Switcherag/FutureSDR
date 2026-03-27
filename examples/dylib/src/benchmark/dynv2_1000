@@ -1,0 +1,85 @@
+use anyhow::Result;
+use futuresdr::blocks::Head;
+use futuresdr::blocks::FileSink;
+use futuresdr::macros::connect;
+use futuresdr::runtime::Flowgraph;
+use futuresdr::runtime::Runtime;
+use futuresdr::runtime::Block;
+use std::env;
+use std::time::Instant;
+
+pub trait BlockFactory {
+    fn create_block(&self) -> Block;
+    fn block_name(&self) -> &'static str;
+    fn block_description(&self) -> &'static str;
+}
+
+type CreateBlockFactoryFn = fn() -> Box<dyn BlockFactory>;
+type GetLibraryInfoFn = fn() -> &'static str;
+
+fn main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let head_size: u64 = if args.len() > 1 {
+        args[1].parse().unwrap_or(123)
+    } else {
+        123
+    };
+
+    let start = Instant::now();
+
+    // Load the dynamic libraries
+    let lib_path = "./shared_libs/libsource.so";
+    let lib = unsafe { libloading::Library::new(lib_path)? };
+    let create_factory: libloading::Symbol<CreateBlockFactoryFn> = unsafe { lib.get(b"create_block_factory")? };
+    let factory = create_factory();
+    let src_block = factory.create_block();
+    
+    let increment_lib_path = "./shared_libs/libincrement.so";
+    let increment_lib = unsafe { libloading::Library::new(increment_lib_path)? };
+    let create_increment_factory: libloading::Symbol<CreateBlockFactoryFn> = unsafe { increment_lib.get(b"create_block_factory")? };
+    
+    // Create 1000 increment blocks
+    let mut increment_blocks = Vec::new();
+    for _ in 0..1000 {
+        let increment_factory = create_increment_factory();
+        increment_blocks.push(increment_factory.create_block());
+    }
+    
+    let init_time = start.elapsed();
+    
+    // Build flowgraph
+    let mut fg = Flowgraph::new();
+    let src = fg.add_block(src_block)?;
+    
+    // Add all increment blocks and chain them
+    let mut inc_refs = Vec::new();
+    for inc_block in increment_blocks {
+        inc_refs.push(fg.add_block(inc_block)?);
+    }
+    
+    let head = fg.add_block(Head::<u8>::new(head_size))?;
+    let snk = fg.add_block(FileSink::<u8>::new("output.txt"))?;
+    
+    // Connect: src -> inc0 -> inc1 -> ... -> inc999 -> head -> snk
+    fg.connect_stream(src, "out", inc_refs[0], "in")?;
+    for i in 0..999 {
+        fg.connect_stream(inc_refs[i], "out", inc_refs[i+1], "in")?;
+    }
+    fg.connect_stream(inc_refs[999], "out", head, "in")?;
+    connect!(fg, head > snk);
+    
+    let fg_time = start.elapsed();
+    
+    // Run flowgraph
+    Runtime::new().run(fg)?;
+    
+    let total_time = start.elapsed();
+    
+    println!("dynv2_1000,{},{:.6},{:.6},{:.6}", 
+             head_size, 
+             init_time.as_secs_f64(),
+             (fg_time - init_time).as_secs_f64(),
+             total_time.as_secs_f64());
+
+    Ok(())
+}

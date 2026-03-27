@@ -1,0 +1,146 @@
+build sdr controller which is a mix of flowgraph controller and multi flowgraph relink with selector, this one will be able to change flowgraph and reroute them to seify source as needed, beffer sample ...
+
+Core idea
+Each flowgraph has an ID and a TOML file. Flowgraphs are interconnected via named ports and shared bridge buffers. The controller manages the full topology — building, starting, and hot-swapping any flowgraph by ID.
+
+Roles
+Permanent flowgraph (is_permanent = true): never swapped. Produces or routes data. Contains the Selector block that parks data flow during a swap.
+
+Swappable flowgraph (is_permanent = false): can be hot-swapped at any time via -s fg_id path/to/new.toml and a new buufer is created for interconnection (0 copy)
+
+TOML format — each flowgraph declares its ports
+
+# fg0.toml — permanent, produces data
+[[ports]]
+id     = "out"           # logical port name
+direction = "out"        # "out" = this FG sends data through this port
+block  = "bsink"         # which block in this FG implements the port (BridgeSink)
+router = "sel"           # which block to park/unpark when swapping downstream FG
+
+[[blocks]]
+id = "src"   plugin = "null_source_plugin"
+
+[[blocks]]
+id = "thr"   plugin = "throttle_plugin"  config = 1.0
+
+[[blocks]]
+id = "sel"   plugin = "selector_1_2_plugin"
+config = "DropAll"  config_type = "SelectorDropPolicy"
+
+[[blocks]]
+id = "null_snk"  plugin = "null_sink_plugin"
+
+[[blocks]]
+id = "bsink"  plugin = "bridge_sink_plugin"
+port = "out"             # ← replaces `bridge = true`; controller injects the right buffer
+
+[[connections]]
+src = "src.output"       dst = "thr.input"
+src = "thr.output"       dst = "sel.inputs[0]"
+src = "sel.outputs[0]"   dst = "null_snk.input"
+src = "sel.outputs[1]"   dst = "bsink.input"
+
+# flow_a.toml — swappable
+[[ports]]
+id        = "in"
+direction = "in"         # "in" = this FG receives data on this port
+block     = "bsrc"
+
+[[blocks]]
+id = "bsrc"  plugin = "bridge_source_plugin"
+port = "in"              # controller injects the shared buffer for connection fg0:out → fg1:in
+
+[[blocks]]
+id = "sink"  plugin = "print_sink_plugin"  config = "Flow A"
+
+[[connections]]
+src = "bsrc.output"  dst = "sink.input"
+Connections — declared in the builder
+
+fg0:out  →  fg1:in
+This single declaration creates one shared Arc<Mutex<VecDeque<u8>>> bridge buffer that is injected into:
+
+fg0's bsink block (BridgeSink, because its port direction is out)
+fg1's bsrc block (BridgeSource, because its port direction is in)
+Controller data model
+
+FlowgraphController {
+  registry: PluginRegistry           // cached .so plugins
+  channels: [Channel]                // one per declared connection
+  permanent_handles: {id → Handle}   // FG0 handle — for selector callbacks
+  swappable_state: {id → (current_toml, Handle)}  // FG1 handle — for terminate
+}
+
+Channel {
+  buffer: Arc<Mutex<VecDeque<u8>>>
+  from_fg, from_port               // "fg0", "out"
+  to_fg,   to_port                 // "fg1", "in"
+  router_fg_id, router_block_id    // "fg0", sel's BlockId — resolved after FG0 starts
+}
+Lifecycle
+
+builder.add_permanent("fg0", "flows/fg0.toml")
+builder.add_swappable("fg1", "flows/flow_a.toml")
+builder.connect("fg0:out", "fg1:in")
+→ Creates the Channel with a shared buffer.
+
+
+builder.start_permanent(&rt)   [sync]
+→ Builds and starts FG0, injects buffer into bsink.
+
+→ Resolves sel's BlockId from router = "sel" and stores it in the Channel.
+
+→ Returns FlowgraphController.
+
+
+ctrl.start_swappable(&rt_handle).await
+→ Routes selector to output[1] (bridge open).
+
+→ Builds and starts FG1, injects same buffer into bsrc.
+
+
+ctrl.swap("fg1", "flows/flow_b.toml", &rt_handle).await
+Park: sel.callback("output_index", U32(0))
+Terminate FG1
+Clear buffer
+Build new FG1 from flow_b.toml, inject same buffer
+Start new FG1
+Unpark: sel.callback("output_index", U32(1))
+→ On build failure: restore previous TOML.
+
+ctrl.shutdown_all(&rt_handle).await
+→ Terminate all swappable FGs, then all permanent FGs.
+
+main.rs — what it becomes
+
+fn main() -> Result<()> {
+    futuresdr::runtime::init();
+    let dir = default_plugin_dir();
+    let rt = Runtime::new();
+    let rt_handle = rt.handle();
+
+    let mut ctrl = FlowgraphController::builder(&dir)
+        .add_permanent("fg0", "flows/fg0.toml")
+        .add_swappable("fg1", "flows/flow_a.toml")
+        .connect("fg0:out", "fg1:in")
+        .start_permanent(&rt)?;
+
+    let socket = UdpSocket::bind("0.0.0.0:7878")?;
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+
+    rt.block_on(async move {
+        ctrl.start_swappable(&rt_handle).await.unwrap();
+
+        loop {
+            // ...
+            // -s fg1 flows/flow_b.toml  → ctrl.swap("fg1", path, &rt_handle)
+            // Q                         → ctrl.shutdown_all(&rt_handle)
+        }
+    });
+    Ok(())
+}
+Extensibility
+Multiple swappable FGs (fg1, fg2, …) each with their own ID and port.
+Multiple connections (fg0:out1 → fg1:in, fg0:out2 → fg2:in).
+Each connection has its own router (the selector block of the upstream FG that gates that specific output).
+UDP command: -s fg_id path/to/new.toml — the fg_id says which flowgraph to swap.

@@ -18,11 +18,31 @@ categories = [
     "wasm",
 ]
 
+[lib]
+crate-type = ["dylib", "rlib"]
+
 [workspace]
-members = [".", "crates/futuredsp", "crates/macros", "crates/types"]
+members = [
+    ".",
+    "crates/futuredsp",
+    "crates/macros",
+    "crates/types",
+    "crates/plugin_api",
+    "crates/plugin_gen",
+    "examples/dylib",
+    "examples/dyn_fm-receiver",
+    "examples/dyn_phy-swap",
+    "examples/sdr_tuning",
+    "crates/prophecy",
+    "examples/wlan",
+    "examples/zigbee",
+    "examples/cross_flowgraph",
+    "plugins/*",
+]
 
 [features]
 default = ["tracing_max_level_debug", "tracing_release_max_level_info"]
+plugin = []
 aaronia_http = ["seify/aaronia_http"]
 audio = ["dep:cpal", "dep:hound", "dep:rodio"]
 burn = ["dep:burn"]
@@ -171,10 +191,10 @@ vulkano-shaders = "0.35"
 
 [profile.release]
 codegen-units = 1
-debug = true
-lto = "fat"
+debug = false
+lto = false
 opt-level = 3
-panic = "abort"
+panic = "unwind"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]

@@ -39,6 +39,9 @@ struct RenderState {
 pub fn TimeSink(
     #[prop(into)] min: Signal<f32>,
     #[prop(into)] max: Signal<f32>,
+    /// When true, map samples linearly instead of applying 10·log10.
+    #[prop(default = false)]
+    linear: bool,
     #[prop(optional)] mode: TimeSinkMode,
 ) -> impl IntoView {
     let data = match mode {
@@ -80,11 +83,18 @@ pub fn TimeSink(
                 uniform float u_nsamples;
                 uniform float u_min;
                 uniform float u_max;
+                uniform float u_linear;
                 varying float power;
 
                 void main(void) {
                     float x = -1.0 + 2.0 * coordinates.x / u_nsamples;
-                    power = (10.0 * log(coordinates.y) / log(10.0) - u_min) / (u_max - u_min);
+                    float val;
+                    if (u_linear > 0.5) {
+                        val = coordinates.y;
+                    } else {
+                        val = 10.0 * log(coordinates.y) / log(10.0);
+                    }
+                    power = (val - u_min) / (u_max - u_min);
                     float y = 2.0 * power - 1.0;
                     gl_Position = vec4(x, y, 0.0, 1.0);
                 }
@@ -129,6 +139,8 @@ pub fn TimeSink(
             gl.uniform1f(u_min.as_ref(), min.get());
             let u_max = gl.get_uniform_location(&shader, "u_max");
             gl.uniform1f(u_max.as_ref(), max.get());
+            let u_linear = gl.get_uniform_location(&shader, "u_linear");
+            gl.uniform1f(u_linear.as_ref(), if linear { 1.0 } else { 0.0 });
 
             let vertex_buffer = gl.create_buffer().unwrap();
             let init_data = [0.0f32; MAX_SAMPLES * 2];

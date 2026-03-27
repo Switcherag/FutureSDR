@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FutureSDR :: Prophecy GUI</title>
+
+    <link rel="icon" href="/favicon-baad1291935ce574.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
+    <link rel="stylesheet" href="/style-50644ce19f5272ed.css" integrity="sha384-7H43zgpZHUnW5P6F+5Q9nDy/RyciGkobybpTAQlp/4m6rjskwUnXzNHV89ipCILZ"/>
+    <script src="/mermaid.min-44357080eeae6d17.js" integrity="sha384-22TIzueDpidabmrJrRZOuoeirwerzh0k58p3BiRQXtofpDZCl37VJCT0b1REkoAk"></script>
+    <script>mermaid.mermaidAPI.initialize({
+  theme: 'dark',
+});
+</script>
+    
+<script type="module">
+import init, * as bindings from '/frontend-c11b98597f57911c.js';
+const wasm = await init({ module_or_path: '/frontend-c11b98597f57911c_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <base href="/" />
+  <link rel="modulepreload" href="/frontend-c11b98597f57911c.js" crossorigin="anonymous" integrity="sha384-gGNF0wFHQYT0gHLeT0LlzsvjBxKGBSR453fUyCtd2u6BsA7LTEceLllD5XjvuBDp"><link rel="preload" href="/frontend-c11b98597f57911c_bg.wasm" crossorigin="anonymous" integrity="sha384-3CHKxeVeLv+zGN3O8D297fcK/HZoGOeHt/t/StKh16Zi8jcr4xEoYzPkmN1UZKBI" as="fetch" type="application/wasm"></head>
+  <body class="bg-slate-900">
+  </body>
+</html>

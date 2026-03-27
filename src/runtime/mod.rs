@@ -28,6 +28,9 @@ mod logging;
 #[path = "logging_wasm.rs"]
 mod logging;
 
+/// ABI fingerprint for plugin compatibility validation
+pub mod abi_fingerprint;
+
 mod flowgraph;
 mod flowgraph_handle;
 mod kernel;
@@ -46,6 +49,7 @@ pub use block::WrappedKernel;
 pub use block_meta::BlockMeta;
 pub use flowgraph::BlockRef;
 pub use flowgraph::Flowgraph;
+pub use flowgraph::cross_connect;
 pub use flowgraph_handle::FlowgraphHandle;
 pub use kernel::Kernel;
 pub use kernel::KernelInterface;
@@ -221,11 +225,15 @@ pub enum Error {
     #[error("Error while locking a Mutex that should not be contended or poisoned")]
     LockError,
     /// Seify Args Conversion Error
-    #[cfg(feature = "seify")]
+    ///
+    /// Always present regardless of features to keep the enum layout stable
+    /// across plugin/runtime builds with different feature flags.
     #[error("Seify Args conversion error")]
     SeifyArgsConversionError,
     /// Seify Error
-    #[cfg(feature = "seify")]
+    ///
+    /// Always present regardless of features to keep the enum layout stable
+    /// across plugin/runtime builds with different feature flags.
     #[error("Seify error ({0})")]
     SeifyError(String),
 }

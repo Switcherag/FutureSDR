@@ -262,7 +262,9 @@ where
             .map(|i| i.max_items())
             .min()
             .unwrap_or(0);
-        self.streamer = Some(self.dev.tx_streamer(&self.channels)?);
+        if self.streamer.is_none() {
+            self.streamer = Some(self.dev.tx_streamer(&self.channels)?);
+        }
         self.streamer
             .as_mut()
             .ok_or(Error::RuntimeError("Seify: no streamer".to_string()))?
@@ -272,10 +274,9 @@ where
     }
 
     async fn deinit(&mut self, _mio: &mut MessageOutputs, _meta: &mut BlockMeta) -> Result<()> {
-        self.streamer
-            .as_mut()
-            .ok_or(Error::RuntimeError("Seify: no streamer".to_string()))?
-            .deactivate()?;
+        if let Some(ref mut s) = self.streamer {
+            s.deactivate()?;
+        }
         Ok(())
     }
 }

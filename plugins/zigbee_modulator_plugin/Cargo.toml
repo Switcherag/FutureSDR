@@ -1,0 +1,11 @@
+[package]
+name = "zigbee_modulator_plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+plugin_api = { path = "../../crates/plugin_api" }
+futuresdr = { path = "../../", features = ["plugin"] }

@@ -70,6 +70,14 @@ pub trait Block: Send + Any {
     ///
     /// Blocking blocks will be spawned in a separate thread.
     fn is_blocking(&self) -> bool;
+
+    /// Reinitialize the block for reuse in a new flowgraph.
+    ///
+    /// Resets the inbox channel and stream port bindings so the block can be
+    /// inserted into a fresh [`Flowgraph`] without recreating the kernel.
+    /// This is useful for blocks that hold expensive resources (e.g. an open
+    /// SDR device handle) that should survive across flowgraph swaps.
+    fn reinit(&mut self, new_id: BlockId);
 }
 
 impl fmt::Debug for dyn Block {
@@ -79,6 +87,52 @@ impl fmt::Debug for dyn Block {
             .finish()
     }
 }
+
+
+#[cfg(feature = "plugin")]
+#[async_trait]
+impl Block for Box<dyn Block> {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        (**self).as_any_mut()
+    }
+    fn inbox(&self) -> Sender<BlockMessage> {
+        (**self).inbox()
+    }
+    fn id(&self) -> BlockId {
+        (**self).id()
+    }
+    fn stream_input(&mut self, name: &str) -> Option<&mut dyn BufferReader> {
+        (**self).stream_input(name)
+    }
+    fn connect_stream_output(&mut self, name: &str, reader: &mut dyn BufferReader) -> Result<(), Error> {
+        (**self).connect_stream_output(name, reader)
+    }
+    fn message_inputs(&self) -> &'static [&'static str] {
+        (**self).message_inputs()
+    }
+    fn connect(&mut self, src_port: &PortId, sender: Sender<BlockMessage>, dst_port: &PortId) -> Result<(), Error> {
+        (**self).connect(src_port, sender, dst_port)
+    }
+    fn instance_name(&self) -> Option<&str> {
+        (**self).instance_name()
+    }
+    fn set_instance_name(&mut self, name: &str) {
+        (**self).set_instance_name(name)
+    }
+    fn type_name(&self) -> &str {
+        (**self).type_name()
+    }
+    fn is_blocking(&self) -> bool {
+        (**self).is_blocking()
+    }
+    fn reinit(&mut self, new_id: BlockId) {
+        (**self).reinit(new_id)
+    }
+    async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
+        (**self).run(main_inbox).await
+    }
+}
+
 /// Typed Block
 pub struct WrappedKernel<K: Kernel> {
     /// Block metadata
@@ -356,6 +410,18 @@ impl<K: KernelInterface + Kernel + Send + 'static> Block for WrappedKernel<K> {
     }
     fn is_blocking(&self) -> bool {
         K::is_blocking()
+    }
+
+    fn reinit(&mut self, new_id: BlockId) {
+        let (tx, rx) = mpsc::channel(config::config().queue_size);
+        self.id = new_id;
+        self.inbox = rx;
+        self.inbox_tx = tx.clone();
+        self.kernel.stream_ports_init(new_id, tx);
+        self.mio = MessageOutputs::new(
+            new_id,
+            K::message_outputs().iter().map(|x| x.to_string()).collect(),
+        );
     }
 
     // ##### KERNEL

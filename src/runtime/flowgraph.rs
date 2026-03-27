@@ -153,6 +153,49 @@ impl Flowgraph {
         }
     }
 
+
+    /// Add a dynamically-loaded [`Block`] to the [Flowgraph] via a factory closure.
+    #[cfg(feature = "plugin")]
+    pub fn add_block_dyn<F>(&mut self, f: F) -> BlockId
+        where
+            F: FnOnce(BlockId) -> Box<dyn Block>,
+        {
+            let block_id = BlockId(self.blocks.len());
+            let mut block = f(block_id);
+            block.set_instance_name(&format!("{}-{}", block.type_name(), block_id.0));
+            // Box<dyn Block> now implements Block, so coercion to dyn Block works
+            let b: Arc<Mutex<dyn Block>> = Arc::new(Mutex::new(block));
+            self.blocks.push(b);
+            block_id
+        }
+
+    /// Take a block out of this flowgraph (e.g. after termination) for reuse.
+    ///
+    /// Returns the `Arc<Mutex<dyn Block>>` at the given index, or `None` if
+    /// the index is out of bounds.
+    pub fn take_block(&self, id: BlockId) -> Option<Arc<Mutex<dyn Block>>> {
+        self.blocks.get(id.0).cloned()
+    }
+
+    /// Insert a previously-used block into this flowgraph, reinitializing it
+    /// with a fresh inbox and new [`BlockId`].
+    ///
+    /// This avoids recreating blocks that hold expensive resources (e.g. an
+    /// open SDR device handle).  The block's kernel state is preserved; only
+    /// the runtime plumbing (inbox channel, stream-port bindings, message
+    /// outputs) is reset.
+    pub fn reuse_block(&mut self, block: Arc<Mutex<dyn Block>>) -> BlockId {
+        let block_id = BlockId(self.blocks.len());
+        {
+            let mut b = block.try_lock().expect("block locked during reuse");
+            b.reinit(block_id);
+            let name = format!("{}-{}", b.type_name(), block_id.0);
+            b.set_instance_name(&name);
+        }
+        self.blocks.push(block);
+        block_id
+        
+    }
     /// Make a stream connection
     ///
     /// This is the prefered way to connect stream ports. Usually, this function is not called
@@ -241,20 +284,23 @@ impl Flowgraph {
     ) -> Result<(), Error> {
         let src_id = src.into();
         let src_port = src_port.into();
-        let dst = dst.into();
+        let dst_id = dst.into();
         let dst_port: PortId = dst_port.into();
         let src = self
             .blocks
             .get(src_id.0)
             .ok_or(Error::InvalidBlock(src_id))?;
-        let dst = self.blocks.get(dst.0).ok_or(Error::InvalidBlock(dst))?;
+        let dst = self.blocks.get(dst_id.0).ok_or(Error::InvalidBlock(dst_id))?;
         let mut tmp = dst.try_lock().ok_or(Error::LockError)?;
         let reader = tmp
             .stream_input(dst_port.name())
-            .ok_or(Error::InvalidStreamPort(BlockPortCtx::Id(src_id), dst_port))?;
+            .ok_or(Error::InvalidStreamPort(BlockPortCtx::Id(src_id), dst_port.clone()))?;
         src.try_lock()
             .ok_or(Error::LockError)?
-            .connect_stream_output(src_port.name(), reader)
+            .connect_stream_output(src_port.name(), reader)?;
+        self.stream_edges
+            .push((src_id, src_port, dst_id, dst_port));
+        Ok(())
     }
 
     /// Make message connection
@@ -343,6 +389,46 @@ impl Flowgraph {
             .ok_or(Error::InvalidBlock(id))?
             .clone())
     }
+}
+
+/// Connect stream ports across two different flowgraphs (zero-copy).
+///
+/// Both blocks must be unlocked (i.e., neither flowgraph is running yet).
+/// After this call the two blocks share the same underlying circular buffer
+/// — data written by the source is visible to the destination with no copy.
+pub fn cross_connect(
+    src_fg: &Flowgraph,
+    src_id: impl Into<BlockId>,
+    src_port: &str,
+    dst_fg: &Flowgraph,
+    dst_id: impl Into<BlockId>,
+    dst_port: &str,
+) -> Result<(), Error> {
+    let src_id = src_id.into();
+    let dst_id = dst_id.into();
+
+    let src_block = src_fg
+        .blocks
+        .get(src_id.0)
+        .ok_or(Error::InvalidBlock(src_id))?;
+    let dst_block = dst_fg
+        .blocks
+        .get(dst_id.0)
+        .ok_or(Error::InvalidBlock(dst_id))?;
+
+    let mut dst = dst_block.try_lock().ok_or(Error::LockError)?;
+    let reader = dst
+        .stream_input(dst_port)
+        .ok_or(Error::InvalidStreamPort(
+            BlockPortCtx::Id(dst_id),
+            PortId::from(dst_port),
+        ))?;
+    src_block
+        .try_lock()
+        .ok_or(Error::LockError)?
+        .connect_stream_output(src_port, reader)?;
+
+    Ok(())
 }
 
 impl Default for Flowgraph {

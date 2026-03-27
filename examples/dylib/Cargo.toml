@@ -1,0 +1,39 @@
+[package]
+name = "dylib-example"
+version = "0.1.0"
+edition = "2021"
+build = "../../plugin_build.rs"
+
+[[bin]]
+name = "minimal"
+path = "src/bin/minimal.rs"
+
+[[bin]]
+name = "dynv2_1"
+path = "src/benchmark/dynv2_1.rs"
+
+[[bin]]
+name = "dynv2_1000"
+path = "src/benchmark/dynv2_1000.rs"
+
+[[bin]]
+name = "fft_dynv2"
+path = "src/benchmark/fft_dynv2.rs"
+
+[[bin]]
+name = "fft_static"
+path = "src/benchmark/fft_static.rs"
+
+[[bin]]
+name = "swap_dynv2"
+path = "src/benchmark/swap_dynv2.rs"
+
+[[bin]]
+name = "swap_static"
+path = "src/benchmark/swap_static.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+futuresdr = { path = "../..", features = ["plugin"] }
+plugin_api = { path = "../../crates/plugin_api" }

@@ -46,6 +46,9 @@ mod time_sink;
 pub use time_sink::TimeSink;
 pub use time_sink::TimeSinkMode;
 
+mod sliding_time_sink;
+pub use sliding_time_sink::SlidingTimeSink;
+
 mod waterfall;
 pub use waterfall::Waterfall;
 pub use waterfall::WaterfallMode;

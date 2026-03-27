@@ -29,7 +29,7 @@ struct Args {
     #[clap(short, long, default_value_t = 20e6)]
     sample_rate: f64,
     /// WLAN Channel Number
-    #[clap(short, long, value_parser = parse_channel, default_value = "34")]
+    #[clap(short, long, value_parser = parse_channel, default_value = "1")]
     channel: f64,
 }
 

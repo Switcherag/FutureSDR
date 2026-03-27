@@ -1,0 +1,44 @@
+[package]
+name = "wlan_ah"
+version = "0.1.0"
+edition = "2024"
+default-run = "loopback"
+
+[workspace]
+
+[[bin]]
+name = "rx"
+path = "src/bin/rx.rs"
+
+[[bin]]
+name = "loopback"
+path = "src/bin/loopback.rs"
+
+[[bin]]
+name = "tx"
+path = "src/bin/tx.rs"
+
+[[bin]]
+name = "rx_debug"
+path = "src/bin/rx_debug.rs"
+
+[features]
+default = ["soapy"]
+aaronia_http = ["futuresdr/aaronia_http"]
+soapy = ["futuresdr/soapy"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+crc32fast = "1.5"
+futuresdr = { path = "../..", features = ["seify"] }
+rand = "0.9"
+rand_distr = "0.5"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+gloo-net = "0.6"
+leptos = { version = "0.8", features = ["csr", "nightly"] }
+log = "0.4"
+prophecy = { path = "../../crates/prophecy" }
+serde_json = "1.0"

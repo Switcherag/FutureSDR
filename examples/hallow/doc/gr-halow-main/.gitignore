@@ -1,0 +1,4 @@
+**.sigmf-data
+**.pyc
+*.pyo
+build*/

@@ -1,0 +1,28 @@
+[package]
+name = "dyn_phy-swap"
+version = "0.1.0"
+edition = "2021"
+build = "../../plugin_build.rs"
+
+[[bin]]
+name = "rx-swap"
+path = "src/main.rs"
+
+[[bin]]
+name = "tx-swap"
+path = "src/tx_swap.rs"
+
+[[bin]]
+name = "tx-sdr-swap"
+path = "src/tx_sdr_swap.rs"
+
+[[bin]]
+name = "tx-sdr-hotswap"
+path = "src/tx_sdr_hotswap.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+futuresdr = { path = "../..", features = ["plugin", "soapy"] }
+plugin_api = { path = "../../crates/plugin_api" }

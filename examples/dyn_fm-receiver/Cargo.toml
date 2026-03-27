@@ -1,0 +1,11 @@
+[package]
+name = "dyn_fm-receiver"
+version = "0.1.0"
+edition = "2021"
+build = "../../plugin_build.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+futuresdr = { path = "../..", features = ["plugin", "audio", "soapy"] }
+plugin_api = { path = "../../crates/plugin_api" }

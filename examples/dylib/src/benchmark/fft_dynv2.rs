@@ -1,0 +1,230 @@
+// Benchmark: String → 64-QAM → N×(IFFT→FFT) chain using dynamic plugins (v2).
+//
+// Static blocks: VectorSource<Complex32>, NullSink<Complex32>
+// Dynamic blocks: N IFFT + N FFT from fft_complex_plugin.so
+//
+// Outputs CSV: name,fft_pairs,fft_size,n_samples,import_s,add_fg_s,connect_s,rt_create_s,fg_init_s,fg_exec_s
+
+use anyhow::Result;
+use clap::Parser;
+use futuresdr::async_io::block_on;
+use futuresdr::blocks::{NullSink, VectorSource};
+use futuresdr::num_complex::Complex32;
+use futuresdr::runtime::{Flowgraph, Runtime};
+use plugin_api::LoadedPlugin;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::Instant;
+
+// 64-QAM constellation table (from IEEE 802.11 standard)
+const LEVEL: f32 = 0.1543033499620919;
+const QAM64: [Complex32; 64] = [
+    Complex32::new(-7.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, -7.0 * LEVEL),
+    Complex32::new(-7.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, 7.0 * LEVEL),
+    Complex32::new(-7.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, -1.0 * LEVEL),
+    Complex32::new(-7.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, 1.0 * LEVEL),
+    Complex32::new(-7.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, -5.0 * LEVEL),
+    Complex32::new(-7.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, 5.0 * LEVEL),
+    Complex32::new(-7.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, -3.0 * LEVEL),
+    Complex32::new(-7.0 * LEVEL, 3.0 * LEVEL),
+    Complex32::new(7.0 * LEVEL, 3.0 * LEVEL),
+    Complex32::new(-1.0 * LEVEL, 3.0 * LEVEL),
+    Complex32::new(1.0 * LEVEL, 3.0 * LEVEL),
+    Complex32::new(-5.0 * LEVEL, 3.0 * LEVEL),
+    Complex32::new(5.0 * LEVEL, 3.0 * LEVEL),
+    Complex32::new(-3.0 * LEVEL, 3.0 * LEVEL),
+    Complex32::new(3.0 * LEVEL, 3.0 * LEVEL),
+];
+
+/// Map a byte to a 64-QAM constellation point (lower 6 bits used).
+fn qam64_map(byte: u8) -> Complex32 {
+    QAM64[(byte & 0x3F) as usize]
+}
+
+/// Encode a string into QAM64 symbols, repeated to fill `n_samples`.
+fn encode_qam64(text: &str, n_samples: usize) -> Vec<Complex32> {
+    let symbols: Vec<Complex32> = text.as_bytes().iter().map(|&b| qam64_map(b)).collect();
+    if symbols.is_empty() {
+        return vec![QAM64[0]; n_samples];
+    }
+    symbols.into_iter().cycle().take(n_samples).collect()
+}
+
+#[derive(Parser)]
+struct Args {
+    /// Input text to encode
+    #[arg(long, default_value = "Hello, World! This is a 64-QAM FFT benchmark.")]
+    text: String,
+
+    /// FFT size (must be power of 2)
+    #[arg(long, default_value_t = 64)]
+    fft_size: usize,
+
+    /// Number of IFFT→FFT pairs in the chain
+    #[arg(long, default_value_t = 4)]
+    fft_pairs: usize,
+
+    /// Total number of Complex32 samples to process
+    #[arg(long, default_value_t = 64000)]
+    n_samples: usize,
+
+    /// Path to plugin directory
+    #[arg(long, default_value = ".")]
+    plugin_dir: String,
+
+    /// Number of benchmark iterations
+    #[arg(long, default_value_t = 1)]
+    loop_count: u32,
+
+    /// Output CSV file
+    #[arg(long, default_value = "result_fft_bench.txt")]
+    output: String,
+}
+
+fn main() -> Result<()> {
+    futuresdr::runtime::init();
+
+    let args = Args::parse();
+    // Round n_samples down to a multiple of fft_size
+    let n_samples = (args.n_samples / args.fft_size) * args.fft_size;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&args.output)?;
+
+    for i in 0..args.loop_count {
+        eprintln!("==> Run {}/{}", i + 1, args.loop_count);
+
+        // Stage 1: Import plugins (one .so load per block for realistic simulation)
+        let start = Instant::now();
+
+        let plugin_path = format!("{}/libfft_complex_plugin.so", args.plugin_dir);
+        let mut plugins = Vec::with_capacity(args.fft_pairs * 2);
+        for _ in 0..args.fft_pairs {
+            // Each IFFT and FFT loads its own copy of the .so
+            let ifft_plugin = unsafe { LoadedPlugin::load(&plugin_path) };
+            let fft_plugin = unsafe { LoadedPlugin::load(&plugin_path) };
+            plugins.push((ifft_plugin, fft_plugin));
+        }
+
+        let import_time = start.elapsed();
+
+        // Stage 2: Build flowgraph — QAM64 encode + add all blocks
+        let t2 = Instant::now();
+
+        let qam_data = encode_qam64(&args.text, n_samples);
+        let mut fg = Flowgraph::new();
+
+        let src = fg.add_block(VectorSource::<Complex32>::new(qam_data));
+        let snk = fg.add_block(NullSink::<Complex32>::new());
+
+        // Add N IFFT + N FFT blocks dynamically
+        let mut fft_ids = Vec::with_capacity(args.fft_pairs * 2);
+        for (ifft_plugin, fft_plugin) in &plugins {
+            let ifft_id = fg.add_block_dyn(ifft_plugin.prepare(Box::new((args.fft_size, true))));
+            let fft_id = fg.add_block_dyn(fft_plugin.prepare(Box::new((args.fft_size, false))));
+            fft_ids.push(ifft_id);
+            fft_ids.push(fft_id);
+        }
+
+        let add_fg_time = t2.elapsed();
+
+        // Stage 3: Connect the chain: src → ifft₁ → fft₁ → ... → ifftₙ → fftₙ → snk
+        let t3 = Instant::now();
+
+        let src_id = src.get()?.id;
+        let snk_id = snk.get()?.id;
+
+        // src → first IFFT
+        fg.connect_dyn(src_id, "output", fft_ids[0], "input")?;
+        // Chain all FFT blocks
+        for w in fft_ids.windows(2) {
+            fg.connect_dyn(w[0], "output", w[1], "input")?;
+        }
+        // Last FFT → sink
+        fg.connect_dyn(*fft_ids.last().unwrap(), "output", snk_id, "input")?;
+
+        let connect_time = t3.elapsed();
+
+        // Stage 4a: Create Runtime
+        let t4a = Instant::now();
+        let rt = Runtime::new();
+        let rt_create_time = t4a.elapsed();
+
+        // Stage 4b: Flowgraph init (scheduler + block init + notify)
+        let t4b = Instant::now();
+        let (task, _handle) = rt.start_sync(fg)?;
+        let fg_init_time = t4b.elapsed();
+
+        // Stage 4c: Pure execution (data processing)
+        let t4c = Instant::now();
+        let _fg = block_on(task)?;
+        let fg_exec_time = t4c.elapsed();
+
+        writeln!(
+            file,
+            "fft_dynv2,{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            args.fft_pairs,
+            args.fft_size,
+            n_samples,
+            import_time.as_secs_f64(),
+            add_fg_time.as_secs_f64(),
+            connect_time.as_secs_f64(),
+            rt_create_time.as_secs_f64(),
+            fg_init_time.as_secs_f64(),
+            fg_exec_time.as_secs_f64(),
+        )?;
+    }
+
+    Ok(())
+}

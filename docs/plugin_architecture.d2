@@ -1,0 +1,183 @@
+direction: down
+
+# ============================================================
+# PHASE 1: COMPILE TIME
+# ============================================================
+
+compile_time: "PHASE 1 — Compile Time (Building the Plugin .so)" {
+  style.fill: "#e8f4e8"
+  style.font-size: 18
+
+  plugin_src: "Plugin Source Code\n(increment_plugin/src/lib.rs)" {
+    shape: page
+    style.fill: "#fff3cd"
+  }
+
+  derive_block: "#[derive(Block)] macro\n\nGenerates impl KernelInterface:\n  type_name() -> &'static str\n  stream_inputs() -> Vec<StreamPort>\n  stream_outputs() -> Vec<StreamPort>\n  connect_input(port, reader)\n  connect_output(port, writer)\n  message handler dispatch" {
+    shape: hexagon
+    style.fill: "#d4edda"
+  }
+
+  export_macro: "export_plugin! macro\n\nGenerates:\n\n1) struct __PluginFactory\n   impl BlockFactory for __PluginFactory {\n     fn create_block(id, config) -> Box<dyn Block> {\n       let cfg = config.downcast::<ConfigType>()\n       let kernel = MyBlock::new(cfg)\n       Box::new(WrappedKernel::new(kernel, id))\n     }\n   }\n\n2) #[no_mangle]\n   pub fn create_block_factory()\n     -> Box<dyn BlockFactory>" {
+    shape: hexagon
+    style.fill: "#d4edda"
+  }
+
+  cargo: "cargo build -p increment_plugin\nRUSTFLAGS=\"-C prefer-dynamic\"\ncrate-type = [\"cdylib\"]" {
+    shape: parallelogram
+    style.fill: "#cce5ff"
+  }
+
+  so_file: "libincrement_plugin.so\n\nExported symbol (nm -D):\n  T create_block_factory\n\nSignature:\n  fn() -> Box<dyn BlockFactory>\n\nDynamic deps (ldd):\n  libfuturesdr.so\n  libstd-*.so" {
+    shape: cylinder
+    style.fill: "#f8d7da"
+  }
+
+  plugin_src -> derive_block: "#[derive(Block)]"
+  plugin_src -> export_macro: "export_plugin!"
+  derive_block -> cargo
+  export_macro -> cargo
+  cargo -> so_file: produces
+}
+
+# ============================================================
+# PHASE 2: RUNTIME
+# ============================================================
+
+runtime: "PHASE 2 — Runtime (Loading and Reconstructing)" {
+  style.fill: "#e8e8f4"
+  style.font-size: 18
+
+  main_prog: "Main Program (dynv2_1000)\n\nlet plugin = LoadedPlugin::load(path)\nlet blk = fg.add_block_dyn(\n  plugin.prepare(Box::new(config))\n)\nfg.connect_dyn(src, \"output\", blk, \"input\")" {
+    shape: page
+    style.fill: "#fff3cd"
+  }
+
+  step1: "Step 1: LoadedPlugin::load(path)\n\nlib = Library::new(path)           // dlopen()\nfunc = lib.get(\"create_block_factory\") // dlsym()\nfactory = func()                    // call it\n\nReturns LoadedPlugin {\n  factory: Box<dyn BlockFactory>,  // vtable ptr\n  _lib: Library,                   // prevents dlclose()\n}" {
+    shape: rectangle
+    style.fill: "#d4edda"
+  }
+
+  step2: "Step 2: plugin.prepare(config)\n\nReturns a closure:\n  move |id| factory.create_block(id, config)\n\nLazy — does NOT create the block yet.\nCaptures factory ref + config Box." {
+    shape: rectangle
+    style.fill: "#d4edda"
+  }
+
+  step3: "Step 3: fg.add_block_dyn(closure)\n\nblock_id = BlockId(blocks.len())\nblock = closure(block_id)   // NOW creates block\nb = Arc::new(Mutex::new(block))\nblocks.push(b)\nreturn block_id" {
+    shape: rectangle
+    style.fill: "#d4edda"
+  }
+
+  step4: "Step 4: factory.create_block(id, config)\n  (code runs INSIDE the .so)\n\ncfg = config.downcast::<ConfigType>()\nkernel = IncrementU8::new()\n  // kernel.input: DefaultCpuReader<u8>\n  // kernel.output: DefaultCpuWriter<u8>\n\nreturn Box::new(WrappedKernel::new(kernel, id))" {
+    shape: rectangle
+    style.fill: "#d4edda"
+  }
+
+  result: "WrappedKernel<IncrementU8>\n\n  meta: BlockMeta\n  mio: MessageOutputs\n  kernel: IncrementU8 { input, output }\n  id: BlockId\n  inbox: Receiver<BlockMessage>\n  inbox_tx: Sender<BlockMessage>\n\nImplements trait Block:\n  run(), inbox(), id(), type_name()\n  stream_inputs() -> [(\"input\", TypeId::of::<u8>())]\n  stream_outputs() -> [(\"output\", TypeId::of::<u8>())]\n  connect_input(), connect_output()" {
+    shape: class
+    style.fill: "#f8d7da"
+  }
+
+  main_prog -> step1: "load .so"
+  step1 -> step2: "prepare(config)"
+  step2 -> step3: "closure passed to fg"
+  step3 -> step4: "closure invoked with BlockId"
+  step4 -> result: "returns Box<dyn Block>"
+}
+
+# ============================================================
+# PHASE 3: TYPE HIERARCHY
+# ============================================================
+
+types: "Type Hierarchy" {
+  style.fill: "#f0e8f4"
+  style.font-size: 18
+
+  block_trait: "trait Block: Send + Any\n\n  run(&mut self, Sender<FlowgraphMessage>)\n  inbox() -> Sender<BlockMessage>\n  id() -> BlockId\n  type_name() -> &str\n  stream_inputs() -> Vec<StreamPort>\n  stream_outputs() -> Vec<StreamPort>\n  connect_input(port, reader)\n  connect_output(port, writer)" {
+    shape: class
+    style.fill: "#e2d5f1"
+  }
+
+  kernel_trait: "trait Kernel: Send\n\n  async fn work(&mut self,\n    io: &mut WorkIo,\n    mio: &mut MessageOutputs,\n    meta: &mut BlockMeta\n  ) -> Result<()>\n  async fn init(...)\n  async fn deinit(...)" {
+    shape: class
+    style.fill: "#e2d5f1"
+  }
+
+  ki_trait: "trait KernelInterface\n(generated by #[derive(Block)])\n\n  type_name() -> &'static str\n  stream_inputs() -> Vec<StreamPort>\n  stream_outputs() -> Vec<StreamPort>\n  is_blocking() -> bool\n  connect_input(port, reader)\n  connect_output(port, writer)" {
+    shape: class
+    style.fill: "#e2d5f1"
+  }
+
+  wrapped: "WrappedKernel<K>\nwhere K: Kernel + KernelInterface\n\nDelegates to:\n  I/O setup -> KernelInterface (derived)\n  Processing -> Kernel (user code)\n  Runtime -> own event loop" {
+    shape: class
+    style.fill: "#ffeeba"
+  }
+
+  factory_trait: "trait BlockFactory: Send + Sync\n\n  create_block(id, config) -> Box<dyn Block>\n  block_name() -> &'static str\n  block_description() -> &'static str" {
+    shape: class
+    style.fill: "#e2d5f1"
+  }
+
+  kernel_trait -> wrapped: "K implements" {style.stroke-dash: 3}
+  ki_trait -> wrapped: "K implements" {style.stroke-dash: 3}
+  wrapped -> block_trait: "implements Block" {style.stroke-dash: 3}
+  factory_trait -> block_trait: "produces\nBox<dyn Block>" {
+    style.stroke: "#c00"
+    style.stroke-width: 2
+  }
+}
+
+# ============================================================
+# PHASE 4: SHARED LIBRARY LINKING
+# ============================================================
+
+linking: "Shared Library Linking" {
+  style.fill: "#f4f0e8"
+  style.font-size: 18
+
+  binary: "dynv2_1000 (ELF binary)" {
+    shape: hexagon
+    style.fill: "#cce5ff"
+  }
+
+  futuresdr_so: "libfuturesdr.so\n\nExports:\n  trait Block vtable layout\n  WrappedKernel::new()\n  BlockMeta, BlockId\n  MessageOutputs, WorkIo\n  Kernel, KernelInterface\n  CpuBufferReader/Writer\n  Tag, Pmt, StreamPort\n  TypeId (consistent!)" {
+    shape: cylinder
+    style.fill: "#d4edda"
+  }
+
+  std_so: "libstd-*.so\n\nRust stdlib:\n  Box, Vec, Arc, Mutex\n  Any, TypeId\n  String, HashMap\n  allocator (single heap)" {
+    shape: cylinder
+    style.fill: "#f5c6cb"
+  }
+
+  plugin: "libincrement_plugin.so" {
+    shape: cylinder
+    style.fill: "#f8d7da"
+  }
+
+  binary -> futuresdr_so: "links at compile time" {style.stroke-width: 2}
+  binary -> std_so: "links at compile time" {style.stroke-width: 2}
+  plugin -> futuresdr_so: "links at compile time" {style.stroke-width: 2}
+  plugin -> std_so: "links at compile time" {style.stroke-width: 2}
+  binary -> plugin: "dlopen() at runtime\ndlsym(\"create_block_factory\")" {
+    style.stroke: "#c00"
+    style.stroke-width: 3
+    style.stroke-dash: 5
+  }
+
+  insight: "KEY: Binary + plugin link to the SAME\nlibfuturesdr.so and libstd.so, ensuring:\n  - TypeId values match across boundaries\n  - Box<dyn Any> downcasts succeed\n  - vtable layouts are compatible\n  - Single allocator (no cross-heap issues)\n\nRequired: RUSTFLAGS=\"-C prefer-dynamic\"\nCargo.toml: crate-type = [\"dylib\", \"rlib\"]" {
+    shape: text
+    style.fill: "#fff3cd"
+    style.font-size: 14
+  }
+}
+
+# ============================================================
+# Cross-phase connections
+# ============================================================
+
+compile_time.so_file -> runtime.step1: "loaded at runtime via dlopen()" {
+  style.stroke: "#c00"
+  style.stroke-width: 3
+  style.stroke-dash: 5
+}

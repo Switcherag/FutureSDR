@@ -1,0 +1,15 @@
+# Flow B — BridgeSource → PrintSink("Flow B")
+
+[[blocks]]
+id = "src"
+plugin = "bridge_source_plugin"
+bridge = true
+
+[[blocks]]
+id = "sink"
+plugin = "print_sink_plugin"
+config = "Flow B"
+
+[[connections]]
+src = "src.output"
+dst = "sink.input"

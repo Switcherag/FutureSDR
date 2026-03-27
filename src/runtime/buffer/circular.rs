@@ -221,6 +221,51 @@ where
     }
 }
 
+impl<D> Writer<D>
+where
+    D: CpuSample,
+{
+    /// Create a new reader on this writer's existing buffer.
+    ///
+    /// Used for cross-flowgraph links and live reconnection.
+    /// The writer must already be connected (i.e., `connect()` was called at
+    /// least once so the underlying circular buffer exists).
+    ///
+    /// Returns `None` if the writer has no buffer yet.
+    pub fn create_reader(
+        &mut self,
+        reader_inbox: Sender<BlockMessage>,
+        block_id: BlockId,
+        port_id: PortId,
+    ) -> Option<Reader<D>> {
+        let writer = self.writer.as_ref()?;
+
+        let reader_notifier = MyNotifier {
+            sender: reader_inbox.clone(),
+        };
+        let writer_notifier = MyNotifier {
+            sender: self.inbox.clone(),
+        };
+        let generic_reader = writer.add_reader(reader_notifier, writer_notifier);
+
+        self.readers
+            .push((port_id.clone(), reader_inbox.clone()));
+
+        Some(Reader {
+            reader: Some(generic_reader),
+            finished: false,
+            writer_inbox: self.inbox.clone(),
+            writer_output_id: self.port_id.clone(),
+            block_id,
+            port_id,
+            inbox: reader_inbox,
+            tags: vec![],
+            min_items: None,
+            min_buffer_size_in_items: self.min_buffer_size_in_items,
+        })
+    }
+}
+
 impl<D> CpuBufferWriter for Writer<D>
 where
     D: CpuSample,

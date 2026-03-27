@@ -1,6 +1,12 @@
 # [build]
 # target = "wasm32-unknown-unknown"
 
+# ── Linux: dynamic linking for plugin/dylib workflow ──────────────
+# Every crate in the workspace links dynamically against libstd and
+# libfuturesdr.  Binary rpaths are set by plugin_build.rs (see below).
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "prefer-dynamic"]
+
 [target.wasm32-unknown-unknown]
 rustflags = [
   "--cfg=web_sys_unstable_apis",

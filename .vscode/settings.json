@@ -1,0 +1,9 @@
+{
+    "cmake.ignoreCMakeListsMissing": true
+,
+
+  "rust-analyzer.linkedProjects": [
+    "Cargo.toml",
+    "examples/wlan_ah/Cargo.toml"
+  ]
+}

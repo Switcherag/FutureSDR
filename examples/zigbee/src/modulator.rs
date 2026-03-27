@@ -1,7 +1,7 @@
 use futuresdr::blocks::ApplyIntoIter;
 use futuresdr::prelude::*;
 
-const DSSS: [[Complex32; 16]; 16] = [
+pub const DSSS: [[Complex32; 16]; 16] = [
     //  0
     [
         // 0
@@ -324,9 +324,9 @@ const DSSS: [[Complex32; 16]; 16] = [
     ],
 ];
 
-const SHAPE: [f32; 4] = [0.0, 0.707_106_77, 1.0, 0.707_106_77];
+pub const SHAPE: [f32; 4] = [0.0, 0.707_106_77, 1.0, 0.707_106_77];
 
-fn make_nibble(i: u8) -> impl Iterator<Item = Complex32> + Send {
+pub fn make_nibble(i: u8) -> impl Iterator<Item = Complex32> + Send {
     DSSS[i as usize]
         .iter()
         .flat_map(|x| [x; 4])
