@@ -1,5 +1,3 @@
-use serde::ser::SerializeTuple;
-use serde::ser::Serializer;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::WorkerGlobalScope;
@@ -466,23 +464,24 @@ impl Kernel for HackRf {
             }
         };
 
-        let usb_filter = web_sys::UsbDeviceFilter::new();
-        usb_filter.set_vendor_id(7504);
-        let filter = web_sys::UsbDeviceRequestOptions::new(&[usb_filter]);
+        let filter = web_sys::UsbDeviceFilter::new();
+        filter.set_vendor_id(7504);
+        let filters = [filter];
+        let filter = web_sys::UsbDeviceRequestOptions::new(&filters);
 
         let devices: js_sys::Array<web_sys::UsbDevice> = JsFuture::from(usb.get_devices())
             .await
             .map_err(Error::from)?;
 
         for i in 0..devices.length() {
-            let d: web_sys::UsbDevice = devices.get(0);
+            let d = devices.get_unchecked(i);
             println!("dev {}   {:?}", i, &d);
         }
         // Open radio if one is already paired and plugged
         // Otherwise ask the user to pair a new radio
         let device: web_sys::UsbDevice = if devices.length() > 0 {
             info!("device already connected");
-            devices.get(0)
+            devices.get_unchecked(0)
         } else {
             info!("requesting device: {:?}", &filter);
             JsFuture::from(usb.request_device(&filter))

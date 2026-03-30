@@ -18,6 +18,7 @@ where
 {
     #[output]
     output: O,
+    output_channels: u16,
     sample_rate: u32,
     channels: u16,
     stream: Option<Stream>,
@@ -33,16 +34,45 @@ impl<O> AudioSource<O>
 where
     O: CpuBufferWriter<Item = f32>,
 {
+    fn supports_config(sample_rate: u32, channels: u16) -> bool {
+        let Some(device) = cpal::default_host().default_input_device() else {
+            return false;
+        };
+
+        let Ok(configs) = device.supported_input_configs() else {
+            return false;
+        };
+
+        configs.into_iter().any(|config| {
+            config.channels() == channels
+                && sample_rate >= config.min_sample_rate().0
+                && sample_rate <= config.max_sample_rate().0
+        })
+    }
+
     /// Create AudioSource block
-    pub fn new(sample_rate: u32, channels: u16) -> Self {
-        AudioSource {
+    pub fn new(sample_rate: u32, channels: u16) -> Result<Self> {
+        let input_channels = if Self::supports_config(sample_rate, channels) {
+            channels
+        } else if channels == 1 && Self::supports_config(sample_rate, 2) {
+            warn!(
+                "audio source requested mono input at {} Hz, but only stereo is supported; using channel 0",
+                sample_rate
+            );
+            2
+        } else {
+            return Err(Error::InvalidParameter.into());
+        };
+
+        Ok(AudioSource {
             output: O::default(),
+            output_channels: channels,
             sample_rate,
-            channels,
+            channels: input_channels,
             stream: None,
             rx: None,
             buff: None,
-        }
+        })
     }
 }
 
@@ -52,8 +82,7 @@ where
     O: CpuBufferWriter<Item = f32>,
 {
     async fn init(&mut self, _m: &mut MessageOutputs, _b: &mut BlockMeta) -> Result<()> {
-        let host = cpal::default_host();
-        let device = host
+        let device = cpal::default_host()
             .default_input_device()
             .expect("no input device available");
 
@@ -93,13 +122,25 @@ where
     ) -> Result<()> {
         if let Some((buff, mut full)) = self.buff.take() {
             let o = self.output.slice();
-            let n = std::cmp::min(o.len(), buff.len() - full);
+            if self.output_channels == 1 && self.channels == 2 {
+                let n = std::cmp::min(o.len(), (buff.len() - full) / 2);
 
-            for (i, v) in o.iter_mut().take(n).enumerate() {
-                *v = buff[full + i]
+                for j in 0..n {
+                    o[j] = buff[full + 2 * j];
+                }
+
+                full += 2 * n;
+                self.output.produce(n);
+            } else {
+                let n = std::cmp::min(o.len(), buff.len() - full);
+
+                for (i, v) in o.iter_mut().take(n).enumerate() {
+                    *v = buff[full + i]
+                }
+
+                full += n;
+                self.output.produce(n);
             }
-
-            full += n;
 
             if buff.len() == full {
                 io.call_again = true;
@@ -107,8 +148,6 @@ where
             } else {
                 self.buff = Some((buff, full));
             }
-
-            self.output.produce(n);
         } else if let Some(v) = self.rx.as_mut().unwrap().next().await {
             io.call_again = true;
             self.buff = Some((v, 0));
