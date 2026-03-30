@@ -1,0 +1,26 @@
+title: Cross Flowgraph Example - Attempt 4 (Hot-Swap Sequence)
+
+direction: down
+
+cmd: "UDP command\n-s <fg_idx> <new_toml>"
+parse: "Parse command in loop"
+select_target: "Determine target fg_idx\n(explicit or first swappable)"
+
+step1: "1) Park selectors\noutput_index=0"
+step2: "2) Terminate old swappable FG\nterminate_and_wait()"
+step3: "3) Clear connected channel buffers"
+step4: "4) Parse new TOML and ensure plugins loaded"
+step5: "5) Build new flowgraph\nbuild_flowgraph_full()"
+step6: "6) Start new flowgraph\nrt_handle.start()"
+step7: "7) Unpark selectors\noutput_index=1"
+
+ok: "Swap success\nstate.current_toml = new_toml"
+fail_build: "Build/start failed"
+restore: "restore_and_unpark()\nrebuild previous TOML + unpark"
+err: "Return error with restore message"
+
+cmd -> parse -> select_target -> step1 -> step2 -> step3 -> step4 -> step5 -> step6 -> step7 -> ok
+
+step5 -> fail_build: "if build error"
+step6 -> fail_build: "if start error"
+fail_build -> restore -> err

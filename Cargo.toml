@@ -37,6 +37,7 @@ members = [
     "examples/wlan",
     "examples/zigbee",
     "examples/cross_flowgraph",
+    "examples/sdr_cross_flowgraph",
     "plugins/*",
 ]
 

@@ -1,6 +1,58 @@
+# ── Rust build output ────────────────────────────────────────────
+target/
+**/target/
 Cargo.lock
-target
-node_modules
-perf-data
+
+# ── Compiled shared libraries ────────────────────────────────────
+# Top-level collected libs (setup_plugins.sh output)
+shared_libs/
+shared_libs_debug/
+
+# Any .so / .dylib / .dll anywhere in the tree
+*.so
+*.so.*
+*.dylib
+*.dll
+*.a
+
+# ── Plugin SDK generated artifacts ───────────────────────────────
+# Keep template/toolchain sources, ignore compiled binaries & metadata
+plugin_sdk/libfuturesdr.so
+plugin_sdk/libstd-*.so
+plugin_sdk/manifest.json
+plugin_sdk/build.env
+
+# ── WASM / frontend build output ─────────────────────────────────
+examples/*/dist/
+**/dist/
+pkg/
+
+# ── Node / JS tooling ────────────────────────────────────────────
+node_modules/
 package-lock.json
+
+# ── Python tooling ───────────────────────────────────────────────
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# ── Editor / IDE ─────────────────────────────────────────────────
 .idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Profiling & perf data ─────────────────────────────────────────
+perf-data/
+*.perf
+flamegraph.svg
+perf.data
+perf.data.old
+
+# ── Logs & temp files ────────────────────────────────────────────
+*.log
+tmp/

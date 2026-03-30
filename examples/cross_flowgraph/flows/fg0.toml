@@ -1,0 +1,41 @@
+# FG0 — Permanent flowgraph
+# NullSource -> Throttle -> Selector(1,2) -> outputs[0]: NullSink
+#                                         -> outputs[1]: [auto bridge] -> FG1
+
+[[ports]]
+id = "out"
+direction = "out"
+src = "sel.outputs[1]"
+router = "sel"
+type = "u8"
+
+[[blocks]]
+id = "src"
+plugin = "null_source_plugin"
+
+[[blocks]]
+id = "thr"
+plugin = "throttle_plugin"
+config = 1.0
+
+[[blocks]]
+id = "sel"
+plugin = "selector_1_2_plugin"
+config = "DropAll"
+config_type = "SelectorDropPolicy"
+
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"
+
+[[connections]]
+src = "src.output"
+dst = "thr.input"
+
+[[connections]]
+src = "thr.output"
+dst = "sel.inputs[0]"
+
+[[connections]]
+src = "sel.outputs[0]"
+dst = "snk.input"

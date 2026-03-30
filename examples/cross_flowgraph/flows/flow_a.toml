@@ -1,15 +1,12 @@
-# Flow A — BridgeSource → PrintSink("Flow A")
+# Flow A — [auto bridge] -> PrintSink("Flow A")
 
-[[blocks]]
-id = "src"
-plugin = "bridge_source_plugin"
-bridge = true
+[[ports]]
+id = "in"
+direction = "in"
+dst = "sink.input"
+type = "u8"
 
 [[blocks]]
 id = "sink"
 plugin = "print_sink_plugin"
 config = "Flow A"
-
-[[connections]]
-src = "src.output"
-dst = "sink.input"

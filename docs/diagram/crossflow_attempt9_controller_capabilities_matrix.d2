@@ -1,0 +1,75 @@
+title: Cross Flowgraph - Attempt 9 (FlowgraphController Capability Matrix)
+
+direction: right
+
+builder: {
+  label: "Builder capabilities"
+  b1: "add_permanent(path)"
+  b2: "add_swappable(path)"
+  b3: "connect(from_fg, from_port, to_fg, to_port)"
+  b4: "udp_port(port)"
+  b5: "register_config_parser(type, fn)"
+}
+
+runtime_ops: {
+  label: "Runtime operations"
+  r1: "preload plugins from all TOMLs"
+  r2: "start permanent flowgraphs"
+  r3: "activate selectors to route traffic"
+  r4: "start swappable flowgraphs"
+  r5: "UDP command loop"
+}
+
+swap_ops: {
+  label: "Swap operations"
+  s1: "park selectors"
+  s2: "terminate old swappable FG"
+  s3: "clear connected channels"
+  s4: "parse new TOML + ensure plugins"
+  s5: "build + start replacement"
+  s6: "on failure: restore previous TOML"
+  s7: "unpark selectors"
+}
+
+port_model: {
+  label: "Port model"
+  p1: "[[ports]] direction=out\nsrc=block.port"
+  p2: "[[ports]] direction=in\ndst=block.port"
+  p3: "router=selector id (optional)"
+  p4: "type=u8|f32|c32"
+  p5: "channel key format <fg_idx>:<port_id>"
+}
+
+auto_injection: {
+  label: "Auto bridge injection"
+  a1: "direction=out => add_bridge_sink(type)"
+  a2: "direction=in => add_bridge_source(type)"
+  a3: "connect bridge to declared src/dst"
+}
+
+limits: {
+  label: "Current scope / limits"
+  l1: "stream bridging only"
+  l2: "single process memory channels"
+  l3: "swap target must be declared swappable fg"
+  l4: "relies on plugin ABI compatibility"
+}
+
+builder.b1 -> runtime_ops.r2
+builder.b2 -> runtime_ops.r4
+builder.b3 -> port_model.p5
+builder.b4 -> runtime_ops.r5
+builder.b5 -> runtime_ops.r1
+
+port_model.p1 -> auto_injection.a1
+port_model.p2 -> auto_injection.a2
+port_model.p3 -> swap_ops.s1
+port_model.p4 -> auto_injection.a1
+port_model.p4 -> auto_injection.a2
+
+runtime_ops.r5 -> swap_ops.s1
+swap_ops.s5 -> swap_ops.s6: "if error"
+swap_ops.s5 -> swap_ops.s7: "if success"
+
+auto_injection.a3 -> limits.l1
+runtime_ops.r1 -> limits.l4

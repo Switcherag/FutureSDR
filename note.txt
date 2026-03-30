@@ -144,3 +144,5 @@ Multiple swappable FGs (fg1, fg2, …) each with their own ID and port.
 Multiple connections (fg0:out1 → fg1:in, fg0:out2 → fg2:in).
 Each connection has its own router (the selector block of the upstream FG that gates that specific output).
 UDP command: -s fg_id path/to/new.toml — the fg_id says which flowgraph to swap.
+
+maybe flowgraphcontroller should derive from runtime.rs

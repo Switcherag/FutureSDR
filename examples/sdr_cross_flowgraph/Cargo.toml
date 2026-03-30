@@ -1,11 +1,11 @@
 [package]
-name = "cross-flowgraph-example"
+name = "sdr-cross-flowgraph-example"
 version = "0.1.0"
 edition = "2021"
 build = "../../plugin_build.rs"
 
 [[bin]]
-name = "cross_fg"
+name = "sdr_cross_fg"
 path = "src/main.rs"
 
 [dependencies]

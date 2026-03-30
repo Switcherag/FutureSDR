@@ -1,71 +1,56 @@
-//! Flowgraph controller — build and hot-swap flowgraphs from TOML definitions.
+//! Multi-flowgraph controller with builder pattern, auto-injected bridges, and UDP control.
 //!
 //! # Architecture
 //!
-//! ```text
-//!   FG0 (permanent):
-//!     Source → ... → Selector
-//!                      → outputs[0]: NullSink   (parking drain)
-//!                      → outputs[1]: BridgeSink (→ shared buffer)
+//! Flowgraphs are defined in TOML. Each flowgraph declares **ports** — named
+//! entry/exit points. The controller automatically injects bridge blocks
+//! (sink/source) to transfer data between flowgraphs. Users never write bridge
+//! blocks in TOML.
 //!
-//!   FG1 (swappable, loaded from TOML):
-//!     BridgeSource (← shared buffer) → ... → Sink
+//! ```text
+//!   FG 0 (permanent):
+//!     SeifySource -> Selector
+//!                      -> outputs[0]: NullSink
+//!                      -> outputs[1]: [auto BridgeSink] ──> shared buffer
+//!
+//!   FG 1 (swappable):
+//!     [auto BridgeSource] <── shared buffer -> ... -> Decoder
 //! ```
 //!
-//! The controller manages:
-//! - A [`PluginRegistry`] that caches loaded `.so` plugins
-//! - TOML-based flowgraph construction with full type support via
-//!   [`ConfigValue`](crate::config_value::ConfigValue)
-//! - Hot-swap sequence with automatic error recovery
+//! # Builder usage
+//!
+//! ```ignore
+//! FlowgraphController::builder(default_plugin_dir())
+//!     .add_permanent("flows/fg0.toml")        // fg 0
+//!     .add_swappable("flows/flow_a.toml")     // fg 1
+//!     .connect(0, "out", 1, "in")
+//!     .udp_port(7878)
+//!     .run()?;
+//! ```
 //!
 //! # TOML format
 //!
 //! ```toml
-//! [[blocks]]
-//! id = "src"
-//! plugin = "bridge_source_plugin"
-//! bridge = true                       # receives the shared bridge buffer
+//! # Output port: controller auto-adds a bridge sink after sel.outputs[1]
+//! [[ports]]
+//! id = "out"
+//! direction = "out"
+//! src = "sel.outputs[1]"   # block.port to tap
+//! router = "sel"            # optional: selector to park during swap
+//! type = "c32"              # stream type: u8, f32, c32
 //!
-//! [[blocks]]
-//! id = "throttle"
-//! plugin = "throttle_plugin"
-//! config = 1000000.0                  # TOML float → auto-detected as f64
-//!
-//! [[blocks]]
-//! id = "decoder"
-//! plugin = "zigbee_decoder_plugin"
-//! config = 11                         # integer, but plugin expects u32
-//! config_type = "u32"                 # explicit type override
-//!
-//! [[blocks]]
-//! id = "resampler"
-//! plugin = "fir_resampler_plugin"
-//! config = [3, 5]                     # TOML array → tuple
-//! config_type = "(usize, usize)"
-//!
-//! [[blocks]]
-//! id = "file_src"
-//! plugin = "file_source_plugin"
-//! config = ["/tmp/data.bin", true]
-//! config_type = "(String, bool)"
-//!
-//! [[blocks]]
-//! id = "sink"
-//! plugin = "print_sink_plugin"
-//! config = "My Flow"                  # auto-detected as String
-//!
-//! [[connections]]
-//! src = "src.output"                  # block_id.port_name
-//! dst = "throttle.input"
-//!
-//! [[connections]]
-//! src = "throttle.output"
-//! dst = "sink.input"
+//! # Input port: controller auto-adds a bridge source before demod.input
+//! [[ports]]
+//! id = "in"
+//! direction = "in"
+//! dst = "demod.input"      # block.port to feed
+//! type = "c32"
 //! ```
 
+use crate::bridge;
 use crate::config_value::{ConfigValue, parse_typed_config};
 use crate::{LoadedPlugin, plugin_path};
-use futuresdr::runtime::{BlockId, Flowgraph, FlowgraphHandle, Pmt, RuntimeHandle};
+use futuresdr::runtime::{BlockId, Flowgraph, FlowgraphHandle, Pmt, Runtime, RuntimeHandle, WrappedKernel};
 use serde::Deserialize;
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
@@ -77,29 +62,56 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Deserialize)]
 struct FlowgraphDef {
+    #[serde(default)]
+    ports: Vec<PortDef>,
+    #[serde(default)]
     blocks: Vec<BlockDef>,
+    #[serde(default)]
     connections: Vec<ConnectionDef>,
+}
+
+#[derive(Deserialize, Clone)]
+struct PortDef {
+    id: String,
+    direction: PortDirection,
+    /// For output ports: `"block.port"` whose output gets bridged out.
+    src: Option<String>,
+    /// For input ports: `"block.port"` that receives bridged-in data.
+    dst: Option<String>,
+    /// Optional selector block to park/unpark during swap.
+    router: Option<String>,
+    /// Stream element type: `"u8"` (default), `"f32"`, `"c32"` (Complex32).
+    #[serde(rename = "type", default)]
+    stream_type: StreamType,
+}
+
+#[derive(Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum PortDirection {
+    In,
+    Out,
+}
+
+#[derive(Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+enum StreamType {
+    #[default]
+    U8,
+    F32,
+    C32,
 }
 
 #[derive(Deserialize)]
 struct BlockDef {
     id: String,
     plugin: String,
-    /// If true, this block receives the shared bridge buffer as its config.
-    #[serde(default)]
-    bridge: bool,
-    /// Config value — see module docs for type mapping.
     config: Option<toml::Value>,
-    /// Explicit Rust type name for the config (e.g. `"u32"`, `"(usize, usize)"`).
-    /// When omitted, auto-detection maps: string→String, float→f64, int→u64, bool→bool.
     config_type: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ConnectionDef {
-    /// `"block_id.port_name"` e.g. `"src.output"` or `"sel.outputs[1]"`
     src: String,
-    /// `"block_id.port_name"` e.g. `"sink.input"` or `"sel.inputs[0]"`
     dst: String,
 }
 
@@ -118,7 +130,6 @@ impl PluginRegistry {
         Self { dir: dir.into(), plugins: HashMap::new() }
     }
 
-    /// Load a plugin into the cache (no-op if already loaded).
     pub fn ensure_loaded(&mut self, name: &str) {
         if !self.plugins.contains_key(name) {
             let path = plugin_path(&self.dir, name);
@@ -127,7 +138,6 @@ impl PluginRegistry {
         }
     }
 
-    /// Get a reference to a loaded plugin. Panics if not loaded.
     pub fn get(&self, name: &str) -> &LoadedPlugin {
         self.plugins
             .get(name)
@@ -140,105 +150,451 @@ impl PluginRegistry {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// FlowgraphController
+// Builder
 // ════════════════════════════════════════════════════════════════════
 
-/// Controls a swappable flowgraph (FG1) connected to a permanent flowgraph (FG0)
-/// through a shared bridge buffer and a Selector block.
-///
-/// The controller handles:
-/// - Plugin loading and caching
-/// - TOML-based flowgraph construction with full type support
-/// - Hot-swap: park selector → terminate FG1 → clear buffer → build new FG1 →
-///   start → unpark selector
-/// - Error recovery: restores the previous flowgraph on swap failure
-pub struct FlowgraphController {
-    pub registry: PluginRegistry,
-    shared_buf: Arc<Mutex<VecDeque<u8>>>,
-    selector_id: BlockId,
-    current_toml: String,
+struct FgEntry {
+    toml_path: String,
+    permanent: bool,
+}
+
+struct Connection {
+    from_fg: usize,
+    from_port: String,
+    to_fg: usize,
+    to_port: String,
+}
+
+/// Builder for [`FlowgraphController`].
+pub struct FlowgraphControllerBuilder {
+    plugin_dir: String,
+    flowgraphs: Vec<FgEntry>,
+    connections: Vec<Connection>,
+    udp_port: Option<u16>,
     custom_parsers: HashMap<String, fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>>,
 }
 
-impl FlowgraphController {
-    /// Create a new controller.
+impl FlowgraphControllerBuilder {
+    /// Add a permanent (non-swappable) flowgraph.
+    pub fn add_permanent(mut self, toml_path: impl Into<String>) -> Self {
+        self.flowgraphs.push(FgEntry { toml_path: toml_path.into(), permanent: true });
+        self
+    }
+
+    /// Add a swappable flowgraph (hot-swappable at runtime via UDP).
+    pub fn add_swappable(mut self, toml_path: impl Into<String>) -> Self {
+        self.flowgraphs.push(FgEntry { toml_path: toml_path.into(), permanent: false });
+        self
+    }
+
+    /// Connect an output port of one flowgraph to an input port of another.
     ///
-    /// - `plugin_dir`: directory containing `.so` plugin files
-    /// - `selector_id`: the Selector block in FG0 that routes to the bridge
-    pub fn new(plugin_dir: impl Into<String>, selector_id: BlockId) -> Self {
-        Self {
-            registry: PluginRegistry::new(plugin_dir),
-            shared_buf: Arc::new(Mutex::new(VecDeque::new())),
-            selector_id,
-            current_toml: String::new(),
+    /// Uses flowgraph indices (matching `FlowgraphId`) and port names from TOML.
+    pub fn connect(
+        mut self,
+        from_fg: usize, from_port: impl Into<String>,
+        to_fg: usize, to_port: impl Into<String>,
+    ) -> Self {
+        self.connections.push(Connection {
+            from_fg, from_port: from_port.into(),
+            to_fg, to_port: to_port.into(),
+        });
+        self
+    }
+
+    /// Set the UDP control port (default: 7878).
+    pub fn udp_port(mut self, port: u16) -> Self {
+        self.udp_port = Some(port);
+        self
+    }
+
+    /// Register a custom config parser for a type name not covered by built-ins.
+    pub fn register_config_parser(
+        mut self,
+        type_name: &str,
+        parser: fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>,
+    ) -> Self {
+        self.custom_parsers.insert(type_name.to_string(), parser);
+        self
+    }
+
+    /// Build, start, and run the full system. Blocks until shutdown.
+    pub fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Build channel keys and shared buffers
+        let mut channels: HashMap<String, Arc<Mutex<VecDeque<u8>>>> = HashMap::new();
+        for conn in &self.connections {
+            let from_key = format!("{}:{}", conn.from_fg, conn.from_port);
+            let to_key = format!("{}:{}", conn.to_fg, conn.to_port);
+            let buf = Arc::new(Mutex::new(VecDeque::new()));
+            channels.insert(from_key, buf.clone());
+            channels.insert(to_key, buf);
+        }
+
+        let udp_port = self.udp_port.unwrap_or(7878);
+        let socket = std::net::UdpSocket::bind(format!("0.0.0.0:{udp_port}"))
+            .map_err(|e| format!("bind UDP :{udp_port}: {e}"))?;
+        socket.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
+
+        let mut registry = PluginRegistry::new(&self.plugin_dir);
+        let custom_parsers = self.custom_parsers;
+
+        // Pre-load all plugins
+        for entry in &self.flowgraphs {
+            let content = std::fs::read_to_string(&entry.toml_path)
+                .map_err(|e| format!("cannot read '{}': {e}", entry.toml_path))?;
+            let def: FlowgraphDef = toml::from_str(&content)
+                .map_err(|e| format!("invalid TOML '{}': {e}", entry.toml_path))?;
+            for block in &def.blocks {
+                registry.ensure_loaded(&block.plugin);
+            }
+        }
+
+        let rt = Runtime::new();
+        let rt_handle = rt.handle();
+        let flowgraphs = self.flowgraphs;
+        let connections = self.connections;
+
+        println!("Listening for UDP commands on port {udp_port}");
+        println!("  -s <path.toml>              swap first swappable FG");
+        println!("  -s <fg_index> <path.toml>   swap specific FG by index");
+        println!("  Q                           quit\n");
+
+        rt.block_on(async move {
+            let mut ctrl = FlowgraphController::new(
+                registry, channels, custom_parsers, connections,
+            );
+
+            // Start permanent FGs
+            for (idx, entry) in flowgraphs.iter().enumerate() {
+                if entry.permanent {
+                    println!("Starting permanent flowgraph {idx} from '{}' ...", entry.toml_path);
+                    ctrl.start_permanent(idx, &entry.toml_path, &rt_handle).await?;
+                    println!("  fg/{idx}/ running.");
+                }
+            }
+
+            ctrl.activate_selectors().await?;
+
+            // Start swappable FGs
+            for (idx, entry) in flowgraphs.iter().enumerate() {
+                if !entry.permanent {
+                    println!("Starting swappable flowgraph {idx} from '{}' ...", entry.toml_path);
+                    ctrl.start_swappable(idx, &entry.toml_path, &rt_handle).await?;
+                    println!("  fg/{idx}/ running.");
+                }
+            }
+
+            println!("\nAll flowgraphs running.\n");
+
+            let first_swappable_idx = flowgraphs.iter()
+                .enumerate()
+                .find(|(_, e)| !e.permanent)
+                .map(|(i, _)| i);
+
+            let mut udp_buf = [0u8; 512];
+            loop {
+                futuresdr::async_io::Timer::after(std::time::Duration::from_millis(100)).await;
+
+                match socket.recv_from(&mut udp_buf) {
+                    Ok((n, addr)) => {
+                        let cmd = std::str::from_utf8(&udp_buf[..n]).unwrap_or("").trim();
+                        println!("UDP from {addr}: \"{cmd}\"");
+
+                        if cmd.eq_ignore_ascii_case("q") {
+                            println!("Shutting down ...");
+                            ctrl.shutdown_all().await;
+                            break;
+                        } else if let Some(rest) = cmd.strip_prefix("-s ").or_else(|| cmd.strip_prefix("-S ")) {
+                            let rest = rest.trim();
+                            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+                            let (fg_idx, toml_path) = if parts.len() == 2 {
+                                if let Ok(idx) = parts[0].parse::<usize>() {
+                                    (idx, parts[1].to_string())
+                                } else {
+                                    eprintln!("ERROR: invalid fg index '{}'", parts[0]);
+                                    continue;
+                                }
+                            } else if let Some(idx) = first_swappable_idx {
+                                (idx, parts[0].to_string())
+                            } else {
+                                eprintln!("ERROR: no swappable flowgraph defined");
+                                continue;
+                            };
+
+                            println!("Swapping fg/{fg_idx}/ to '{toml_path}' ...");
+                            match ctrl.swap(fg_idx, &toml_path, &rt_handle).await {
+                                Ok(()) => println!("fg/{fg_idx}/ now running '{toml_path}'\n"),
+                                Err(e) => eprintln!("ERROR: {e}\n"),
+                            }
+                        } else {
+                            println!("Unknown command. Use: -s [fg_index] <path.toml> | Q");
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => eprintln!("UDP error: {e}"),
+                }
+            }
+
+            println!("Done.");
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        })
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// FlowgraphController
+// ════════════════════════════════════════════════════════════════════
+
+struct SelectorInfo {
+    perm_fg: usize,
+    block_id: BlockId,
+    channel_key: String,
+}
+
+struct SwappableState {
+    handle: FlowgraphHandle,
+    current_toml: String,
+}
+
+/// Controls multiple flowgraphs connected through auto-injected bridge blocks.
+pub struct FlowgraphController {
+    registry: PluginRegistry,
+    channels: HashMap<String, Arc<Mutex<VecDeque<u8>>>>,
+    custom_parsers: HashMap<String, fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>>,
+    connections: Vec<Connection>,
+    perm_handles: HashMap<usize, FlowgraphHandle>,
+    selector_infos: Vec<SelectorInfo>,
+    swap_states: HashMap<usize, SwappableState>,
+}
+
+impl FlowgraphController {
+    /// Create a builder for configuring the controller.
+    pub fn builder(plugin_dir: impl Into<String>) -> FlowgraphControllerBuilder {
+        FlowgraphControllerBuilder {
+            plugin_dir: plugin_dir.into(),
+            flowgraphs: Vec::new(),
+            connections: Vec::new(),
+            udp_port: None,
             custom_parsers: HashMap::new(),
         }
     }
 
-    /// Register a custom config parser for a type name not covered by the built-in set.
-    ///
-    /// ```ignore
-    /// ctrl.register_config_parser("SelectorDropPolicy", |v| {
-    ///     let s = v.as_string()?;
-    ///     match s.as_str() {
-    ///         "DropAll" => Ok(Box::new(SelectorDropPolicy::DropAll)),
-    ///         "DropNone" => Ok(Box::new(SelectorDropPolicy::DropNone)),
-    ///         _ => Err(format!("unknown policy '{s}'")),
-    ///     }
-    /// });
-    /// ```
-    pub fn register_config_parser(
+    fn new(
+        registry: PluginRegistry,
+        channels: HashMap<String, Arc<Mutex<VecDeque<u8>>>>,
+        custom_parsers: HashMap<String, fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>>,
+        connections: Vec<Connection>,
+    ) -> Self {
+        Self {
+            registry, channels, custom_parsers, connections,
+            perm_handles: HashMap::new(),
+            selector_infos: Vec::new(),
+            swap_states: HashMap::new(),
+        }
+    }
+
+    async fn start_permanent(
         &mut self,
-        type_name: &str,
-        parser: fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>,
-    ) {
-        self.custom_parsers.insert(type_name.to_string(), parser);
-    }
-
-    /// Returns a clone of the shared bridge buffer for use when building FG0.
-    pub fn shared_buf(&self) -> Arc<Mutex<VecDeque<u8>>> {
-        self.shared_buf.clone()
-    }
-
-    /// Returns the path of the currently active TOML flowgraph.
-    pub fn current_toml(&self) -> &str {
-        &self.current_toml
-    }
-
-    /// Build a `Flowgraph` from a TOML file.
-    ///
-    /// Automatically loads any plugins referenced in the TOML that aren't
-    /// already cached. Config values are parsed according to `config_type`
-    /// (or auto-detected if omitted).
-    pub fn build_flowgraph(
-        &mut self,
+        fg_idx: usize,
         toml_path: &str,
-    ) -> Result<Flowgraph, Box<dyn std::error::Error + Send + Sync>> {
+        rt_handle: &RuntimeHandle,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (fg, block_ids, port_defs) = self.build_flowgraph_full(fg_idx, toml_path)?;
+        let handle = rt_handle.start(fg).await
+            .map_err(|e| format!("start permanent fg/{fg_idx}/: {e}"))?;
+
+        for port in &port_defs {
+            if port.direction == PortDirection::Out {
+                if let Some(ref router_id) = port.router {
+                    let sel_block_id = *block_ids.get(router_id)
+                        .ok_or_else(|| format!(
+                            "router '{}' not found in fg/{fg_idx}/", router_id
+                        ))?;
+                    self.selector_infos.push(SelectorInfo {
+                        perm_fg: fg_idx,
+                        block_id: sel_block_id,
+                        channel_key: format!("{fg_idx}:{}", port.id),
+                    });
+                }
+            }
+        }
+
+        self.perm_handles.insert(fg_idx, handle);
+        Ok(())
+    }
+
+    async fn activate_selectors(
+        &mut self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        for sel in &self.selector_infos {
+            let handle = self.perm_handles.get_mut(&sel.perm_fg)
+                .ok_or_else(|| format!("perm fg/{} not found", sel.perm_fg))?;
+            handle.callback(sel.block_id, "output_index", Pmt::U32(1)).await
+                .map_err(|e| format!("activate selector in fg/{}/: {e}", sel.perm_fg))?;
+        }
+        Ok(())
+    }
+
+    async fn start_swappable(
+        &mut self,
+        fg_idx: usize,
+        toml_path: &str,
+        rt_handle: &RuntimeHandle,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (fg, _, _) = self.build_flowgraph_full(fg_idx, toml_path)?;
+        let handle = rt_handle.start(fg).await
+            .map_err(|e| format!("start swappable fg/{fg_idx}/: {e}"))?;
+        self.swap_states.insert(fg_idx, SwappableState {
+            handle,
+            current_toml: toml_path.to_string(),
+        });
+        Ok(())
+    }
+
+    async fn swap(
+        &mut self,
+        fg_idx: usize,
+        new_toml: &str,
+        rt_handle: &RuntimeHandle,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let state = self.swap_states.get(&fg_idx)
+            .ok_or_else(|| format!("unknown swappable fg/{fg_idx}/"))?;
+        let prev_toml = state.current_toml.clone();
+
+        // 1. Park selectors connected to this FG (if any)
+        let connected_sels: Vec<usize> = self.selector_infos.iter()
+            .enumerate()
+            .filter(|(_, sel)| {
+                self.connections.iter().any(|conn| {
+                    let from_key = format!("{}:{}", conn.from_fg, conn.from_port);
+                    from_key == sel.channel_key && conn.to_fg == fg_idx
+                })
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        for &idx in &connected_sels {
+            let sel = &self.selector_infos[idx];
+            let handle = self.perm_handles.get_mut(&sel.perm_fg).unwrap();
+            handle.callback(sel.block_id, "output_index", Pmt::U32(0)).await
+                .map_err(|e| format!("park selector: {e}"))?;
+        }
+
+        // 2. Terminate old FG
+        self.swap_states.get_mut(&fg_idx).unwrap()
+            .handle.terminate_and_wait().await
+            .map_err(|e| format!("terminate fg/{fg_idx}/: {e}"))?;
+
+        // 3. Clear connected buffers
+        for conn in &self.connections {
+            if conn.to_fg == fg_idx {
+                let from_key = format!("{}:{}", conn.from_fg, conn.from_port);
+                if let Some(buf) = self.channels.get(&from_key) {
+                    buf.lock().unwrap().clear();
+                }
+            }
+        }
+
+        // 4. Load new plugins if needed
+        let content = std::fs::read_to_string(new_toml)
+            .map_err(|e| format!("cannot read '{new_toml}': {e}"))?;
+        let def: FlowgraphDef = toml::from_str(&content)
+            .map_err(|e| format!("invalid TOML '{new_toml}': {e}"))?;
+        for block in &def.blocks {
+            self.registry.ensure_loaded(&block.plugin);
+        }
+
+        // 5. Build & start (with fallback)
+        match self.build_flowgraph_full(fg_idx, new_toml) {
+            Ok((fg, _, _)) => {
+                match rt_handle.start(fg).await {
+                    Ok(handle) => {
+                        let state = self.swap_states.get_mut(&fg_idx).unwrap();
+                        state.handle = handle;
+                        state.current_toml = new_toml.to_string();
+                    }
+                    Err(e) => {
+                        self.restore_and_unpark(fg_idx, &prev_toml, &connected_sels, rt_handle).await?;
+                        return Err(format!("start fg/{fg_idx}/ failed ({e}), restored '{prev_toml}'").into());
+                    }
+                }
+            }
+            Err(e) => {
+                self.restore_and_unpark(fg_idx, &prev_toml, &connected_sels, rt_handle).await?;
+                return Err(format!("build fg/{fg_idx}/ failed ({e}), restored '{prev_toml}'").into());
+            }
+        }
+
+        // 6. Unpark selectors
+        for &idx in &connected_sels {
+            let sel = &self.selector_infos[idx];
+            let handle = self.perm_handles.get_mut(&sel.perm_fg).unwrap();
+            handle.callback(sel.block_id, "output_index", Pmt::U32(1)).await
+                .map_err(|e| format!("unpark selector: {e}"))?;
+        }
+
+        Ok(())
+    }
+
+    async fn restore_and_unpark(
+        &mut self,
+        fg_idx: usize,
+        prev_toml: &str,
+        connected_sels: &[usize],
+        rt_handle: &RuntimeHandle,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (fg, _, _) = self.build_flowgraph_full(fg_idx, prev_toml)
+            .map_err(|e| format!("failed to restore '{prev_toml}': {e}"))?;
+        let handle = rt_handle.start(fg).await
+            .map_err(|e| format!("failed to start restored fg/{fg_idx}/: {e}"))?;
+        self.swap_states.get_mut(&fg_idx).unwrap().handle = handle;
+
+        for &idx in connected_sels {
+            let sel = &self.selector_infos[idx];
+            let h = self.perm_handles.get_mut(&sel.perm_fg).unwrap();
+            h.callback(sel.block_id, "output_index", Pmt::U32(1)).await
+                .map_err(|e| format!("unpark after restore: {e}"))?;
+        }
+        Ok(())
+    }
+
+    async fn shutdown_all(&mut self) {
+        for (idx, state) in &mut self.swap_states {
+            if let Err(e) = state.handle.terminate_and_wait().await {
+                eprintln!("warn: terminate swappable fg/{idx}/: {e}");
+            }
+        }
+        for (idx, handle) in &mut self.perm_handles {
+            if let Err(e) = handle.terminate_and_wait().await {
+                eprintln!("warn: terminate permanent fg/{idx}/: {e}");
+            }
+        }
+    }
+
+    // ── Flowgraph building with auto-injected bridges ──────────────
+
+    fn build_flowgraph_full(
+        &self,
+        fg_idx: usize,
+        toml_path: &str,
+    ) -> Result<(Flowgraph, HashMap<String, BlockId>, Vec<PortDef>), Box<dyn std::error::Error + Send + Sync>> {
         let content = std::fs::read_to_string(toml_path)
             .map_err(|e| format!("cannot read '{toml_path}': {e}"))?;
         let def: FlowgraphDef = toml::from_str(&content)
             .map_err(|e| format!("invalid TOML in '{toml_path}': {e}"))?;
 
-        // Ensure all required plugins are loaded
-        for block in &def.blocks {
-            self.registry.ensure_loaded(&block.plugin);
-        }
-
         let mut fg = Flowgraph::new();
         let mut block_ids: HashMap<String, BlockId> = HashMap::new();
 
+        // 1. Build all user-declared blocks
         for block in &def.blocks {
-            let config: Box<dyn Any + Send> = if block.bridge {
-                Box::new(self.shared_buf.clone())
-            } else {
-                self.parse_block_config(block)?
-            };
-
+            let config = self.parse_block_config(block)?;
             let plugin = self.registry.get(&block.plugin);
             let id = fg.add_block_dyn(plugin.prepare(config));
             block_ids.insert(block.id.clone(), id);
         }
 
+        // 2. Make all user-declared connections
         for conn in &def.connections {
             let (src_block, src_port) = conn.src.split_once('.')
                 .ok_or_else(|| format!("invalid src '{}', expected 'block.port'", conn.src))?;
@@ -251,105 +607,49 @@ impl FlowgraphController {
                 .ok_or_else(|| format!("unknown block '{dst_block}' in connection"))?;
 
             fg.connect_dyn(src_id, src_port, dst_id, dst_port)
-                .map_err(|e| format!("connect {src_block}.{src_port} → {dst_block}.{dst_port}: {e}"))?;
+                .map_err(|e| format!("connect {src_block}.{src_port} -> {dst_block}.{dst_port}: {e}"))?;
         }
 
-        Ok(fg)
-    }
+        // 3. Auto-inject bridge blocks for each port
+        for port in &def.ports {
+            let channel_key = format!("{fg_idx}:{}", port.id);
+            let buf = self.channels.get(&channel_key)
+                .ok_or_else(|| format!(
+                    "no channel for '{channel_key}' — check connect() calls"
+                ))?;
 
-    /// Start the initial swappable flowgraph from a TOML file.
-    ///
-    /// Routes the selector to output\[1\] (bridge) and starts the flowgraph.
-    pub async fn start_initial(
-        &mut self,
-        toml_path: &str,
-        fg0_handle: &mut FlowgraphHandle,
-        rt_handle: &RuntimeHandle,
-    ) -> Result<FlowgraphHandle, Box<dyn std::error::Error + Send + Sync>> {
-        fg0_handle
-            .callback(self.selector_id, "output_index", Pmt::U32(1))
-            .await
-            .map_err(|e| format!("failed to route selector: {e}"))?;
+            match port.direction {
+                PortDirection::Out => {
+                    // Auto-inject bridge sink: src_block.src_port -> bridge_sink.input
+                    let src_spec = port.src.as_ref()
+                        .ok_or_else(|| format!("output port '{}' missing 'src' field", port.id))?;
+                    let (src_block, src_port) = src_spec.split_once('.')
+                        .ok_or_else(|| format!("invalid port src '{src_spec}', expected 'block.port'"))?;
+                    let &src_id = block_ids.get(src_block)
+                        .ok_or_else(|| format!("unknown block '{src_block}' in port '{}'", port.id))?;
 
-        let fg = self.build_flowgraph(toml_path)?;
-        let handle = rt_handle.start(fg).await
-            .map_err(|e| format!("failed to start flowgraph: {e}"))?;
-        self.current_toml = toml_path.to_string();
-        Ok(handle)
-    }
+                    let bridge_id = add_bridge_sink(&mut fg, &port.stream_type, buf.clone());
+                    fg.connect_dyn(src_id, src_port, bridge_id, "input")
+                        .map_err(|e| format!("connect {src_spec} -> bridge_sink: {e}"))?;
+                }
+                PortDirection::In => {
+                    // Auto-inject bridge source: bridge_source.output -> dst_block.dst_port
+                    let dst_spec = port.dst.as_ref()
+                        .ok_or_else(|| format!("input port '{}' missing 'dst' field", port.id))?;
+                    let (dst_block, dst_port) = dst_spec.split_once('.')
+                        .ok_or_else(|| format!("invalid port dst '{dst_spec}', expected 'block.port'"))?;
+                    let &dst_id = block_ids.get(dst_block)
+                        .ok_or_else(|| format!("unknown block '{dst_block}' in port '{}'", port.id))?;
 
-    /// Hot-swap the running FG1 to a new flowgraph defined by a TOML file.
-    ///
-    /// On error, the previous flowgraph is automatically restored.
-    /// Returns `Ok(())` on success, or `Err(message)` if the new TOML failed
-    /// (but the previous flowgraph has been restored).
-    pub async fn swap(
-        &mut self,
-        new_toml: &str,
-        fg0_handle: &mut FlowgraphHandle,
-        fg1_handle: &mut FlowgraphHandle,
-        rt_handle: &RuntimeHandle,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // 1. Park selector → output[0] (NullSink)
-        fg0_handle
-            .callback(self.selector_id, "output_index", Pmt::U32(0))
-            .await
-            .map_err(|e| format!("failed to park selector: {e}"))?;
-
-        // 2. Terminate old FG1
-        fg1_handle.terminate_and_wait().await
-            .map_err(|e| format!("failed to terminate FG1: {e}"))?;
-
-        // 3. Clear the shared buffer
-        self.shared_buf.lock().unwrap().clear();
-
-        // 4. Build & start new FG1
-        match self.build_flowgraph(new_toml) {
-            Ok(fg) => {
-                *fg1_handle = rt_handle.start(fg).await
-                    .map_err(|e| format!("failed to start new FG1: {e}"))?;
-                self.current_toml = new_toml.to_string();
-
-                // 5. Unpark selector → output[1] (bridge)
-                fg0_handle
-                    .callback(self.selector_id, "output_index", Pmt::U32(1))
-                    .await
-                    .map_err(|e| format!("failed to unpark selector: {e}"))?;
-
-                Ok(())
-            }
-            Err(e) => {
-                // Fallback: restore the previous flowgraph
-                let prev = self.current_toml.clone();
-                let fg = self.build_flowgraph(&prev)
-                    .map_err(|e2| format!("failed to restore '{prev}': {e2}"))?;
-                *fg1_handle = rt_handle.start(fg).await
-                    .map_err(|e2| format!("failed to start restored FG1: {e2}"))?;
-
-                fg0_handle
-                    .callback(self.selector_id, "output_index", Pmt::U32(1))
-                    .await
-                    .map_err(|e2| format!("failed to unpark after restore: {e2}"))?;
-
-                Err(format!("swap failed ({e}), restored '{prev}'").into())
+                    let bridge_id = add_bridge_source(&mut fg, &port.stream_type, buf.clone());
+                    fg.connect_dyn(bridge_id, "output", dst_id, dst_port)
+                        .map_err(|e| format!("connect bridge_source -> {dst_spec}: {e}"))?;
+                }
             }
         }
-    }
 
-    /// Terminate both FG1 and FG0.
-    pub async fn shutdown(
-        &self,
-        fg0_handle: &mut FlowgraphHandle,
-        fg1_handle: &mut FlowgraphHandle,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        fg1_handle.terminate_and_wait().await
-            .map_err(|e| format!("failed to terminate FG1: {e}"))?;
-        fg0_handle.terminate_and_wait().await
-            .map_err(|e| format!("failed to terminate FG0: {e}"))?;
-        Ok(())
+        Ok((fg, block_ids, def.ports))
     }
-
-    // ── Private ──────────────────────────────────────────────────
 
     fn parse_block_config(
         &self,
@@ -359,10 +659,8 @@ impl FlowgraphController {
             None => ConfigValue::Unit,
             Some(v) => ConfigValue::from_toml(v.clone()),
         };
-
         let type_hint = block.config_type.as_deref();
 
-        // Try custom parsers first
         if let Some(type_name) = type_hint {
             if let Some(parser) = self.custom_parsers.get(type_name) {
                 return parser(value).map_err(|e| {
@@ -375,5 +673,43 @@ impl FlowgraphController {
         parse_typed_config(value, type_hint).map_err(|e| {
             format!("block '{}': {e}", block.id).into()
         })
+    }
+}
+
+// ── Bridge block factories ─────────────────────────────────────────
+
+fn add_bridge_sink(
+    fg: &mut Flowgraph,
+    stream_type: &StreamType,
+    buf: Arc<Mutex<VecDeque<u8>>>,
+) -> BlockId {
+    match stream_type {
+        StreamType::U8 => fg.add_block_dyn(|id| {
+            Box::new(WrappedKernel::new(bridge::BridgeSinkU8::new(buf), id))
+        }),
+        StreamType::F32 => fg.add_block_dyn(|id| {
+            Box::new(WrappedKernel::new(bridge::BridgeSinkF32::new(buf), id))
+        }),
+        StreamType::C32 => fg.add_block_dyn(|id| {
+            Box::new(WrappedKernel::new(bridge::BridgeSinkC32::new(buf), id))
+        }),
+    }
+}
+
+fn add_bridge_source(
+    fg: &mut Flowgraph,
+    stream_type: &StreamType,
+    buf: Arc<Mutex<VecDeque<u8>>>,
+) -> BlockId {
+    match stream_type {
+        StreamType::U8 => fg.add_block_dyn(|id| {
+            Box::new(WrappedKernel::new(bridge::BridgeSourceU8::new(buf), id))
+        }),
+        StreamType::F32 => fg.add_block_dyn(|id| {
+            Box::new(WrappedKernel::new(bridge::BridgeSourceF32::new(buf), id))
+        }),
+        StreamType::C32 => fg.add_block_dyn(|id| {
+            Box::new(WrappedKernel::new(bridge::BridgeSourceC32::new(buf), id))
+        }),
     }
 }

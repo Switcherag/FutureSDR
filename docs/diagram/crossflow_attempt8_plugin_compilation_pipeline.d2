@@ -1,0 +1,45 @@
+title: Cross Flowgraph - Attempt 8 (Plugin Compilation and Load Pipeline)
+
+direction: down
+
+source: "Plugin source crate\n(lib crate-type=dylib)"
+manifest: "Cargo.toml\nplugin_api + futuresdr(feature=plugin)"
+flags: "RUSTFLAGS\nprefer-dynamic, panic=unwind, lto=off"
+toolchain: "Pinned rust-toolchain.toml\n(exact rustc matters)"
+abi_embed: "build.rs emits ABI fingerprint env\nFUTURESDR_ABI_FINGERPRINT(_DETAIL)"
+macro: "export_plugin! macro emits:\ncreate_block_factory + plugin_abi_fingerprint"
+artifact: "lib<plugin>.so"
+
+sdk: {
+  label: "Optional plugin_sdk workflow"
+  s1: "setup_plugins.sh --sdk"
+  s2: "libfuturesdr.so"
+  s3: "matching libstd-*.so"
+  s4: "manifest.json"
+  s5: "build.env"
+  s1 -> s2
+  s1 -> s3
+  s1 -> s4
+  s1 -> s5
+}
+
+runtime_load: {
+  label: "Runtime loading path"
+  l1: "PluginRegistry::ensure_loaded(name)"
+  l2: "LoadedPlugin::load(path)"
+  l3: "dlopen + symbol lookup"
+  l4: "plugin_abi_fingerprint()"
+  l5: "compare with runtime ABI fingerprint"
+  l6: "load create_block_factory symbol"
+  l7: "factory.create_block(id, config)"
+  l1 -> l2 -> l3 -> l4 -> l5 -> l6 -> l7
+}
+
+mismatch: "ABI mismatch => explicit error\nprevent silent memory corruption"
+unchecked: "load_unchecked() bypasses ABI check\n(dev-only risk path)"
+
+source -> manifest -> flags -> toolchain -> abi_embed -> macro -> artifact
+artifact -> runtime_load.l1
+runtime_load.l5 -> mismatch: "if different"
+runtime_load.l2 -> unchecked: "alternate API"
+sdk.s4 -> toolchain: "documents compatible build envelope"

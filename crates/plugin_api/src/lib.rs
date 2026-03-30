@@ -1,3 +1,4 @@
+pub(crate) mod bridge;
 pub mod config_value;
 pub mod flowgraph_controller;
 

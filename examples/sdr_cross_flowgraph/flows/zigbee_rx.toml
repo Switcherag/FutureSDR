@@ -1,0 +1,25 @@
+# Zigbee RX — [auto bridge c32] → ZigbeeDemod → ZigbeeDecoder
+#
+# Decoded frames appear as Pmt::Blob on the decoder's "out" message port.
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "demod.input"
+type = "c32"
+
+[[blocks]]
+id = "demod"
+plugin = "zigbee_demod_plugin"
+config = 0.00001
+config_type = "f32"
+
+[[blocks]]
+id = "decoder"
+plugin = "zigbee_decoder_plugin"
+config = 11
+config_type = "u32"
+
+[[connections]]
+src = "demod.output"
+dst = "decoder.input"

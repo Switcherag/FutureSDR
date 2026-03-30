@@ -21,6 +21,7 @@
 //! If `config_type` is omitted, auto-detection maps TOML types:
 //! string → `String`, float → `f64`, integer → `u64`, boolean → `bool`, absent → `()`.
 
+use futuresdr::blocks::SelectorDropPolicy;
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -167,6 +168,21 @@ macro_rules! impl_int_from_config {
 
 impl_int_from_config!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
+// ── SelectorDropPolicy ──────────────────────────────────────────
+
+impl FromConfigValue for SelectorDropPolicy {
+    fn from_config(value: ConfigValue) -> Result<Self, String> {
+        let s = value.as_string()?;
+        match s.as_str() {
+            "DropAll" | "dropall" | "drop_all" => Ok(SelectorDropPolicy::DropAll),
+            "SameRate" | "samerate" | "same_rate" => Ok(SelectorDropPolicy::SameRate),
+            _ => Err(format!(
+                "unknown SelectorDropPolicy '{s}', expected 'DropAll' or 'SameRate'"
+            )),
+        }
+    }
+}
+
 // ── Vec<T> ───────────────────────────────────────────────────────
 
 impl<T: FromConfigValue> FromConfigValue for Vec<T> {
@@ -279,6 +295,7 @@ pub fn lookup_builtin_parser(type_name: &str) -> Option<ConfigParser> {
         "f32" => f32,
         "f64" => f64,
         "String" => String,
+        "SelectorDropPolicy" => SelectorDropPolicy,
     }
 
     // ── Vec<T> ───────────────────────────────────────────────

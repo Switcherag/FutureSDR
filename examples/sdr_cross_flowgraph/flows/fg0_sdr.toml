@@ -1,0 +1,20 @@
+# FG0 — SDR source (permanent)
+#
+# SeifySource → [auto bridge c32] → FG1
+#
+# No selector needed: the bridge sink handles overflow during swap.
+# Adjust config for your SDR device and target frequency.
+
+[[ports]]
+id = "out"
+direction = "out"
+src = "sdr.out"
+type = "c32"
+
+[[blocks]]
+id = "sdr"
+plugin = "seify_source_plugin"
+# (device_args, frequency_hz, sample_rate_hz, gain_db)
+# Default: Zigbee channel 11 = 2.405 GHz, 4 Msps, gain 40 dB
+config = ["", 2.405e9, 4e6, 40.0]
+config_type = "(String, f64, f64, f64)"

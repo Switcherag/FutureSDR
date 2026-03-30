@@ -1,10 +1,10 @@
-# Chain flow — BridgeSource → Copy → PrintSink("Chain")
-# Demonstrates a multi-block processing chain loaded from TOML.
+# Chain flow — [auto bridge] -> Copy -> PrintSink("Chain")
 
-[[blocks]]
-id = "src"
-plugin = "bridge_source_plugin"
-bridge = true
+[[ports]]
+id = "in"
+direction = "in"
+dst = "passthrough.input"
+type = "u8"
 
 [[blocks]]
 id = "passthrough"
@@ -14,10 +14,6 @@ plugin = "copy_plugin"
 id = "sink"
 plugin = "print_sink_plugin"
 config = "Chain"
-
-[[connections]]
-src = "src.output"
-dst = "passthrough.input"
 
 [[connections]]
 src = "passthrough.output"

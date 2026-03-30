@@ -1,0 +1,13 @@
+# Discard — [auto bridge c32] → NullSink<Complex32>
+# Simple swappable FG that discards all samples.
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "snk.input"
+type = "c32"
+
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"
+config = "c32"

@@ -1,0 +1,49 @@
+title: Cross Flowgraph - Attempt 10 (Config Typing and Plugin Block Factory)
+
+direction: down
+
+user_toml: "BlockDef in TOML\nid, plugin, config, config_type"
+config_value: "ConfigValue::from_toml"
+parse_typed: "parse_typed_config(value, type_hint)"
+custom: "custom parser registry\nregister_config_parser(type, fn)"
+anybox: "Box<dyn Any + Send>"
+
+factory: {
+  label: "Block factory boundary"
+  f1: "LoadedPlugin::prepare(config_box)"
+  f2: "closure(id) -> create_block(id, config)"
+  f3: "plugin factory downcasts config"
+  f4: "WrappedKernel::new(kernel, id)"
+  f5: "returns Box<dyn Block>"
+  f1 -> f2 -> f3 -> f4 -> f5
+}
+
+failure_modes: {
+  label: "Type failure modes"
+  m1: "wrong config_type string"
+  m2: "downcast mismatch in plugin factory"
+  m3: "invalid enum string"
+  m4: "custom parser returns error"
+}
+
+observability: {
+  label: "Where errors surface"
+  o1: "build_flowgraph_full() returns Err"
+  o2: "swap() triggers restore path"
+  o3: "startup prints explicit error"
+}
+
+user_toml -> config_value -> parse_typed -> anybox -> factory.f1
+custom -> anybox: "override when type_hint matches"
+
+parse_typed -> failure_modes.m1
+factory.f3 -> failure_modes.m2
+parse_typed -> failure_modes.m3
+custom -> failure_modes.m4
+
+failure_modes.m1 -> observability.o1
+failure_modes.m2 -> observability.o1
+failure_modes.m3 -> observability.o1
+failure_modes.m4 -> observability.o1
+observability.o1 -> observability.o2
+observability.o1 -> observability.o3
