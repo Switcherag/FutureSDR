@@ -72,20 +72,27 @@ fn main() -> Result<()> {
     };
 
     // ── Schmidl-Cox short preamble detector ────────────────────────────
-    // M[n] = |Σ x[n+k]·x*[n+k-16]| / Σ|x[n+k]|²
-    // Schmidl-Cox: delay = Tu/4 = FFT_SIZE/4
-    let delay = fg.add_block(Delay::<Complex32>::new((FFT_SIZE / 4) as isize));
+    // Window lengths match the analysis notebook at fs = 4 MSps:
+    //   Tu  = 128, Tcp = 32, Ts = 160
+    //   correlation window = 2·Ts − Tu/4 = 288   (`np.convolve` length)
+    //   power-norm window  = Ts/2 = 80           (notebook uses mean here)
+    //   delay              = Tu/4 = 32
+    // M[n] = |Σ_{288} x·conj(x_delayed)| / Σ_{80} |x|²
+    const STF_DELAY: usize = 32;        // Tu/4 at 4 MSps
+    const STF_CORR_WIN: usize = 288;    // 2·Ts − Tu/4 at 4 MSps
+    const STF_POWER_WIN: usize = 80;    // Ts/2 at 4 MSps
+    let delay = fg.add_block(Delay::<Complex32>::new(STF_DELAY as isize));
     fg.connect_dyn(prev, output, &delay, "input")?;
 
     let complex_to_mag_2 = fg.add_block(Apply::<_, _, _>::new(|i: &Complex32| i.norm_sqr()));
-    let float_avg = MovingAverage::<f32>::new(SYMBOL_LEN);
+    let float_avg = MovingAverage::<f32>::new(STF_POWER_WIN);
     fg.connect_dyn(prev, output, &complex_to_mag_2, "input")?;
     connect!(fg, complex_to_mag_2 > float_avg);
 
     let mult_conj = fg.add_block(Combine::<_, _, _, _>::new(
         |a: &Complex32, b: &Complex32| a * b.conj(),
     ));
-    let complex_avg = MovingAverage::<Complex32>::new(SYMBOL_LEN - FFT_SIZE / 4);
+    let complex_avg = MovingAverage::<Complex32>::new(STF_CORR_WIN);
     fg.connect_dyn(prev, output, &mult_conj, "in0")?;
     connect!(fg, mult_conj > complex_avg;
                  delay > in1.mult_conj);
@@ -95,6 +102,52 @@ fn main() -> Result<()> {
     );
     connect!(fg, complex_avg > in0.divide_mag; float_avg > in1.divide_mag);
     let divide_mag_id: BlockId = divide_mag.into();
+
+    // ── STF detection-metric printer ────────────────────────────────────
+    // Mirrors the notebook's `max_value_norm` peak detection. Windows above
+    // (288 / 80 / delay 32) match the notebook at fs = 4 MSps, so peak
+    // *positions and shapes* are now directly comparable.
+    //
+    // Scale offset: rust uses sum-of-power (Σ|x|²), notebook uses mean
+    // (Σ|x|²/N_pow). The two differ by N_pow = 80 → 10·log10(80) ≈ 19.03 dB.
+    // The "nb-equiv dB" column adds this constant so it lines up with the
+    // notebook's 30 dB threshold directly.
+    //
+    // Theoretical peak amplitude at a clean STF: N_corr/N_pow = 288/80 = 3.6.
+    // Notebook 30 dB threshold ↔ 12.5 in rust linear units.
+    let print_threshold: f32 = 5.0; // linear ≈ 7 dB rust ≈ 26 dB nb-equiv
+    let mut idx: usize = 0;
+    let mut peak_val: f32 = 0.0;
+    let mut peak_idx: usize = 0;
+    let mut above: bool = false;
+    let mut peak_count: usize = 0;
+    let metric_print = fg.add_block(Apply::<_, _, _>::new(move |&m: &f32| -> f32 {
+        if m > print_threshold {
+            if !above {
+                above = true;
+                peak_val = m;
+                peak_idx = idx;
+            } else if m > peak_val {
+                peak_val = m;
+                peak_idx = idx;
+            }
+        } else if above {
+            let db = 10.0 * peak_val.log10();
+            println!(
+                "STF peak #{:<5} sample={:>10}  M={:.4}  ({:+.2} dB, +19.0 dB nb-equiv = {:+.2} dB)",
+                peak_count, peak_idx, peak_val, db, db + 19.03
+            );
+            peak_count += 1;
+            above = false;
+            peak_val = 0.0;
+        }
+        idx = idx.wrapping_add(1);
+        m
+    }));
+    let metric_print_id: BlockId = metric_print.into();
+    fg.connect_dyn(divide_mag_id, "output", metric_print_id, "input")?;
+    // metric_print's output is consumed by cor_ws below (replaces direct
+    // divide_mag → cor_ws connection so the tap is in-line with a sink).
 
     // ── Sync & decode ──────────────────────────────────────────────────
     let sync_short: SyncShort = SyncShort::new();
@@ -151,7 +204,7 @@ fn main() -> Result<()> {
             .mode(WebsocketSinkMode::FixedDropping(256))
             .build(),
     );
-    fg.connect_dyn(divide_mag_id, "output", cor_ws, "input")?;
+    fg.connect_dyn(metric_print_id, "output", cor_ws, "input")?;
 
     // Raw source magnitude (time sink) — ws://127.0.0.1:9015
     let src_mag = fg.add_block(Apply::<_, _, _>::new(|c: &Complex32| c.norm()));
