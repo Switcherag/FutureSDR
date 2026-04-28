@@ -15,6 +15,9 @@ pub use constellation_sink::ConstellationSink;
 mod constellation_sink_density;
 pub use constellation_sink_density::ConstellationSinkDensity;
 
+mod iq_scatter_dual;
+pub use iq_scatter_dual::IqScatterDual;
+
 mod handle;
 pub use handle::FlowgraphHandle;
 pub use handle::RuntimeHandle;
@@ -48,6 +51,7 @@ pub use time_sink::TimeSinkMode;
 
 mod sliding_time_sink;
 pub use sliding_time_sink::SlidingTimeSink;
+pub use sliding_time_sink::SlidingTimeSinkDots;
 
 mod waterfall;
 pub use waterfall::Waterfall;

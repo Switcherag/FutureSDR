@@ -110,15 +110,12 @@ impl FlowgraphHandle {
     ///
     /// Send a terminate message to the [`Flowgraph`] and wait until it is shutdown.
     pub async fn terminate_and_wait(&mut self) -> Result<(), Error> {
-        self.terminate()
+        let (tx, rx) = oneshot::channel::<()>();
+        self.inbox
+            .send(FlowgraphMessage::TerminateAndNotify { tx })
             .await
             .map_err(|_| Error::FlowgraphTerminated)?;
-        while !self.inbox.is_closed() {
-            #[cfg(not(target_arch = "wasm32"))]
-            async_io::Timer::after(std::time::Duration::from_millis(200)).await;
-            #[cfg(target_arch = "wasm32")]
-            gloo_timers::future::sleep(std::time::Duration::from_millis(200)).await;
-        }
+        let _ = rx.await;
         Ok(())
     }
 }

@@ -94,6 +94,11 @@ pub fn init() {
 pub enum FlowgraphMessage {
     /// Terminate
     Terminate,
+    /// Terminate with completion notification
+    TerminateAndNotify {
+        /// Signalled when the flowgraph has fully shut down.
+        tx: oneshot::Sender<()>,
+    },
     /// Initialize
     Initialized,
     /// Block is Done

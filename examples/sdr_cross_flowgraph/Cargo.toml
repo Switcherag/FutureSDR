@@ -8,6 +8,12 @@ build = "../../plugin_build.rs"
 name = "sdr_cross_fg"
 path = "src/main.rs"
 
+[[bin]]
+name = "swap_bench"
+path = "src/swap_bench.rs"
+
+
 [dependencies]
 futuresdr = { path = "../..", features = ["plugin"] }
 plugin_api = { path = "../../crates/plugin_api" }
+toml = "0.8"

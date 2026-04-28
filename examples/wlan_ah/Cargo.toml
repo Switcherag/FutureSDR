@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2024"
 default-run = "loopback"
 
-[workspace]
-
 [[bin]]
 name = "rx"
 path = "src/bin/rx.rs"
+
+[[bin]]
+name = "rx_v2"
+path = "src/bin/rx_v2.rs"
 
 [[bin]]
 name = "loopback"
@@ -21,6 +23,10 @@ path = "src/bin/tx.rs"
 [[bin]]
 name = "rx_debug"
 path = "src/bin/rx_debug.rs"
+
+[[bin]]
+name = "rxv2"
+path = "src/bin/rxv2.rs"
 
 [features]
 default = ["soapy"]

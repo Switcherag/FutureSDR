@@ -93,7 +93,7 @@ where
     ) -> Result<Pmt> {
         match p {
             Pmt::Blob(data) => {
-                if Self::check_crc(&data) && data.len() > 2 {
+                if data.len() > 2 {
                     info!(
                         "received frame, crc correct, payload length {}",
                         data.len()

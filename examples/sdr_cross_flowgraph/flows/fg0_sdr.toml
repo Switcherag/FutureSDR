@@ -8,13 +8,13 @@
 [[ports]]
 id = "out"
 direction = "out"
-src = "sdr.out"
+src = "sdr.outputs[0]"
 type = "c32"
 
 [[blocks]]
 id = "sdr"
 plugin = "seify_source_plugin"
 # (device_args, frequency_hz, sample_rate_hz, gain_db)
-# Default: Zigbee channel 11 = 2.405 GHz, 4 Msps, gain 40 dB
-config = ["", 2.405e9, 4e6, 40.0]
+# Default: WLAN channel 44 = 5.22 GHz, 20 Msps, gain 40 dB
+config = ["", 5.22e9, 20e6, 40.0]
 config_type = "(String, f64, f64, f64)"

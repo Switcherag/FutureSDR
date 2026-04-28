@@ -1,0 +1,10 @@
+[
+  {"payload_bytes": 256, "payload_label": "256 B", "min_us": 1.698, "median_us": 2.068, "mean_us": 2.102, "p90_us": 2.233, "p99_us": 2.456, "max_us": 56.841},
+  {"payload_bytes": 1024, "payload_label": "1 KB", "min_us": 1.790, "median_us": 2.283, "mean_us": 2.319, "p90_us": 2.454, "p99_us": 2.521, "max_us": 11.854},
+  {"payload_bytes": 4096, "payload_label": "4 KB", "min_us": 3.034, "median_us": 3.856, "mean_us": 3.801, "p90_us": 3.975, "p99_us": 4.231, "max_us": 40.470},
+  {"payload_bytes": 16384, "payload_label": "16 KB", "min_us": 5.438, "median_us": 6.681, "mean_us": 7.170, "p90_us": 8.248, "p99_us": 9.055, "max_us": 17.026},
+  {"payload_bytes": 65536, "payload_label": "64 KB", "min_us": 11.324, "median_us": 16.273, "mean_us": 16.220, "p90_us": 16.555, "p99_us": 21.837, "max_us": 27.726},
+  {"payload_bytes": 262144, "payload_label": "256 KB", "min_us": 27.529, "median_us": 32.390, "mean_us": 32.683, "p90_us": 34.704, "p99_us": 38.029, "max_us": 46.105},
+  {"payload_bytes": 1048576, "payload_label": "1 MB", "min_us": 95.740, "median_us": 114.168, "mean_us": 115.538, "p90_us": 126.339, "p99_us": 139.483, "max_us": 242.703},
+  {"payload_bytes": 4194304, "payload_label": "4 MB", "min_us": 475.617, "median_us": 516.026, "mean_us": 522.569, "p90_us": 555.806, "p99_us": 571.630, "max_us": 833.305}
+]

@@ -1,0 +1,23 @@
+# Flow A — AGC → NullSink
+# Lightweight C32 processing chain for cross-flowgraph benchmarking.
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "agc.input"
+type = "c32"
+
+[[blocks]]
+id = "agc"
+plugin = "agc_plugin"
+config = [1.0, 1.0e-3, 1.0e-5, 65536.0, 1.0]
+config_type = "(f32, f32, f32, f32, f32)"
+
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"
+config = "c32"
+
+[[connections]]
+src = "agc.output"
+dst = "snk.input"

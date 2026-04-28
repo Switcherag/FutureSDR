@@ -1,0 +1,85 @@
+# Zigbee 802.15.4 RX — [auto bridge c32] → Demod → ClockRecovery → Decoder → Mac
+#
+# `[radio]` is a *demand* on the radio head:
+#   - frequency_hz / gain_db → set on head's sdr_block via "freq"/"gain" messages
+#   - sample_rate_hz         → satisfied by head's resampler_block (or seify rate
+#                              if the head declares no resampler)
+# The head TOML (sdr_head.toml) declares which block fulfills which demand.
+
+[radio]
+frequency_hz   = 2.405e9   # Zigbee channel 11
+sample_rate_hz = 4e6       # demand satisfied by head's resampler (20→4 MSps)
+gain_db        = 0.0
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "demod.input"
+type = "c32"
+from = "head"          # auto-wired to the registered radio head's output
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+[[blocks]]
+id = "demod"
+plugin = "zigbee_demod_plugin"
+config = 0.00016
+config_type = "f32"
+
+[[blocks]]
+id = "cr"
+plugin = "clock_recovery_mm_plugin"
+config = [2.0, 0.000225, 0.5, 0.03, 0.0002]
+config_type = "(f32, f32, f32, f32, f32)"
+
+[[blocks]]
+id = "decoder"
+plugin = "zigbee_decoder_plugin"
+config = 6
+config_type = "u32"
+
+[[blocks]]
+id = "mac"
+plugin = "zigbee_mac_plugin"
+
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"
+
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+
+# ── Stream connections ──────────────────────────────────────────────
+
+[[connections]]
+src = "demod.output"
+dst = "cr.input"
+
+[[connections]]
+src = "cr.output"
+dst = "decoder.input"
+
+[[connections]]
+src = "mac.output"
+dst = "snk.input"
+
+# ── Message connections ─────────────────────────────────────────────
+
+[[connections]]
+src = "decoder.out"
+dst = "mac.rx"
+message = true
+
+[[connections]]
+src = "mac.rftap"
+dst = "udp_rftap.in"
+message = true
+
+# ── Controller taps ─────────────────────────────────────────────────
+# Forward each received MAC frame to the FlowgraphController's policy.
+
+[[controller_taps]]
+src = "mac.rftap"
+name = "zigbee_frames"

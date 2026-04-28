@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     futuresdr::runtime::init();
     FlowgraphController::builder(default_plugin_dir())
         .add_permanent("flows/fg0_sdr.toml")        // fg/0/ — SDR source
-        .add_swappable("flows/zigbee_rx.toml")       // fg/1/ — Zigbee receiver
+        .add_swappable("flows/wlan_rx.toml")          // fg/1/ — WLAN receiver
         .connect(0, "out", 1, "in")
         .udp_port(7879)
         .run()

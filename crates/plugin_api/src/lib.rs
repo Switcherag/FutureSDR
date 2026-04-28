@@ -1,6 +1,7 @@
 pub(crate) mod bridge;
 pub mod config_value;
 pub mod flowgraph_controller;
+pub mod radio_controller;
 
 use std::any::Any;
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use libloading::{Library, Symbol};
 
 pub use config_value::{ConfigValue, FromConfigValue, parse_typed_config};
 pub use flowgraph_controller::{FlowgraphController, PluginRegistry};
+pub use radio_controller::{RadioController, RadioOutputBuf};
 
 /// Returns the default directory where plugin `.so` files are located.
 ///

@@ -1,0 +1,51 @@
+# Radio head — RX-only frontend: SeifySource → FirResampler → bridge.
+#
+# Declares the SDR-side flowgraph (the "head") so a frontend can introspect
+# what it can do, and so the runtime knows *which block* services each demand
+# in a protocol's [radio] section:
+#
+#   protocol [radio] field   →   resolved by
+#   ─────────────────────────────────────────────────────────────────
+#   frequency_hz             →   sdr_block via "freq" message
+#   gain_db                  →   sdr_block via "gain" message
+#   sample_rate_hz           →   resampler_block (20→target ratio)
+#                                 or sdr_block if no resampler is declared
+#
+# Today the runtime hardcodes an equivalent SeifySource + FirResampler chain
+# inside RadioController; the [[blocks]]/[[connections]]/[[ports]] below are
+# the data form that a future TOML-driven head would consume directly.
+
+[head]
+name            = "default"
+direction       = "rx"
+capabilities    = ["retune", "gain", "resample"]
+sdr_block       = "sdr"            # responds to "freq" + "gain"
+resampler_block = "resampler"      # absorbs sample_rate_hz demands
+output_port     = "out"            # feeds protocol flowgraphs
+
+# Concrete hardware specs (device_args, sample-rate, gain) live inside
+# the sdr block's `config` array below — single source of truth.
+
+# ── Topology (for frontend visualization / future TOML-driven head) ──
+
+[[blocks]]
+id = "sdr"
+plugin = "seify_source_plugin"
+config = ["", 2.405e9, 20e6, 60.0]
+config_type = "(String, f64, f64, f64)"
+
+[[blocks]]
+id = "resampler"
+plugin = "fir_resampler_plugin"
+config = [1, 5]                    # default; recomputed from protocol demand
+config_type = "(usize, usize)"
+
+[[connections]]
+src = "sdr.outputs[0]"
+dst = "resampler.input"
+
+[[ports]]
+id = "out"
+direction = "out"
+src = "resampler.output"
+type = "c32"

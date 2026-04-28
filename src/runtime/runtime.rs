@@ -443,6 +443,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
     }
 
     let mut terminated = false;
+    let mut terminate_notify: Option<futures::channel::oneshot::Sender<()>> = None;
 
     // main loop
     loop {
@@ -570,8 +571,24 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
                     terminated = true;
                 }
             }
+            FlowgraphMessage::TerminateAndNotify { tx } => {
+                if !terminated {
+                    for inbox in inboxes.iter_mut() {
+                        if inbox.send(BlockMessage::Terminate).await.is_err() {
+                            debug!("runtime tried to terminate block that was already terminated");
+                        }
+                    }
+                    terminated = true;
+                }
+                terminate_notify = Some(tx);
+            }
             _ => warn!("main loop received unhandled message"),
         }
+    }
+
+    // Signal completion to anyone waiting via terminate_and_wait()
+    if let Some(tx) = terminate_notify {
+        let _ = tx.send(());
     }
 
     if block_error {

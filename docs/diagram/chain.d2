@@ -1,0 +1,97 @@
+direction: right
+
+init: Init {
+  style.fill: "#eef7ff"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  i1: Process 1 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  i2: Process 2 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  i3: Process 3 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+
+  i1 -> i2: connect
+  i2 -> i3: connect
+}
+
+mut: Mut {
+  style.fill: "#f5f5f5"
+  style.stroke: "#616161"
+  style.border-radius: 10
+
+  m1: Process 1 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  m2: Process 2 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  m3: Process 3 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+
+  replace_action: "Replace Process 2" {
+    style.fill: "#ffccbc"
+    style.stroke: "#d84315"
+  }
+
+  add_action: "Add New Process" {
+    style.fill: "#dcedc8"
+    style.stroke: "#558b2f"
+  }
+
+  m1 -> m2: connect
+  m2 -> m3: connect
+
+  replace_action -> m2: change {
+    style.stroke-dash: 5
+  }
+  add_action -> m3: append after {
+    style.stroke-dash: 5
+  }
+}
+
+end: End {
+  style.fill: "#eef7ff"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  e1: Process 1 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  e2: Process 6 {
+    style.fill: "#ffecb3"
+    style.stroke: "#ef6c00"
+  }
+  e3: Process 3 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  e4: Process 5 {
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+
+  e1 -> e2: connect
+  e2 -> e3: connect
+  e3 -> e4: connect
+}
+
+init -> mut: mutate {
+  style.stroke-dash: 5
+}
+mut -> end: finalize {
+  style.stroke-dash: 5
+}
+

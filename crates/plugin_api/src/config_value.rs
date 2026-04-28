@@ -97,7 +97,10 @@ impl ConfigValue {
             ConfigValue::Unit => Ok(Box::new(())),
             ConfigValue::String(s) => Ok(Box::new(s)),
             ConfigValue::Float(f) => Ok(Box::new(f)),
-            ConfigValue::Integer(i) => Ok(Box::new(i as u64)),
+            ConfigValue::Integer(i) if i >= 0 => Ok(Box::new(i as u64)),
+            ConfigValue::Integer(i) => Err(format!(
+                "cannot auto-convert negative integer {i} to u64 — specify config_type explicitly"
+            )),
             ConfigValue::Bool(b) => Ok(Box::new(b)),
             other => Err(format!(
                 "cannot auto-convert {other:?} — specify config_type explicitly"

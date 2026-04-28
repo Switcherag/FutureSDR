@@ -1,0 +1,47 @@
+direction: right
+
+pool: "Function Pool" {
+  style.fill: "#e8f4f8"
+  style.stroke: "#2d6a8f"
+  style.border-radius: 10
+
+  fn_a: Function A
+  fn_b: Function B
+  fn_c: Function C
+  more: "..."
+}
+
+process: Process {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  scheduler: Scheduler {
+    shape: diamond
+    style.fill: "#fff9c4"
+    style.stroke: "#f57f17"
+  }
+
+  input: Input
+  fn_1: Function G
+  fn_2: Function B
+  output: Output
+
+  scheduler -> fn_1: orchestrates {
+    style.stroke-dash: 5
+  }
+  scheduler -> fn_2: orchestrates {
+    style.stroke-dash: 5
+  }
+
+  input -> fn_1: data
+  fn_1 -> fn_2: data
+  fn_2 -> output: data
+}
+
+pool -> process.fn_1: imports {
+  style.stroke-dash: 5
+}
+pool -> process.fn_2: imports {
+  style.stroke-dash: 5
+}

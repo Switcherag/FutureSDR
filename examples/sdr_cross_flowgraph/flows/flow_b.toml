@@ -1,0 +1,33 @@
+# Flow B — FreqShift → AGC → NullSink
+# Slightly heavier C32 processing chain for cross-flowgraph benchmarking.
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "shift.input"
+type = "c32"
+
+[[blocks]]
+id = "shift"
+plugin = "freq_shift_plugin"
+config = [100000.0, 20000000.0]
+config_type = "(f64, f64)"
+
+[[blocks]]
+id = "agc"
+plugin = "agc_plugin"
+config = [1.0, 1.0e-3, 1.0e-5, 65536.0, 1.0]
+config_type = "(f32, f32, f32, f32, f32)"
+
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"
+config = "c32"
+
+[[connections]]
+src = "shift.output"
+dst = "agc.input"
+
+[[connections]]
+src = "agc.output"
+dst = "snk.input"

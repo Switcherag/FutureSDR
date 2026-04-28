@@ -2,286 +2,159 @@
 //!
 //! These are created automatically by the controller — users never
 //! instantiate them directly or reference them in TOML.
+//!
+//! Each bridge pair (Sink + Source) uses a typed `VecDeque<T>` so that
+//! data is stored at item granularity. The sink does a single bulk
+//! `extend()` per `work()` call; the source does a single `copy_from_slice()`
+//! via `make_contiguous()`. No byte-by-byte loops.
 
+use futuresdr::futures::SinkExt;
+use futuresdr::futures::channel::mpsc;
 use futuresdr::prelude::*;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-const MAX_BRIDGE_BYTES: usize = 4096 * 8; // 32 KiB, enough for 4096 Complex32 samples
-
-// ════════════════════════════════════════════════════════════════════
-// u8 bridges
-// ════════════════════════════════════════════════════════════════════
+// ── NamedMessagePipe ─────────────────────────────────────────────────
+// Forwards received PMTs to a shared mpsc channel, tagged with a name.
+// Used by FlowgraphController's `[[controller_taps]]` feature.
 
 #[derive(Block)]
-pub(crate) struct BridgeSinkU8 {
-    #[input]
-    input: DefaultCpuReader<u8>,
-    buf: Arc<Mutex<VecDeque<u8>>>,
+#[message_inputs(r#in)]
+#[null_kernel]
+pub(crate) struct NamedMessagePipe {
+    name: String,
+    sender: mpsc::Sender<(String, Pmt)>,
 }
 
-impl BridgeSinkU8 {
-    pub fn new(buf: Arc<Mutex<VecDeque<u8>>>) -> Self {
-        Self { input: DefaultCpuReader::default(), buf }
+impl NamedMessagePipe {
+    pub fn new(name: String, sender: mpsc::Sender<(String, Pmt)>) -> Self {
+        Self { name, sender }
+    }
+
+    async fn r#in(
+        &mut self,
+        _io: &mut WorkIo,
+        _mio: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+        p: Pmt,
+    ) -> Result<Pmt> {
+        let _ = self.sender.send((self.name.clone(), p)).await;
+        Ok(Pmt::Null)
     }
 }
 
-impl Kernel for BridgeSinkU8 {
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _mio: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
-    ) -> Result<()> {
-        let i = self.input.slice();
-        let n = i.len();
-        if n > 0 {
-            let mut buf = self.buf.lock().unwrap();
-            for &sample in i.iter() {
-                if buf.len() >= MAX_BRIDGE_BYTES {
-                    buf.pop_front();
+// Item-count capacity for each type (all ≈ 32 KiB of data).
+const CAP_U8:  usize = 32_768; // 32 KiB × 1 byte
+const CAP_F32: usize =  8_192; // 32 KiB / 4 bytes
+const CAP_C32: usize =  4_096; // 32 KiB / 8 bytes
+
+macro_rules! make_bridge {
+    ($sink:ident, $source:ident, $t:ty, $cap:expr) => {
+        // ── Sink ──────────────────────────────────────────────────────
+        #[derive(Block)]
+        pub(crate) struct $sink {
+            #[input]
+            input: DefaultCpuReader<$t>,
+            buf: Arc<Mutex<VecDeque<$t>>>,
+            dropped_total: u64,
+        }
+
+        impl $sink {
+            pub fn new(buf: Arc<Mutex<VecDeque<$t>>>) -> Self {
+                Self { input: DefaultCpuReader::default(), buf, dropped_total: 0 }
+            }
+        }
+
+        impl Kernel for $sink {
+            async fn work(
+                &mut self,
+                io: &mut WorkIo,
+                _mio: &mut MessageOutputs,
+                _meta: &mut BlockMeta,
+            ) -> Result<()> {
+                let i = self.input.slice();
+                let n = i.len();
+                if n > 0 {
+                    let mut buf = self.buf.lock().unwrap();
+                    // Drop whole items to make room, never partial items.
+                    let overflow = (buf.len() + n).saturating_sub($cap);
+                    if overflow > 0 {
+                        buf.drain(..overflow);
+                        let prev = self.dropped_total;
+                        self.dropped_total += overflow as u64;
+                        // Log on first overflow and then every 1M dropped samples.
+                        if prev == 0 || self.dropped_total / 1_000_000 > prev / 1_000_000 {
+                            eprintln!(
+                                "bridge {}: dropped {} items ({} total)",
+                                stringify!($sink), overflow, self.dropped_total
+                            );
+                        }
+                    }
+                    buf.extend(i.iter().copied());
+                    drop(buf);
+                    self.input.consume(n);
                 }
-                buf.push_back(sample);
-            }
-            drop(buf);
-            self.input.consume(n);
-        }
-        if self.input.finished() {
-            io.finished = true;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Block)]
-pub(crate) struct BridgeSourceU8 {
-    #[output]
-    output: DefaultCpuWriter<u8>,
-    buf: Arc<Mutex<VecDeque<u8>>>,
-}
-
-impl BridgeSourceU8 {
-    pub fn new(buf: Arc<Mutex<VecDeque<u8>>>) -> Self {
-        Self { output: DefaultCpuWriter::default(), buf }
-    }
-}
-
-impl Kernel for BridgeSourceU8 {
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _mio: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
-    ) -> Result<()> {
-        let o = self.output.slice();
-        if o.is_empty() {
-            return Ok(());
-        }
-
-        let mut buf = self.buf.lock().unwrap();
-        let available = buf.len().min(o.len());
-        if available > 0 {
-            for (dst, src) in o.iter_mut().zip(buf.drain(..available)) {
-                *dst = src;
-            }
-            drop(buf);
-            self.output.produce(available);
-        } else {
-            drop(buf);
-            io.block_on(async {
-                futuresdr::async_io::Timer::after(std::time::Duration::from_millis(50)).await;
-            });
-        }
-        Ok(())
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════
-// Complex32 bridges  (8 bytes/sample, serialised to VecDeque<u8>)
-// ════════════════════════════════════════════════════════════════════
-
-#[derive(Block)]
-pub(crate) struct BridgeSinkC32 {
-    #[input]
-    input: DefaultCpuReader<Complex32>,
-    buf: Arc<Mutex<VecDeque<u8>>>,
-}
-
-impl BridgeSinkC32 {
-    pub fn new(buf: Arc<Mutex<VecDeque<u8>>>) -> Self {
-        Self { input: DefaultCpuReader::default(), buf }
-    }
-}
-
-impl Kernel for BridgeSinkC32 {
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _mio: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
-    ) -> Result<()> {
-        let i = self.input.slice();
-        let n = i.len();
-        if n > 0 {
-            let bytes = unsafe {
-                std::slice::from_raw_parts(i.as_ptr() as *const u8, n * 8)
-            };
-            let mut buf = self.buf.lock().unwrap();
-            for &b in bytes {
-                if buf.len() >= MAX_BRIDGE_BYTES {
-                    buf.pop_front();
+                if self.input.finished() {
+                    io.finished = true;
                 }
-                buf.push_back(b);
+                Ok(())
             }
-            drop(buf);
-            self.input.consume(n);
-        }
-        if self.input.finished() {
-            io.finished = true;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Block)]
-pub(crate) struct BridgeSourceC32 {
-    #[output]
-    output: DefaultCpuWriter<Complex32>,
-    buf: Arc<Mutex<VecDeque<u8>>>,
-}
-
-impl BridgeSourceC32 {
-    pub fn new(buf: Arc<Mutex<VecDeque<u8>>>) -> Self {
-        Self { output: DefaultCpuWriter::default(), buf }
-    }
-}
-
-impl Kernel for BridgeSourceC32 {
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _mio: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
-    ) -> Result<()> {
-        let o = self.output.slice();
-        if o.is_empty() {
-            return Ok(());
         }
 
-        let mut buf = self.buf.lock().unwrap();
-        let available_samples = buf.len() / 8;
-        let to_produce = available_samples.min(o.len());
+        // ── Source ────────────────────────────────────────────────────
+        #[derive(Block)]
+        pub(crate) struct $source {
+            #[output]
+            output: DefaultCpuWriter<$t>,
+            buf: Arc<Mutex<VecDeque<$t>>>,
+        }
 
-        if to_produce > 0 {
-            let out_bytes = unsafe {
-                std::slice::from_raw_parts_mut(o.as_mut_ptr() as *mut u8, to_produce * 8)
-            };
-            for (dst, src) in out_bytes.iter_mut().zip(buf.drain(..to_produce * 8)) {
-                *dst = src;
+        impl $source {
+            pub fn new(buf: Arc<Mutex<VecDeque<$t>>>) -> Self {
+                Self { output: DefaultCpuWriter::default(), buf }
             }
-            drop(buf);
-            self.output.produce(to_produce);
-        } else {
-            drop(buf);
-            io.block_on(async {
-                futuresdr::async_io::Timer::after(std::time::Duration::from_millis(50)).await;
-            });
         }
-        Ok(())
-    }
-}
 
-// ════════════════════════════════════════════════════════════════════
-// f32 bridges  (4 bytes/sample, serialised to VecDeque<u8>)
-// ════════════════════════════════════════════════════════════════════
-
-#[derive(Block)]
-pub(crate) struct BridgeSinkF32 {
-    #[input]
-    input: DefaultCpuReader<f32>,
-    buf: Arc<Mutex<VecDeque<u8>>>,
-}
-
-impl BridgeSinkF32 {
-    pub fn new(buf: Arc<Mutex<VecDeque<u8>>>) -> Self {
-        Self { input: DefaultCpuReader::default(), buf }
-    }
-}
-
-impl Kernel for BridgeSinkF32 {
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _mio: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
-    ) -> Result<()> {
-        let i = self.input.slice();
-        let n = i.len();
-        if n > 0 {
-            let bytes = unsafe {
-                std::slice::from_raw_parts(i.as_ptr() as *const u8, n * 4)
-            };
-            let mut buf = self.buf.lock().unwrap();
-            for &b in bytes {
-                if buf.len() >= MAX_BRIDGE_BYTES {
-                    buf.pop_front();
+        impl Kernel for $source {
+            async fn work(
+                &mut self,
+                io: &mut WorkIo,
+                _mio: &mut MessageOutputs,
+                _meta: &mut BlockMeta,
+            ) -> Result<()> {
+                let o = self.output.slice();
+                if o.is_empty() {
+                    return Ok(());
                 }
-                buf.push_back(b);
+                let mut buf = self.buf.lock().unwrap();
+                let to_produce = buf.len().min(o.len());
+                if to_produce > 0 {
+                    {
+                        // make_contiguous() ensures a single contiguous slice —
+                        // one copy_from_slice instead of N individual assignments.
+                        let src = buf.make_contiguous();
+                        o[..to_produce].copy_from_slice(&src[..to_produce]);
+                    }
+                    buf.drain(..to_produce);
+                    drop(buf);
+                    self.output.produce(to_produce);
+                } else {
+                    drop(buf);
+                    // Short sleep to yield the executor without busy-waiting.
+                    // 50µs keeps latency low while avoiding a spin loop.
+                    io.block_on(async {
+                        futuresdr::async_io::Timer::after(
+                            std::time::Duration::from_micros(50),
+                        )
+                        .await;
+                    });
+                }
+                Ok(())
             }
-            drop(buf);
-            self.input.consume(n);
         }
-        if self.input.finished() {
-            io.finished = true;
-        }
-        Ok(())
-    }
+    };
 }
 
-#[derive(Block)]
-pub(crate) struct BridgeSourceF32 {
-    #[output]
-    output: DefaultCpuWriter<f32>,
-    buf: Arc<Mutex<VecDeque<u8>>>,
-}
-
-impl BridgeSourceF32 {
-    pub fn new(buf: Arc<Mutex<VecDeque<u8>>>) -> Self {
-        Self { output: DefaultCpuWriter::default(), buf }
-    }
-}
-
-impl Kernel for BridgeSourceF32 {
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _mio: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
-    ) -> Result<()> {
-        let o = self.output.slice();
-        if o.is_empty() {
-            return Ok(());
-        }
-
-        let mut buf = self.buf.lock().unwrap();
-        let available_samples = buf.len() / 4;
-        let to_produce = available_samples.min(o.len());
-
-        if to_produce > 0 {
-            let out_bytes = unsafe {
-                std::slice::from_raw_parts_mut(o.as_mut_ptr() as *mut u8, to_produce * 4)
-            };
-            for (dst, src) in out_bytes.iter_mut().zip(buf.drain(..to_produce * 4)) {
-                *dst = src;
-            }
-            drop(buf);
-            self.output.produce(to_produce);
-        } else {
-            drop(buf);
-            io.block_on(async {
-                futuresdr::async_io::Timer::after(std::time::Duration::from_millis(50)).await;
-            });
-        }
-        Ok(())
-    }
-}
+make_bridge!(BridgeSinkU8,  BridgeSourceU8,  u8,       CAP_U8);
+make_bridge!(BridgeSinkF32, BridgeSourceF32, f32,      CAP_F32);
+make_bridge!(BridgeSinkC32, BridgeSourceC32, Complex32, CAP_C32);

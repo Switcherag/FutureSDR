@@ -8,6 +8,11 @@ build = "../../plugin_build.rs"
 name = "cross_fg"
 path = "src/main.rs"
 
+[[bin]]
+name = "cross_fg_bench"
+path = "src/cross_fg_bench.rs"
+
 [dependencies]
 futuresdr = { path = "../..", features = ["plugin"] }
 plugin_api = { path = "../../crates/plugin_api" }
+toml = "0.8"

@@ -1,0 +1,23 @@
+[package]
+name = "iceoryx2-example"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+futuresdr = { path = "../..", features = ["iceoryx2"] }
+iceoryx2 = "0.8.1"
+
+[[bin]]
+name = "iox2-receiver"
+path = "iox2_receiver.rs"
+
+[[bin]]
+name = "iox2-sender"
+path = "iox2_sender.rs"
+
+[[bin]]
+name = "iox2-bench"
+path = "iox2_bench.rs"

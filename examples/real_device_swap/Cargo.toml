@@ -1,0 +1,14 @@
+[package]
+name = "real-device-swap-example"
+version = "0.1.0"
+edition = "2021"
+build = "../../plugin_build.rs"
+
+[[bin]]
+name = "real_device_swap"
+path = "src/main.rs"
+
+[dependencies]
+futuresdr = { path = "../..", features = ["plugin"] }
+plugin_api = { path = "../../crates/plugin_api" }
+toml = "0.8"

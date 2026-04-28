@@ -1,0 +1,101 @@
+direction: right
+
+init: Radiochain {
+  style.fill: "#fdfdfd"
+  style.stroke: "#ffffff"
+  style.border-radius: 10
+
+  i1: RadioAdapter {
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    b1: Radio 1 {
+      shape: rectangle
+      style.fill: "#f3e5f5"
+      style.stroke: "#6a1b9a"
+      s2: Seify 1 {
+    style.fill: "#cce5ff"
+    style.stroke: "#2d6a8f"
+    }
+    s5: resampler {
+      style.fill: "#cce5ff"
+      style.stroke: "#2d6a8f"
+    }
+    }
+    b2: Radio 2 {
+      shape: rectangle
+      style.fill: "#f3e5f5"
+      style.stroke: "#6a1b9a"
+      s3: Seify 2 {
+      style.fill: "#cce5ff"
+      style.stroke: "#6a1b9a"
+    }
+    }
+
+    b3: Radio 3 {
+      shape: rectangle
+      style.fill: "#f3e5f5"
+      style.stroke: "#6a1b9a"
+      s4: libladerf {
+      style.fill: "#cce5ff"
+      style.stroke: "#2d6a8f"
+    }
+    }
+    
+    
+    b1.s2 -> b1.s5: connect
+  }
+  
+  i2: Process 2 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  i3: Process 3 {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+
+  i1.b1.s5 -> i2: connect
+  i2 -> i3: connect
+
+  i2 -> i1.b1: change frequency {
+    style.stroke-dash: 5
+    style.animated: true
+  }
+  i3 -> i1.b1: change sample rate {
+    style.stroke-dash: 5
+    style.animated: true
+  }
+}
+
+legend: Legend {
+  style.fill: "#fdfdfd"
+  style.stroke: "#cccccc"
+  style.border-radius: 6
+
+  l1: RadioAdapter {
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+  }
+  l2: Process {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  l3: Function {
+    style.fill: "#cce5ff"
+    style.stroke: "#2d6a8f"
+  }
+  l4: "" {
+    style.fill: "#ffffff"
+    style.stroke: "#ffffff"
+  }
+  l5: "" {
+    style.fill: "#ffffff"
+    style.stroke: "#ffffff"
+  }
+  l4 -> l5: data flow
+  l4 -> l5: control command {
+    style.stroke-dash: 5
+    style.animated: true
+  }
+}
+

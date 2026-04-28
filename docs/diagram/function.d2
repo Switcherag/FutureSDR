@@ -1,0 +1,38 @@
+direction: right
+
+pool: Function Pool {
+  style.fill: "#e8f4f8"
+  style.stroke: "#2d6a8f"
+  style.border-radius: 10
+
+  fn_a: Function A {
+    shape: rectangle
+    style.fill: "#cce5ff"
+  }
+  fn_b: Function B {
+    shape: rectangle
+    style.fill: "#cce5ff"
+  }
+  fn_c: Function C {
+    shape: rectangle
+    style.fill: "#cce5ff"
+  }
+  fn_d: Function D {
+    shape: rectangle
+    style.fill: "#cce5ff"
+  }
+    more: "..." {
+      shape: rectangle
+      style.fill: "#cce5ff"
+    }
+}
+
+  op: External Operator {
+  shape: person
+  style.fill: "#ffe0b2"
+}
+
+
+  op -> pool.fn_d: builds & registers
+  op -> pool.more: builds & registers
+

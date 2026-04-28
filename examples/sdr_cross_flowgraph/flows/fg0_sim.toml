@@ -1,0 +1,16 @@
+# FG0 — Simulated source (permanent, no SDR hardware)
+#
+# NullSourceC32 → [auto bridge c32] → FG1
+#
+# Generates a continuous stream of Complex32 zeros at max throughput.
+# Used for benchmarking FlowgraphController swap overhead without hardware.
+
+[[ports]]
+id = "out"
+direction = "out"
+src = "src.output"
+type = "c32"
+
+[[blocks]]
+id = "src"
+plugin = "null_source_c32_plugin"

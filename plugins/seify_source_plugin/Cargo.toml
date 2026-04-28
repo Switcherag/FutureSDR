@@ -11,7 +11,7 @@ plugin_api = { path = "../../crates/plugin_api" }
 futuresdr = { path = "../../", features = ["plugin", "seify"] }
 
 [features]
-default = []
+default = ["soapy"]
 soapy = ["futuresdr/soapy"]
 hackrf = ["futuresdr/hackrf"]
 rtlsdr = ["futuresdr/rtlsdr"]

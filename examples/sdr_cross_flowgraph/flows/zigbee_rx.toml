@@ -1,25 +1,87 @@
-# Zigbee RX — [auto bridge c32] → ZigbeeDemod → ZigbeeDecoder
+# Zigbee 802.15.4 RX — [auto bridge c32] → Resampler 1/5 → Demod → ClockRecovery → Decoder → Mac
 #
-# Decoded frames appear as Pmt::Blob on the decoder's "out" message port.
+# Radio feeds 20 Msps; Zigbee needs 4 Msps, so we prepend a 1:5 polyphase
+# resampler. This keeps the RadioController chain permanent (no set_bandwidth
+# on swap) — all per-protocol rate adaptation happens inside the protocol flow.
+
+[radio]
+frequency_hz = 2.475e9    # Zigbee channel 25
+sample_rate_hz = 4e6
+gain_db = 40.0
 
 [[ports]]
 id = "in"
 direction = "in"
-dst = "demod.input"
+dst = "resampler.input"
 type = "c32"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+# 20 Msps → 4 Msps (interp=1, decim=5)
+[[blocks]]
+id = "resampler"
+plugin = "fir_resampler_plugin"
+config = [1, 5]
+config_type = "(usize, usize)"
 
 [[blocks]]
 id = "demod"
 plugin = "zigbee_demod_plugin"
-config = 0.00001
+config = 0.00016
 config_type = "f32"
+
+[[blocks]]
+id = "cr"
+plugin = "clock_recovery_mm_plugin"
+config = [2.0, 0.000225, 0.5, 0.03, 0.0002]
+config_type = "(f32, f32, f32, f32, f32)"
 
 [[blocks]]
 id = "decoder"
 plugin = "zigbee_decoder_plugin"
-config = 11
+config = 6
 config_type = "u32"
+
+[[blocks]]
+id = "mac"
+plugin = "zigbee_mac_plugin"
+
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"
+
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+
+# ── Stream connections ──────────────────────────────────────────────
+
+# Resampler → Demod
+[[connections]]
+src = "resampler.output"
+dst = "demod.input"
 
 [[connections]]
 src = "demod.output"
+dst = "cr.input"
+
+[[connections]]
+src = "cr.output"
 dst = "decoder.input"
+
+[[connections]]
+src = "mac.output"
+dst = "snk.input"
+
+# ── Message connections ─────────────────────────────────────────────
+
+[[connections]]
+src = "decoder.out"
+dst = "mac.rx"
+message = true
+
+[[connections]]
+src = "mac.rftap"
+dst = "udp_rftap.in"
+message = true

@@ -97,7 +97,7 @@ enum State {
 }
 
 #[derive(Block)]
-#[message_outputs(symbols, channel_est)]
+#[message_outputs(symbols, channel_est, preamble_symbols, preamble_symbols2)]
 pub struct FrameEqualizer<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<u8>>
 where
     I: CpuBufferReader<Item = Complex32>,
@@ -111,6 +111,7 @@ where
     state: State,
     sym_in: Vec<Complex32>,
     sym_out: Vec<Complex32>,
+    sig1_syms: Vec<Complex32>, // SIG sym1 equalized constellation (48 pts)
     sig_bits: Vec<u8>,     // 2 × 48 = 96 SIG coded bits
     decoded_bits: [u8; 48], // SIG decoded bits (2 × 48 coded → 48 data via Viterbi)
     decoder: ViterbiDecoder,
@@ -133,6 +134,7 @@ where
             state: State::Skip,
             sym_in: vec![Complex32::new(0.0, 0.0); FFT_SIZE],
             sym_out: vec![Complex32::new(0.0, 0.0); N_DATA_SC],
+            sig1_syms: Vec::new(),
             sig_bits: vec![0u8; 2 * N_SIG_DATA_SC],
             decoded_bits: [0; 48],
             decoder: ViterbiDecoder::new(),
@@ -322,11 +324,8 @@ where
                     }
                 }
                 State::Sig1 | State::Sig2 => {
-                    // SIG uses Q-BPSK (signal on imaginary axis). The standard
-                    // pilot-based phase correction removes the j rotation and
-                    // pushes the signal onto the real axis, but equalize_sig
-                    // extracts the imaginary component. Skip pilot correction
-                    // for SIG — right after LTF the residual CFO is negligible.
+                    // Skip pilot correction for SIG — reverted to match
+                    // original 11a behaviour while debugging sync issues.
                 }
                 State::Copy(left, n, _, n_extra, traveling) => {
                     let sym_idx = n - left;
@@ -365,7 +364,6 @@ where
                         // 3. Add residual to accumulated correction
                         let mut sum_xc_phi = 0.0f32;
                         let mut sum_xc2 = 0.0f32;
-                        let prev_rot = Complex32::from_polar(1.0, -self.accum_beta);
                         let mut sum_residual = Complex32::new(0.0, 0.0);
                         for k in 0..4 {
                             let prev_correction = self.accum_alpha * (x[k] - x_mean) + self.accum_beta;
@@ -427,6 +425,12 @@ where
                         &mut self.sig_bits[0..N_SIG_DATA_SC],
                         false, // extract imaginary
                     );
+                    // Capture the 48 equalized SIG sym1 points for diagnostics.
+                    self.sig1_syms.clear();
+                    for &sc_idx in &sig_data {
+                        let eq = self.sym_in[sc_idx] / self.equalizer.h[sc_idx];
+                        self.sig1_syms.push(eq);
+                    }
                     i += 1;
                     self.state = State::Sig2;
                 }
@@ -447,12 +451,19 @@ where
                     // Detect S1G_LONG: if symbol 2 has more energy on real axis than imaginary
                     let mut real_energy = 0.0f32;
                     let mut imag_energy = 0.0f32;
+                    let mut preamble_syms: Vec<Complex32> = Vec::with_capacity(N_SIG_DATA_SC);
                     for &sc_idx in &sig_data {
                         let eq = self.sym_in[sc_idx] / self.equalizer.h[sc_idx];
                         real_energy += eq.re * eq.re;
                         imag_energy += eq.im * eq.im;
+                        preamble_syms.push(eq);
                     }
                     let is_long = real_energy > imag_energy;
+
+                    // Emit the 48 equalized SIG sym1 and sym2 on separate ports
+                    // so the frontend can see CFO-induced rotation between them.
+                    mio.post("preamble_symbols", Pmt::VecCF32(std::mem::take(&mut self.sig1_syms))).await?;
+                    mio.post("preamble_symbols2", Pmt::VecCF32(preamble_syms)).await?;
 
                     if is_long {
                         // Re-extract symbol 2 from real axis

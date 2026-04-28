@@ -1,0 +1,175 @@
+# WLAN 802.11 RX — [auto bridge c32] → DC Offset → SyncShort/Long → FFT → Decoder
+
+[radio]
+frequency_hz = 2.475e9    # same as Zigbee — avoids slow frequency switch
+sample_rate_hz = 20e6
+gain_db = 55.0
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "dc_offset.input"
+type = "c32"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+[[blocks]]
+id = "dc_offset"
+plugin = "wlan_dc_offset_plugin"
+config = 1.0e-5
+config_type = "f64"
+
+# Signal path delay → sync_short.in_sig
+[[blocks]]
+id = "delay"
+plugin = "delay_complex_plugin"
+config = 16
+config_type = "isize"
+
+# Delayed conjugate path delay → mult_conj.in1
+[[blocks]]
+id = "delay2"
+plugin = "delay_complex_plugin"
+config = 16
+config_type = "isize"
+
+[[blocks]]
+id = "c2m"
+plugin = "complex_to_mag2_plugin"
+
+[[blocks]]
+id = "float_avg"
+plugin = "moving_average_f32_plugin"
+config = 64
+config_type = "usize"
+
+[[blocks]]
+id = "mc"
+plugin = "mult_conj_plugin"
+
+[[blocks]]
+id = "complex_avg"
+plugin = "moving_average_complex_plugin"
+config = 48
+config_type = "usize"
+
+[[blocks]]
+id = "div_mag"
+plugin = "divide_mag_plugin"
+
+[[blocks]]
+id = "sync_short"
+plugin = "wlan_sync_short_plugin"
+
+[[blocks]]
+id = "sync_long"
+plugin = "wlan_sync_long_plugin"
+
+[[blocks]]
+id = "fft"
+plugin = "fft_complex_plugin"
+config = [64, false, false, 1.0]
+config_type = "(usize, bool, bool, Option<f32>)"
+
+[[blocks]]
+id = "frame_eq"
+plugin = "wlan_frame_equalizer_plugin"
+
+[[blocks]]
+id = "decoder"
+plugin = "wlan_decoder_plugin"
+
+[[blocks]]
+id = "udp_rx"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55556"
+
+# ── Stream connections ──────────────────────────────────────────────
+
+# dc_offset fans out to 4 paths
+[[connections]]
+src = "dc_offset.output"
+dst = "delay.input"
+
+[[connections]]
+src = "dc_offset.output"
+dst = "c2m.input"
+
+[[connections]]
+src = "dc_offset.output"
+dst = "delay2.input"
+
+[[connections]]
+src = "dc_offset.output"
+dst = "mc.in0"
+
+# Power path: complex_to_mag2 → moving_avg_f32
+[[connections]]
+src = "c2m.output"
+dst = "float_avg.input"
+
+# Delayed conjugate path: delay2 → mult_conj.in1
+[[connections]]
+src = "delay2.output"
+dst = "mc.in1"
+
+# mult_conj → complex_avg → divide_mag.in0
+[[connections]]
+src = "mc.output"
+dst = "complex_avg.input"
+
+[[connections]]
+src = "complex_avg.output"
+dst = "div_mag.in0"
+
+# float_avg → divide_mag.in1
+[[connections]]
+src = "float_avg.output"
+dst = "div_mag.in1"
+
+# SyncShort: delay → in_sig, complex_avg → in_abs, divide_mag → in_cor
+[[connections]]
+src = "delay.output"
+dst = "sync_short.in_sig"
+
+[[connections]]
+src = "complex_avg.output"
+dst = "sync_short.in_abs"
+
+[[connections]]
+src = "div_mag.output"
+dst = "sync_short.in_cor"
+
+# SyncShort → SyncLong → FFT → FrameEqualizer → Decoder
+[[connections]]
+src = "sync_short.output"
+dst = "sync_long.input"
+
+[[connections]]
+src = "sync_long.output"
+dst = "fft.input"
+
+[[connections]]
+src = "fft.output"
+dst = "frame_eq.input"
+
+[[connections]]
+src = "frame_eq.output"
+dst = "decoder.input"
+
+# ── Message connections ─────────────────────────────────────────────
+
+[[connections]]
+src = "decoder.rx_frames"
+dst = "udp_rx.in"
+message = true
+
+[[connections]]
+src = "decoder.rftap"
+dst = "udp_rftap.in"
+message = true

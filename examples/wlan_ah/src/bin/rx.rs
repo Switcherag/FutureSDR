@@ -3,8 +3,11 @@ use futuresdr::blocks::Apply;
 use futuresdr::blocks::Combine;
 use futuresdr::blocks::Delay;
 use futuresdr::blocks::Fft;
+use futuresdr::blocks::FftDirection;
 use futuresdr::blocks::MessagePipe;
 use futuresdr::blocks::WebsocketPmtSink;
+use futuresdr::blocks::WebsocketSinkBuilder;
+use futuresdr::blocks::WebsocketSinkMode;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
 
@@ -25,13 +28,14 @@ struct Args {
     #[clap(short, long)]
     args: Option<String>,
     /// Gain
-    #[clap(short, long, default_value_t = 28.0)]
+    #[clap(short, long, default_value_t = 0.0)]
     gain: f64,
     /// Sample Rate
-    #[clap(short, long, default_value_t = 20e6)]
+    /// Sample Rate
+    #[clap(short, long, default_value_t = 2e6)]
     sample_rate: f64,
     /// WLAN Channel Number
-    #[clap(short, long, value_parser = parse_channel, default_value = "34")]
+    #[clap(short, long, value_parser = parse_channel, default_value = "6")]
     channel: f64,
     /// DC Offset
     #[clap(short, long, default_value_t = false)]
@@ -86,24 +90,122 @@ fn main() -> Result<()> {
     connect!(fg, mult_conj > complex_avg;
                  delay > in1.mult_conj);
 
-    let divide_mag = Combine::<_, _, _, _>::new(|a: &Complex32, b: &f32| a.norm() / b);
+    let divide_mag = fg.add_block(
+        Combine::<_, _, _, _>::new(|a: &Complex32, b: &f32| a.norm() / b)
+    );
     connect!(fg, complex_avg > in0.divide_mag; float_avg > in1.divide_mag);
+    let divide_mag_id: BlockId = divide_mag.into();
 
     let sync_short: SyncShort = SyncShort::new();
     connect!(fg, delay > in_sig.sync_short;
-                 complex_avg > in_abs.sync_short;
-                 divide_mag > in_cor.sync_short);
+                 complex_avg > in_abs.sync_short);
+    fg.connect_dyn(divide_mag_id, "output", &sync_short, "in_cor")?;
 
     let sync_long: SyncLong = SyncLong::new();
     connect!(fg, sync_short > sync_long);
 
-    let fft: Fft = Fft::new(64);
-    // fft.set_tag_propagation(Box::new(copy_tag_propagation));
+    // ── SyncLong diagnostics ───────────────────────────────────────────
+    // Correlation landscape — ws://127.0.0.1:9019 (VecF32, 160 pts)
+    let sync_corr_ws = WebsocketPmtSink::new(9019);
+    // Peak indices + fine CFO — ws://127.0.0.1:9020
+    //   [first_peak, second_peak, gap, fine_cfo, mag1, mag2]
+    let sync_info_ws = WebsocketPmtSink::new(9020);
+    // Time-domain LTF samples post-sync (pre-CFO-correction) — ws://127.0.0.1:9021
+    let ltf_td_ws = WebsocketPmtSink::new(9021);
+    connect!(fg, sync_long.corr_mag | r#in.sync_corr_ws;
+                 sync_long.sync_info | r#in.sync_info_ws;
+                 sync_long.ltf_td | r#in.ltf_td_ws);
+
+    let fft: Fft = Fft::new(wlan_ah::FFT_SIZE);
     let frame_equalizer: FrameEqualizer = FrameEqualizer::new();
     let decoder = Decoder::new();
-    let symbol_sink = WebsocketPmtSink::new(9002);
+    let symbol_sink = WebsocketPmtSink::new(9012);
+    let preamble_sink = WebsocketPmtSink::new(9017);
+    let preamble_sink2 = WebsocketPmtSink::new(9018);
+    let h_est_sink = WebsocketPmtSink::new(9016);
     connect!(fg, sync_long > fft > frame_equalizer > decoder;
-        frame_equalizer.symbols | r#in.symbol_sink);
+        frame_equalizer.symbols | r#in.symbol_sink;
+        frame_equalizer.preamble_symbols | r#in.preamble_sink;
+        frame_equalizer.preamble_symbols2 | r#in.preamble_sink2;
+        frame_equalizer.channel_est | r#in.h_est_sink);
+
+    // ── Visualization sinks (mirror rx_debug) ──────────────────────────
+    // Spectrogram — ws://127.0.0.1:9013
+    let fft_spec_block: Fft = Fft::with_options(2048 / 8, FftDirection::Forward, true, None);
+    let fft_spec = fg.add_block(fft_spec_block);
+    let fft_to_power = fg.add_block(Apply::<_, _, _>::new(|c: &Complex32| c.norm_sqr()));
+    let spectrogram_ws = fg.add_block(
+        WebsocketSinkBuilder::<f32>::new(9013)
+            .mode(WebsocketSinkMode::FixedDropping(2048 / 8))
+            .build(),
+    );
+    let fft_spec_id: BlockId = fft_spec.into();
+    let fft_to_power_id: BlockId = fft_to_power.into();
+    let spectrogram_ws_id: BlockId = spectrogram_ws.into();
+    fg.connect_dyn(prev, output, fft_spec_id, "input")?;
+    fg.connect_dyn(fft_spec_id, "output", fft_to_power_id, "input")?;
+    fg.connect_dyn(fft_to_power_id, "output", spectrogram_ws_id, "input")?;
+
+    // Correlation — ws://127.0.0.1:9014
+    // Notebook-style metric:  M[k] = |Σ_{k-143..k} x[j]·conj(x[j-16])|
+    //                              ÷ mean(|x[j]|² for j in [k-80..k-41])
+    // i.e. P is the raw 144-sample sum (like np.convolve(..., ones(144)))
+    // and R is the pre-STF noise estimate (notebook norm_window = (-Ts, -Ts/2)).
+    let nb_pow      = fg.add_block(Apply::<_, _, _>::new(|c: &Complex32| c.norm_sqr()));
+    let nb_r_ma     = fg.add_block(MovingAverage::<f32>::new(40));       // Ts/2
+    let nb_r_delay  = fg.add_block(Delay::<f32>::new(40));               // shift so R comes from [k-80..k-41]
+    let nb_delay16  = fg.add_block(Delay::<Complex32>::new(16));         // Tu/4
+    let nb_prod     = fg.add_block(Combine::<_, _, _, _>::new(
+        |a: &Complex32, b: &Complex32| a * b.conj(),
+    ));
+    let nb_p_ma     = fg.add_block(MovingAverage::<Complex32>::new(144)); // 2·Ts - Tu/4
+    // MovingAverage returns the raw *sum* (not sum/N), so:
+    //   |P| = |nb_p_ma|               (notebook's stf_corr)
+    //   R   = nb_r_delay / 40         (mean over the 40-sample pre-STF window)
+    // ⇒  M = |P| / R = |nb_p_ma| * 40 / nb_r_delay
+    let nb_divide   = fg.add_block(Combine::<_, _, _, _>::new(
+        |a: &Complex32, b: &f32| a.norm() * 40.0 / b.max(1e-9),
+    ));
+    let cor_ws = fg.add_block(
+        WebsocketSinkBuilder::<f32>::new(9014)
+            .mode(WebsocketSinkMode::FixedDropping(256))
+            .build(),
+    );
+    let nb_pow_id: BlockId      = nb_pow.into();
+    let nb_r_ma_id: BlockId     = nb_r_ma.into();
+    let nb_r_delay_id: BlockId  = nb_r_delay.into();
+    let nb_delay16_id: BlockId  = nb_delay16.into();
+    let nb_prod_id: BlockId     = nb_prod.into();
+    let nb_p_ma_id: BlockId     = nb_p_ma.into();
+    let nb_divide_id: BlockId   = nb_divide.into();
+    let cor_ws_id: BlockId      = cor_ws.into();
+    // R path: src → |·|² → MA(40) → Delay(40)
+    fg.connect_dyn(prev, output, nb_pow_id, "input")?;
+    fg.connect_dyn(nb_pow_id, "output", nb_r_ma_id, "input")?;
+    fg.connect_dyn(nb_r_ma_id, "output", nb_r_delay_id, "input")?;
+    // P path: src → Delay(16); (src, delayed) → conj-product → MA(144)
+    fg.connect_dyn(prev, output, nb_delay16_id, "input")?;
+    fg.connect_dyn(prev, output, nb_prod_id, "in0")?;
+    fg.connect_dyn(nb_delay16_id, "output", nb_prod_id, "in1")?;
+    fg.connect_dyn(nb_prod_id, "output", nb_p_ma_id, "input")?;
+    // Divide and publish
+    fg.connect_dyn(nb_p_ma_id, "output", nb_divide_id, "in0")?;
+    fg.connect_dyn(nb_r_delay_id, "output", nb_divide_id, "in1")?;
+    fg.connect_dyn(nb_divide_id, "output", cor_ws_id, "input")?;
+    // Keep `divide_mag_id` available for sync_short's in_cor (untouched above).
+    let _ = divide_mag_id;
+
+    // Raw IQ magnitude — ws://127.0.0.1:9015
+    let src_mag = fg.add_block(Apply::<_, _, _>::new(|c: &Complex32| c.norm()));
+    let src_ws = fg.add_block(
+        WebsocketSinkBuilder::<f32>::new(9015)
+            .mode(WebsocketSinkMode::FixedDropping(256))
+            .build(),
+    );
+    let src_mag_id: BlockId = src_mag.into();
+    let src_ws_id: BlockId = src_ws.into();
+    fg.connect_dyn(prev, output, src_mag_id, "input")?;
+    fg.connect_dyn(src_mag_id, "output", src_ws_id, "input")?;
 
     let (tx_frame, mut rx_frame) = mpsc::channel::<Pmt>(100);
     let message_pipe = MessagePipe::new(tx_frame);

@@ -1,0 +1,13 @@
+[package]
+name = "add_one_dyn_example"
+version = "0.1.0"
+edition = "2021"
+build = "../../plugin_build.rs"
+
+[[bin]]
+name = "add_one_dyn"
+path = "src/main.rs"
+
+[dependencies]
+futuresdr = { path = "../..", features = ["plugin"] }
+plugin_api = { path = "../../crates/plugin_api" }

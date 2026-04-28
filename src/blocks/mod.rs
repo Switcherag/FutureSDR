@@ -21,7 +21,7 @@
 //! ## DSP blocks
 //! | Block | Usage | WebAssembly? |
 //! |---|---|---|
-//! | [Fft](Fft) | Compute an FFT. | ✅ |
+//!| [Fft](Fft) | Compute an FFT. | ✅ |
 //! | [Fir](FirBuilder) | FIR filter and resampler. | ✅ |
 //! | [Iir](Iir) | IIR filter. | ✅ |
 //! | [PfbArbResampler](PfbArbResampler) | Polyphase Arbitrary Rate Resampler | ✅ |
@@ -73,6 +73,8 @@
 //! | [UdpSource] | Reads samples from a UDP socket. | ❌ |
 //! | [WebsocketSink] | Push samples in a WebSocket. | ❌ |
 //! | [WebsocketPmtSink] | Push samples from Pmts a WebSocket. | ❌ |
+//! | [iceoryx2::PubSink] | Push samples into [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared memory. | ❌ |
+//! | [iceoryx2::SubSource] | Read samples from [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared memory. | ❌ |
 //! | [zeromq::PubSink] | Push samples into [ZeroMQ](https://zeromq.org/) socket. | ❌ |
 //! | [zeromq::SubSource] | Read samples from [ZeroMQ](https://zeromq.org/) socket. | ❌ |
 //!
@@ -250,6 +252,8 @@ pub use xlating_fir::XlatingFir;
 mod wgpu;
 #[cfg(feature = "wgpu")]
 pub use self::wgpu::Wgpu;
+#[cfg(feature = "iceoryx2")]
+pub mod iceoryx2;
 #[cfg(feature = "zeromq")]
 pub mod zeromq;
 #[cfg(all(feature = "zynq", target_os = "linux"))]

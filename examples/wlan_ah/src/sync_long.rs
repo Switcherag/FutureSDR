@@ -55,6 +55,7 @@ impl Correlator {
 }
 
 #[derive(Block)]
+#[message_outputs(corr_mag, sync_info, ltf_td)]
 pub struct SyncLong<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<Complex32>>
 where
     I: CpuBufferReader<Item = Complex32>,
@@ -101,7 +102,7 @@ where
     async fn work(
         &mut self,
         io: &mut WorkIo,
-        _m: &mut MessageOutputs,
+        mio: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
         let (input, in_tags) = self.input.slice_with_tags();
@@ -144,6 +145,34 @@ where
                 if m >= SEARCH_WINDOW + 2 * FFT_SIZE {
                     let (offset, freq_offset) =
                         self.corr.sync(&input[0..SEARCH_WINDOW + FFT_SIZE - 1]);
+
+                    // ── Diagnostics ────────────────────────────────────
+                    // 1. Correlation magnitude landscape (entire search window)
+                    let mag: Vec<f32> = self.corr.cor.iter().map(|c| c.norm()).collect();
+                    // 2. Top-two peaks (sorted by index, same logic as sync())
+                    let first = self.corr.cor_index[0].0.min(self.corr.cor_index[1].0);
+                    let second = self.corr.cor_index[0].0.max(self.corr.cor_index[1].0);
+                    let first_mag = self.corr.cor[first].norm();
+                    let second_mag = self.corr.cor[second].norm();
+                    let gap = (second as i32 - first as i32) as f32;
+                    let info = vec![
+                        first as f32,
+                        second as f32,
+                        gap,
+                        freq_offset,
+                        first_mag,
+                        second_mag,
+                    ];
+                    println!(
+                        "SYNC_LONG: peak1={} peak2={} gap={} (expected 64) cfo={:.6} mag1={:.3} mag2={:.3}",
+                        first, second, gap as i32, freq_offset, first_mag, second_mag
+                    );
+                    // 3. Time-domain LTF (160 samples starting at sync offset, pre-CFO-correction)
+                    let ltf_td: Vec<Complex32> =
+                        input[offset..offset + 2 * FFT_SIZE].to_vec();
+                    mio.post("corr_mag", Pmt::VecF32(mag)).await?;
+                    mio.post("sync_info", Pmt::VecF32(info)).await?;
+                    mio.post("ltf_td", Pmt::VecCF32(ltf_td)).await?;
 
                     // Output 2 × FFT_SIZE samples (two LTF symbols for channel estimation)
                     for i in 0..(2 * FFT_SIZE) {

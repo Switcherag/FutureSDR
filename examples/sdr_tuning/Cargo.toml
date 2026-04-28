@@ -16,8 +16,18 @@ path = "src/scope_bench.rs"
 name = "sdr-grid-bench"
 path = "src/grid_bench.rs"
 
+[[bin]]
+name = "sdr-random-freq-bench"
+path = "src/random_freq_bench.rs"
+
+[[bin]]
+name = "sdr-bladerf2-agc"
+path = "src/bladerf2_agc.rs"
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
-futuresdr = { path = "../..", features = ["plugin", "soapy"] }
+futuresdr = { path = "../..", features = ["plugin", "soapy", "bladerf1"] }
 plugin_api = { path = "../../crates/plugin_api" }
+rand = "0.9"
+seify = { version = "0.19", default-features = false, features = ["soapy", "bladerf1"] }

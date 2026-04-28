@@ -1,0 +1,188 @@
+# WLAN 802.11ah RX — Resampler 2:1 → DC Offset → SyncShort/Long → FFT → Decoder
+#
+# `[radio]` is a *demand* on the radio head:
+#   - frequency_hz / gain_db → set via head's sdr_block messages
+#   - sample_rate_hz         → satisfied by head's resampler_block (20→4 MSps)
+# 802.11ah natively wants 2 MSps for FFT_SIZE=64 + 16-lag autocorrelation;
+# we ask the head for 4 MSps (matching zigbee, so the head's resampler ratio
+# stays fixed across swaps) and decimate 2:1 inside this flow.
+
+[radio]
+frequency_hz   = 905.0e6   # 802.11ah sub-GHz channel
+sample_rate_hz = 4e6       # head delivers 4 MSps; local resampler trims to 2 MSps
+gain_db        = 10.0
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "resampler.input"
+type = "c32"
+from = "head"          # auto-wired to the registered radio head's output
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+# 4 MSps → 2 MSps (interp=1, decim=2)
+[[blocks]]
+id = "resampler"
+plugin = "fir_resampler_plugin"
+config = [1, 2]
+config_type = "(usize, usize)"
+
+[[blocks]]
+id = "dc_offset"
+plugin = "wlan_dc_offset_plugin"
+config = 1.0e-5
+config_type = "f64"
+
+[[blocks]]
+id = "delay"
+plugin = "delay_complex_plugin"
+config = 16
+config_type = "isize"
+
+[[blocks]]
+id = "c2m"
+plugin = "complex_to_mag2_plugin"
+
+[[blocks]]
+id = "float_avg"
+plugin = "moving_average_f32_plugin"
+config = 64
+config_type = "usize"
+
+[[blocks]]
+id = "mc"
+plugin = "mult_conj_plugin"
+
+[[blocks]]
+id = "complex_avg"
+plugin = "moving_average_complex_plugin"
+config = 48
+config_type = "usize"
+
+[[blocks]]
+id = "div_mag"
+plugin = "divide_mag_plugin"
+
+[[blocks]]
+id = "sync_short"
+plugin = "wlan_ah_sync_short_plugin"
+
+[[blocks]]
+id = "sync_long"
+plugin = "wlan_ah_sync_long_plugin"
+
+[[blocks]]
+id = "fft"
+plugin = "fft_complex_plugin"
+config = [64, false, false, 1.0]
+config_type = "(usize, bool, bool, Option<f32>)"
+
+[[blocks]]
+id = "frame_eq"
+plugin = "wlan_ah_frame_equalizer_plugin"
+
+[[blocks]]
+id = "decoder"
+plugin = "wlan_ah_decoder_plugin"
+
+[[blocks]]
+id = "udp_rx"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55556"
+
+# ── Stream connections ──────────────────────────────────────────────
+
+# resampler → dc_offset
+[[connections]]
+src = "resampler.output"
+dst = "dc_offset.input"
+
+# dc_offset fan-out to delay, complex_to_mag2, mult_conj.in0
+[[connections]]
+src = "dc_offset.output"
+dst = "delay.input"
+
+[[connections]]
+src = "dc_offset.output"
+dst = "c2m.input"
+
+[[connections]]
+src = "dc_offset.output"
+dst = "mc.in0"
+
+# delay fan-out (single Delay shared between sync_short.in_sig and mc.in1,
+# matching rx.rs which uses one Delay block fanning out twice)
+[[connections]]
+src = "delay.output"
+dst = "sync_short.in_sig"
+
+[[connections]]
+src = "delay.output"
+dst = "mc.in1"
+
+# Power path: |·|² → MA(64) → divide_mag.in1
+[[connections]]
+src = "c2m.output"
+dst = "float_avg.input"
+
+[[connections]]
+src = "float_avg.output"
+dst = "div_mag.in1"
+
+# Correlation path: mult_conj → MA(48) → sync_short.in_abs / divide_mag.in0
+[[connections]]
+src = "mc.output"
+dst = "complex_avg.input"
+
+[[connections]]
+src = "complex_avg.output"
+dst = "sync_short.in_abs"
+
+[[connections]]
+src = "complex_avg.output"
+dst = "div_mag.in0"
+
+[[connections]]
+src = "div_mag.output"
+dst = "sync_short.in_cor"
+
+# Sync → FFT → FrameEqualizer → Decoder
+[[connections]]
+src = "sync_short.output"
+dst = "sync_long.input"
+
+[[connections]]
+src = "sync_long.output"
+dst = "fft.input"
+
+[[connections]]
+src = "fft.output"
+dst = "frame_eq.input"
+
+[[connections]]
+src = "frame_eq.output"
+dst = "decoder.input"
+
+# ── Message connections ─────────────────────────────────────────────
+
+[[connections]]
+src = "decoder.rx_frames"
+dst = "udp_rx.in"
+message = true
+
+[[connections]]
+src = "decoder.rftap"
+dst = "udp_rftap.in"
+message = true
+
+# ── Controller taps ─────────────────────────────────────────────────
+
+[[controller_taps]]
+src = "decoder.rx_frames"
+name = "wlan_ah_frames"

@@ -31,23 +31,25 @@ pub use prefix::Prefix;
 mod sync_long;
 pub use sync_long::SyncLong;
 
+mod sync_long_v2;
+pub use sync_long_v2::SyncLongV2;
+
 mod sync_short;
 pub use sync_short::SyncShort;
 
 mod viterbi_decoder;
 pub use viterbi_decoder::ViterbiDecoder;
 
+pub mod v2;
+
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
 // ── 802.11ah 2 MHz OFDM parameters ─────────────────────────────────────
-// Change OVERSAMPLING to match source sample rate:
-//   OVERSAMPLING = fs / 2 MHz  (e.g. 2 for 4 MSps, 1 for 2 MSps)
+// RF bandwidth = 2 MHz, sample rate = 2 MSps. Layout mirrors 11a CBW2.
 
-pub const OVERSAMPLING: usize = 2;
-
-pub const FFT_SIZE: usize = 64 * OVERSAMPLING;  // Tu
-pub const CP_LEN: usize = 16 * OVERSAMPLING;    // Tcp
+pub const FFT_SIZE: usize = 64;                  // Tu
+pub const CP_LEN: usize = 16;                    // Tcp
 pub const SYMBOL_LEN: usize = FFT_SIZE + CP_LEN; // Ts
 pub const DC_INDEX: usize = FFT_SIZE / 2;
 

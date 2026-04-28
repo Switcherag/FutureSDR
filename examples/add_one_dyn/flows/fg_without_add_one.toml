@@ -1,0 +1,22 @@
+
+[[blocks]]
+id = "src"
+plugin = "null_source_plugin"
+
+[[blocks]]
+id = "head"
+plugin = "head_plugin"
+config = 1
+
+[[blocks]]
+id = "sink"
+plugin = "file_sink_plugin"
+config = "tmp/output_without_add_one.bin"
+
+[[connections]]
+src = "src.output"
+dst = "head.input"
+
+[[connections]]
+src = "head.output"
+dst = "sink.input"

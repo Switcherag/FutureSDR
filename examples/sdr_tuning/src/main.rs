@@ -25,6 +25,10 @@ struct Args {
     #[clap(short, long, default_value_t = 40.0)]
     gain: f64,
 
+    /// Enable RX AGC on Seify source blocks
+    #[clap(long, default_value_t = false)]
+    agc: bool,
+
     /// Base frequency (Hz)
     #[clap(long, default_value_t = 2.437e9)]
     base_freq: f64,
@@ -222,6 +226,7 @@ fn main() -> Result<()> {
     println!("Base freq:   {:.3} MHz", args.base_freq / 1e6);
     println!("Base rate:   {:.3} MHz", args.base_rate / 1e6);
     println!("Gain:        {:.1} dB", args.gain);
+    println!("AGC:         {}", args.agc);
     println!("Iterations:  {}", args.iterations);
     println!("Mode:        {}", args.mode);
     println!();
@@ -261,7 +266,13 @@ fn main() -> Result<()> {
         fg.connect_stream(&mut src_ref.get()?.outputs()[0], &mut snk.get()?.input());
         println!("  Device opened in {:.1}ms", t_open.elapsed().as_secs_f64() * 1000.0);
 
-        let (_fg_task, handle) = rt.start_sync(fg)?;
+        let (_fg_task, mut handle) = rt.start_sync(fg)?;
+        if args.agc {
+            println!("  Enabling RX AGC...");
+            rt.block_on(async {
+                let _ = handle.callback(src_id, "agc", Pmt::Bool(true)).await;
+            });
+        }
         println!("  Flowgraph started\n");
         let res = rt.block_on(bench_suite(
             "rx_static", handle, src_id,
@@ -318,7 +329,13 @@ fn main() -> Result<()> {
         fg.connect_dyn(src_id, "outputs[0]", snk_id, "input")?;
         println!("  Device opened in {:.1}ms", t_open.elapsed().as_secs_f64() * 1000.0);
 
-        let (_fg_task, handle) = rt.start_sync(fg)?;
+        let (_fg_task, mut handle) = rt.start_sync(fg)?;
+        if args.agc {
+            println!("  Enabling RX AGC...");
+            rt.block_on(async {
+                let _ = handle.callback(src_id, "agc", Pmt::Bool(true)).await;
+            });
+        }
         println!("  Flowgraph started\n");
         let res = rt.block_on(bench_suite(
             "rx_dyn", handle, src_id,

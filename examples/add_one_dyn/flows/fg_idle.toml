@@ -1,0 +1,15 @@
+# Idle placeholder flowgraph for the swappable slot.
+# Uses only base plugins (no add_one_plugin needed).
+# NullSource -> NullSink: stays alive until swapped or terminated.
+
+[[blocks]]
+id = "src"
+plugin = "null_source_plugin"
+
+[[blocks]]
+id = "sink"
+plugin = "null_sink_plugin"
+
+[[connections]]
+src = "src.output"
+dst = "sink.input"
