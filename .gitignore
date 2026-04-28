@@ -56,3 +56,6 @@ perf.data.old
 # ── Logs & temp files ────────────────────────────────────────────
 *.log
 tmp/
+
+# ── Local SDR captures ───────────────────────────────────────────
+examples/wlan_ah/bin/2026-04-27-15-22-31_wlan_ah_905M_4Msps_10s.cf32
