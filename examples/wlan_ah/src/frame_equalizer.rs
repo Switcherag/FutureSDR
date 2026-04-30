@@ -97,7 +97,7 @@ enum State {
 }
 
 #[derive(Block)]
-#[message_outputs(symbols, channel_est, preamble_symbols, preamble_symbols2)]
+#[message_outputs(symbols, channel_est, preamble_symbols, preamble_symbols2, ltf1_eq)]
 pub struct FrameEqualizer<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<u8>>
 where
     I: CpuBufferReader<Item = Complex32>,
@@ -112,6 +112,8 @@ where
     sym_in: Vec<Complex32>,
     sym_out: Vec<Complex32>,
     sig1_syms: Vec<Complex32>, // SIG sym1 equalized constellation (48 pts)
+    ltf1_sym1: Vec<Complex32>, // LTF1 sym1 raw (active subcarriers, post-fftshift)
+    ltf1_sym2: Vec<Complex32>, // LTF1 sym2 raw
     sig_bits: Vec<u8>,     // 2 × 48 = 96 SIG coded bits
     decoded_bits: [u8; 48], // SIG decoded bits (2 × 48 coded → 48 data via Viterbi)
     decoder: ViterbiDecoder,
@@ -135,6 +137,8 @@ where
             sym_in: vec![Complex32::new(0.0, 0.0); FFT_SIZE],
             sym_out: vec![Complex32::new(0.0, 0.0); N_DATA_SC],
             sig1_syms: Vec::new(),
+            ltf1_sym1: Vec::new(),
+            ltf1_sym2: Vec::new(),
             sig_bits: vec![0u8; 2 * N_SIG_DATA_SC],
             decoded_bits: [0; 48],
             decoder: ViterbiDecoder::new(),
@@ -397,11 +401,23 @@ where
 
             match &mut self.state {
                 State::Sync1 => {
+                    // Capture raw LTF1 sym1 (active subcarriers) before storing as h.
+                    self.ltf1_sym1.clear();
+                    for off in -28i32..=28 {
+                        if off == 0 { continue; }
+                        self.ltf1_sym1.push(self.sym_in[sc(off)]);
+                    }
                     self.equalizer.sync1(&self.sym_in);
                     self.state = State::Sync2;
                     i += 1;
                 }
                 State::Sync2 => {
+                    // Capture raw LTF1 sym2 *before* sync2 averages it into h.
+                    self.ltf1_sym2.clear();
+                    for off in -28i32..=28 {
+                        if off == 0 { continue; }
+                        self.ltf1_sym2.push(self.sym_in[sc(off)]);
+                    }
                     self.equalizer.sync2(&self.sym_in);
 
                     // Post channel estimate (active subcarriers -28..+28 excl DC)
@@ -412,6 +428,21 @@ where
                             h_active.push(self.equalizer.h[crate::sc(off)]);
                         }
                         mio.post("channel_est", Pmt::VecCF32(h_active)).await?;
+                    }
+
+                    // Equalised LTF1 sym1 + sym2 (each / h_est at active subcarriers).
+                    // Layout: [sym1 (56) , sym2 (56)].
+                    {
+                        let mut ltf_eq = Vec::with_capacity(2 * crate::N_ACTIVE_SC);
+                        for (k, off) in (-28i32..=28).filter(|&o| o != 0).enumerate() {
+                            let i_sc = sc(off);
+                            ltf_eq.push(self.ltf1_sym1[k] / self.equalizer.h[i_sc]);
+                        }
+                        for (k, off) in (-28i32..=28).filter(|&o| o != 0).enumerate() {
+                            let i_sc = sc(off);
+                            ltf_eq.push(self.ltf1_sym2[k] / self.equalizer.h[i_sc]);
+                        }
+                        mio.post("ltf1_eq", Pmt::VecCF32(ltf_eq)).await?;
                     }
 
                     self.state = State::Sig1;

@@ -41,16 +41,18 @@ mod viterbi_decoder;
 pub use viterbi_decoder::ViterbiDecoder;
 
 pub mod v2;
+pub mod v3;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
 // ── 802.11ah 2 MHz OFDM parameters ─────────────────────────────────────
-// RF bandwidth = 2 MHz, sample rate = 2 MSps. Layout mirrors 11a CBW2.
+// RF bandwidth = 2 MHz, sample rate = 4 MSps (2× oversampled).
+// Subcarrier spacing fs/N = 31.25 kHz is independent of oversampling.
 
-pub const FFT_SIZE: usize = 64;                  // Tu
-pub const CP_LEN: usize = 16;                    // Tcp
-pub const SYMBOL_LEN: usize = FFT_SIZE + CP_LEN; // Ts
+pub const FFT_SIZE: usize = 128;                 // Tu (was 64 at 2 MSps)
+pub const CP_LEN: usize = 32;                    // Tcp (was 16 at 2 MSps)
+pub const SYMBOL_LEN: usize = FFT_SIZE + CP_LEN; // Ts (was 80 at 2 MSps)
 pub const DC_INDEX: usize = FFT_SIZE / 2;
 
 /// Number of active subcarriers (data + pilot): fixed at 56 regardless of oversampling.

@@ -4,7 +4,14 @@ use crate::{CP_LEN, SYMBOL_LEN};
 
 const MIN_GAP: usize = 480;
 const MAX_SAMPLES: usize = 540 * SYMBOL_LEN;
-const THRESHOLD: f32 = 0.56;
+// Rust metric is sum-of-power: M = |Σ_{288} corr| / Σ_{80} |x|².
+// At a clean STF, both numerator and denominator scale linearly with |x|², so
+// the metric saturates near N_corr/N_pow = 288/80 = 3.6 (NOT in 10s or 100s).
+// Notebook uses mean-of-power; their 30 dB threshold = 1000 maps to ~12.5 in
+// rust units only because the *peak* there is also ~80× larger. In rust units,
+// 30 dB nb-equiv would be 12.5 — but real peaks are ~3.6, so we'd never trigger.
+// Use a value that's safely above the noise floor (~0.3) but below the peak.
+const THRESHOLD: f32 = 1.5;
 
 #[derive(Debug)]
 enum State {
@@ -34,6 +41,8 @@ pub struct SyncShort<
     #[output]
     output: O,
     state: State,
+    sample_idx: usize,
+    n_locks: usize,
 }
 
 impl<I0, I1, I2, O> SyncShort<I0, I1, I2, O>
@@ -50,6 +59,8 @@ where
             in_cor: I2::default(),
             output: O::default(),
             state: State::Search,
+            sample_idx: 0,
+            n_locks: 0,
         }
     }
 }
@@ -101,6 +112,14 @@ where
                         let f_offset = -in_abs[i].arg() / CP_LEN as f32;
                         self.state = State::Copy(0, f_offset, false);
                         tags.add_tag(o, Tag::NamedF32("wifi_start".to_string(), f_offset));
+                        self.n_locks += 1;
+                        println!(
+                            "SYNC_SHORT: lock #{} sample={} M={:.3} cfo_per_sample={:.6}",
+                            self.n_locks,
+                            self.sample_idx + i,
+                            in_cor[i],
+                            f_offset
+                        );
                     } else {
                         self.state = State::Search;
                     }
@@ -138,6 +157,7 @@ where
         self.in_abs.consume(i);
         self.in_cor.consume(i);
         self.output.produce(o);
+        self.sample_idx += i;
 
         if self.in_cor.finished() && i == in_cor_len {
             io.finished = true;

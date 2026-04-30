@@ -8,10 +8,12 @@ use std::collections::VecDeque;
 use crate::v2::ctx::FrameCtx;
 use crate::v2::helpers::{MAX_FRAME_LEN, TS, TU};
 
-const BOXCAR_LEN: usize = 2 * TS - TU / 4;
-const DETECT_THRESHOLD: f32 = 0.56;
-const MIN_DETECT_GAP: usize = 6 * TS;
-const STF_LOOKBACK: usize = BOXCAR_LEN;
+const LAG: usize = TU / 4;
+const BOXCAR_LEN: usize = 2 * TS - LAG;
+const DETECT_WIN: usize = 6 * TS;
+const LOCAL_MAX_R: usize = 2 * TS;
+const NORM_WIN_LEN: usize = TS / 2;
+const NEED: usize = DETECT_WIN + 2 * LOCAL_MAX_R;
 
 #[derive(Block)]
 #[message_outputs(frame, corr_mag, sync_info)]
@@ -24,11 +26,12 @@ where
 
     ac_sum: Complex32,
     ac_ring: VecDeque<Complex32>,
-    pow_sum: f32,
-    pow_ring: VecDeque<f32>,
     sample_ring: VecDeque<Complex32>,
-    metric_ring: VecDeque<f32>,
-    since_last_det: usize,
+    corr_ring: VecDeque<f32>,
+    sample_base: usize,
+    sample_total: usize,
+    corr_base: usize,
+    finished_sent: bool,
 }
 
 impl<I> StfDetector<I>
@@ -40,32 +43,78 @@ where
             input: I::default(),
             ac_sum: Complex32::new(0.0, 0.0),
             ac_ring: VecDeque::with_capacity(BOXCAR_LEN),
-            pow_sum: 0.0,
-            pow_ring: VecDeque::with_capacity(TS),
-            sample_ring: VecDeque::with_capacity(MAX_FRAME_LEN + STF_LOOKBACK),
-            metric_ring: VecDeque::with_capacity(4 * TS),
-            since_last_det: MIN_DETECT_GAP,
+            sample_ring: VecDeque::with_capacity(MAX_FRAME_LEN + NEED + BOXCAR_LEN + TS),
+            corr_ring: VecDeque::with_capacity(NEED + DETECT_WIN),
+            sample_base: 0,
+            sample_total: 0,
+            corr_base: 0,
+            finished_sent: false,
         }
     }
 
-    fn step_metric(&mut self, x: Complex32, x_delayed: Complex32) -> f32 {
+    fn push_corr(&mut self, x: Complex32, x_delayed: Complex32) {
         let prod = x * x_delayed.conj();
         self.ac_sum += prod;
         self.ac_ring.push_back(prod);
         if self.ac_ring.len() > BOXCAR_LEN {
             self.ac_sum -= self.ac_ring.pop_front().unwrap();
         }
-        let p = x.norm_sqr();
-        self.pow_sum += p;
-        self.pow_ring.push_back(p);
-        if self.pow_ring.len() > TS {
-            self.pow_sum -= self.pow_ring.pop_front().unwrap();
+
+        if self.ac_ring.len() == BOXCAR_LEN {
+            let corr_idx = self.sample_total - 1 - LAG;
+            if self.corr_ring.is_empty() {
+                self.corr_base = corr_idx;
+            }
+            self.corr_ring.push_back(self.ac_sum.norm());
         }
-        let norm = self.pow_sum / (self.pow_ring.len() as f32).max(1.0);
-        if norm <= 0.0 {
-            0.0
+    }
+
+    fn sample_latest_exclusive(&self) -> usize {
+        self.sample_base + self.sample_ring.len()
+    }
+
+    fn sample_range_available(&self, start: usize, end: usize) -> bool {
+        start >= self.sample_base && end <= self.sample_latest_exclusive() && start < end
+    }
+
+    fn sample_avg_power(&self, start: usize, end: usize) -> Option<f32> {
+        if !self.sample_range_available(start, end) {
+            return None;
+        }
+
+        let mut sum = 0.0f32;
+        for abs_idx in start..end {
+            sum += self.sample_ring[abs_idx - self.sample_base].norm_sqr();
+        }
+        Some(sum / (end - start) as f32)
+    }
+
+    fn sample_range_to_vec(&self, start: usize, end: usize) -> Option<Vec<Complex32>> {
+        if !self.sample_range_available(start, end) {
+            return None;
+        }
+
+        let mut out = Vec::with_capacity(end - start);
+        for abs_idx in start..end {
+            out.push(self.sample_ring[abs_idx - self.sample_base]);
+        }
+        Some(out)
+    }
+
+    fn discard_old_samples(&mut self) {
+        let lag_needed = self.sample_total.saturating_sub(LAG);
+        let block_needed = if self.corr_ring.is_empty() {
+            lag_needed
         } else {
-            self.ac_sum.norm() / norm / (self.ac_ring.len() as f32).max(1.0)
+            self.corr_base
+                .saturating_sub(BOXCAR_LEN - 1)
+                .saturating_sub(TS)
+        };
+        let keep_from = block_needed.min(lag_needed);
+
+        while self.sample_base < keep_from && !self.sample_ring.is_empty() {
+            self.sample_ring.pop_front();
+            self.sample_base += 1;
         }
     }
 }
@@ -91,76 +140,93 @@ where
     ) -> Result<()> {
         let input_vec: Vec<Complex32> = self.input.slice().to_vec();
         let input_len = input_vec.len();
-        let lag = TU / 4;
 
         for &x in input_vec.iter() {
             self.sample_ring.push_back(x);
-            if self.sample_ring.len() > MAX_FRAME_LEN + STF_LOOKBACK {
-                self.sample_ring.pop_front();
+            self.sample_total += 1;
+
+            if self.sample_total > LAG {
+                let delayed_abs = self.sample_total - 1 - LAG;
+                let delayed = self.sample_ring[delayed_abs - self.sample_base];
+                self.push_corr(x, delayed);
             }
-            let metric = if self.sample_ring.len() > lag {
-                let x_lag = self.sample_ring[self.sample_ring.len() - 1 - lag];
-                self.step_metric(x, x_lag)
-            } else {
-                0.0
-            };
-            self.metric_ring.push_back(metric);
-            if self.metric_ring.len() > 4 * TS {
-                self.metric_ring.pop_front();
-            }
-            self.since_last_det = self.since_last_det.saturating_add(1);
 
-            if self.since_last_det >= MIN_DETECT_GAP
-                && metric > DETECT_THRESHOLD
-                && self.metric_ring.len() >= 4 * TS
-            {
-                let mr = &self.metric_ring;
-                let center = mr.len() - 1;
-                let lo = center.saturating_sub(2 * TS);
-                let is_local_max = (lo..=center).all(|i| mr[i] <= metric);
-                if is_local_max && self.sample_ring.len() >= STF_LOOKBACK + MAX_FRAME_LEN {
-                    // Extract frame samples starting STF_LOOKBACK + lag behind the
-                    // end of the ring.
-                    let end = self.sample_ring.len();
-                    let frame_start = end.saturating_sub(STF_LOOKBACK + lag);
-                    let frame_end = (frame_start + MAX_FRAME_LEN).min(end);
-                    let mut buf = Vec::with_capacity(frame_end - frame_start);
-                    for i in frame_start..frame_end {
-                        buf.push(self.sample_ring[i]);
-                    }
-                    let ctx = FrameCtx::new(buf);
-
-                    // Diagnostic taps (match sync_long wire format).
-                    // corr_mag: last 160 samples of the detection metric.
-                    let n_mag = 160usize.min(self.metric_ring.len());
-                    let tail: Vec<f32> = self
-                        .metric_ring
-                        .iter()
-                        .skip(self.metric_ring.len() - n_mag)
-                        .copied()
-                        .collect();
-                    mio.post("corr_mag", Pmt::VecF32(tail)).await?;
-                    // sync_info: [detect_idx, 0, 0, 0, metric, 0] — v2 only
-                    // tracks a single detection peak, so the peak2/gap slots
-                    // are zero-filled.
-                    let info = vec![
-                        (self.metric_ring.len() - 1) as f32,
-                        0.0,
-                        0.0,
-                        0.0,
-                        metric,
-                        0.0,
-                    ];
-                    mio.post("sync_info", Pmt::VecF32(info)).await?;
-
-                    mio.post("frame", Pmt::Any(Box::new(ctx))).await?;
-                    self.since_last_det = 0;
+            while self.corr_ring.len() >= NEED {
+                let candidate_latest_corr = self.corr_base + LOCAL_MAX_R + DETECT_WIN - 1;
+                let candidate_latest_start = candidate_latest_corr.saturating_sub(BOXCAR_LEN - 1);
+                if self.sample_latest_exclusive() < candidate_latest_start + MAX_FRAME_LEN {
+                    break;
                 }
+
+                let mut max_val = f32::NEG_INFINITY;
+                let mut max_rel = 0usize;
+                for i in 0..DETECT_WIN {
+                    let v = self.corr_ring[LOCAL_MAX_R + i];
+                    if v > max_val {
+                        max_val = v;
+                        max_rel = i;
+                    }
+                }
+
+                let arg_buf = LOCAL_MAX_R + max_rel;
+                let abs_corr_idx = self.corr_base + arg_buf;
+                let start_idx = abs_corr_idx.saturating_sub(BOXCAR_LEN - 1);
+
+                let mut local_max = f32::NEG_INFINITY;
+                for i in (arg_buf - LOCAL_MAX_R)..(arg_buf + LOCAL_MAX_R) {
+                    if self.corr_ring[i] > local_max {
+                        local_max = self.corr_ring[i];
+                    }
+                }
+                let is_local_max = max_val >= local_max;
+
+                let norm = if start_idx >= TS {
+                    self.sample_avg_power(start_idx - TS, start_idx - TS + NORM_WIN_LEN)
+                } else {
+                    None
+                };
+                let max_value_norm = match norm {
+                    Some(v) if v > 0.0 => max_val / v,
+                    _ => f32::NAN,
+                };
+
+                if is_local_max && max_value_norm.is_finite() && max_value_norm >= 10f32.powf(30.0 / 10.0) {
+                    if let Some(frame) = self.sample_range_to_vec(start_idx, start_idx + MAX_FRAME_LEN) {
+                        let block_corr: Vec<f32> = self
+                            .corr_ring
+                            .iter()
+                            .skip(LOCAL_MAX_R)
+                            .take(DETECT_WIN)
+                            .copied()
+                            .collect();
+                        let info = vec![
+                            start_idx as f32,
+                            abs_corr_idx as f32,
+                            max_value_norm,
+                            norm.unwrap_or(0.0),
+                            max_val,
+                            30.0,
+                        ];
+                        mio.post("corr_mag", Pmt::VecF32(block_corr)).await?;
+                        mio.post("sync_info", Pmt::VecF32(info)).await?;
+                        mio.post("frame", Pmt::Any(Box::new(FrameCtx::new(frame)))).await?;
+                    }
+                }
+
+                self.corr_ring.drain(0..DETECT_WIN);
+                self.corr_base += DETECT_WIN;
+                self.discard_old_samples();
             }
         }
 
         self.input.consume(input_len);
         if self.input.finished() {
+            if !self.finished_sent {
+                mio.post("frame", Pmt::Finished).await?;
+                mio.post("corr_mag", Pmt::Finished).await?;
+                mio.post("sync_info", Pmt::Finished).await?;
+                self.finished_sent = true;
+            }
             io.finished = true;
         }
         Ok(())

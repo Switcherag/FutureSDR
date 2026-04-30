@@ -9,7 +9,7 @@ use crate::v2::helpers::{TCP, TS};
 
 #[derive(Block)]
 #[message_inputs(frame)]
-#[message_outputs(frame)]
+#[message_outputs(frame, stf_td)]
 pub struct CfoCorrector {}
 
 impl CfoCorrector {
@@ -19,11 +19,17 @@ impl CfoCorrector {
 
     async fn frame(
         &mut self,
-        _io: &mut WorkIo,
+        io: &mut WorkIo,
         mio: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
+        if matches!(p, Pmt::Finished) {
+            mio.post("frame", Pmt::Finished).await?;
+            mio.post("stf_td", Pmt::Finished).await?;
+            io.finished = true;
+            return Ok(Pmt::Null);
+        }
         if let Pmt::Any(a) = &p {
             if let Some(ctx) = a.downcast_ref::<FrameCtx>() {
                 let mut ctx = ctx.clone();
@@ -54,6 +60,12 @@ impl CfoCorrector {
                     *s *= Complex32::from_polar(1.0, -fine * (n as f32));
                 }
                 ctx.cfo = coarse + fine;
+
+                let stf_len = (2 * crate::FFT_SIZE).min(ctx.samples.len());
+                if stf_len > 0 {
+                    mio.post("stf_td", Pmt::VecCF32(ctx.samples[..stf_len].to_vec()))
+                        .await?;
+                }
 
                 mio.post("frame", Pmt::Any(Box::new(ctx))).await?;
             }

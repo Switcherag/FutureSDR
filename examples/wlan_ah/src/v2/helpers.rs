@@ -3,12 +3,12 @@
 
 use futuresdr::num_complex::Complex32;
 
-use crate::{DC_INDEX, FFT_SIZE, LTF_FREQ, sc};
+use crate::{CP_LEN, DC_INDEX, FFT_SIZE, LTF_FREQ, sc};
 
 /// Sample period in samples (Tu = FFT_SIZE).
 pub const TU: usize = FFT_SIZE;
 /// Cyclic-prefix length (Tcp).
-pub const TCP: usize = 16;
+pub const TCP: usize = CP_LEN;
 /// Full symbol period (Ts = Tu + Tcp).
 pub const TS: usize = TU + TCP;
 
@@ -67,8 +67,8 @@ pub fn ltf_freq() -> [Complex32; FFT_SIZE] {
     out
 }
 
-/// Naive 64-point DFT (forward) with `fftshift` applied to the output, so
-/// bin 32 corresponds to DC. Sufficient for 2 MSps × few-kHz frame rates.
+/// Naive FFT_SIZE-point DFT (forward) with `fftshift` applied to the output,
+/// so bin DC_INDEX corresponds to DC.
 ///
 /// `input` must be length `FFT_SIZE`.
 pub fn dft_shift(input: &[Complex32]) -> [Complex32; FFT_SIZE] {

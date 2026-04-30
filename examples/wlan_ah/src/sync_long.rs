@@ -55,7 +55,7 @@ impl Correlator {
 }
 
 #[derive(Block)]
-#[message_outputs(corr_mag, sync_info, ltf_td)]
+#[message_outputs(corr_mag, sync_info, ltf_td, stf_td)]
 pub struct SyncLong<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<Complex32>>
 where
     I: CpuBufferReader<Item = Complex32>,
@@ -164,15 +164,28 @@ where
                         second_mag,
                     ];
                     println!(
-                        "SYNC_LONG: peak1={} peak2={} gap={} (expected 64) cfo={:.6} mag1={:.3} mag2={:.3}",
-                        first, second, gap as i32, freq_offset, first_mag, second_mag
+                        "SYNC_LONG: peak1={} peak2={} gap={} (expected {}) cfo={:.6} mag1={:.3} mag2={:.3}",
+                        first, second, gap as i32, FFT_SIZE, freq_offset, first_mag, second_mag
                     );
-                    // 3. Time-domain LTF (160 samples starting at sync offset, pre-CFO-correction)
+                    // 3. Time-domain LTF (2·Tu samples starting at sync offset, pre-CFO-correction)
                     let ltf_td: Vec<Complex32> =
                         input[offset..offset + 2 * FFT_SIZE].to_vec();
+                    // 4. Time-domain STF (up to 2·Tu samples *before* the LTF1 double-GI).
+                    //    Layout: ... | STF1 | STF2 | 2·Tcp double-GI | LTF1 sym1 | LTF1 sym2 | ...
+                    //    so STF samples occupy [offset − 2·Tcp − 2·Tu, offset − 2·Tcp).
+                    //    If `offset` is small (early threshold crossing in SyncShort), the slice
+                    //    may be shorter than 2·Tu — render.py handles variable lengths.
+                    let stf_end = offset.saturating_sub(2 * CP_LEN);
+                    let stf_start = stf_end.saturating_sub(2 * FFT_SIZE);
+                    let stf_td: Vec<Complex32> = if stf_end > stf_start {
+                        input[stf_start..stf_end].to_vec()
+                    } else {
+                        Vec::new()
+                    };
                     mio.post("corr_mag", Pmt::VecF32(mag)).await?;
                     mio.post("sync_info", Pmt::VecF32(info)).await?;
                     mio.post("ltf_td", Pmt::VecCF32(ltf_td)).await?;
+                    mio.post("stf_td", Pmt::VecCF32(stf_td)).await?;
 
                     // Output 2 × FFT_SIZE samples (two LTF symbols for channel estimation)
                     for i in 0..(2 * FFT_SIZE) {

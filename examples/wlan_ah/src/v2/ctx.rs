@@ -13,7 +13,7 @@ pub struct FrameCtx {
     pub cfo: f32,
     /// Residual fractional STO (samples) to be applied as a freq-domain ramp.
     pub sto_frac: f32,
-    /// 64-bin channel estimate (FFT-shifted, DC at index 32). Empty until the
+    /// FFT_SIZE-bin channel estimate (FFT-shifted, DC at index DC_INDEX). Empty until the
     /// ChannelEstimator runs.
     pub h_est: Vec<Complex32>,
     /// Parsed SIG field. `None` until SigDecoder runs successfully.

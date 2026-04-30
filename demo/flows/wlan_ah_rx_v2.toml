@@ -1,0 +1,99 @@
+# WLAN 802.11ah RX v2
+[radio]
+frequency_hz   = 905.0e6
+sample_rate_hz = 4e6
+gain_db        = 0.0
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "stf.input"
+type = "c32"
+from = "head"
+
+[[blocks]]
+id = "stf"
+plugin = "wlan_ah_v2_stf_detector_plugin"
+
+[[blocks]]
+id = "cfo"
+plugin = "wlan_ah_v2_cfo_corrector_plugin"
+
+[[blocks]]
+id = "sto"
+plugin = "wlan_ah_v2_sto_corrector_plugin"
+
+[[blocks]]
+id = "ch"
+plugin = "wlan_ah_v2_channel_estimator_plugin"
+config = false
+config_type = "bool"
+
+[[blocks]]
+id = "sig"
+plugin = "wlan_ah_v2_sig_decoder_plugin"
+config = false
+config_type = "bool"
+
+[[blocks]]
+id = "data"
+plugin = "wlan_ah_v2_data_demod_plugin"
+config = false
+config_type = "bool"
+
+[[blocks]]
+id = "decoder"
+plugin = "wlan_ah_decoder_plugin"
+
+[[blocks]]
+id = "udp_rx"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55556"
+
+[[connections]]
+src = "stf.frame"
+dst = "cfo.frame"
+message = true
+
+[[connections]]
+src = "cfo.frame"
+dst = "sto.frame"
+message = true
+
+[[connections]]
+src = "sto.frame"
+dst = "ch.frame"
+message = true
+
+[[connections]]
+src = "ch.frame"
+dst = "sig.frame"
+message = true
+
+[[connections]]
+src = "sig.frame"
+dst = "data.frame"
+message = true
+
+[[connections]]
+src = "data.output"
+dst = "decoder.input"
+
+[[connections]]
+src = "decoder.rx_frames"
+dst = "udp_rx.in"
+message = true
+
+[[connections]]
+src = "decoder.rftap"
+dst = "udp_rftap.in"
+message = true
+
+[[controller_taps]]
+src = "decoder.rx_frames"
+name = "wlan_ah_v2_frames"

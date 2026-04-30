@@ -59,3 +59,9 @@ tmp/
 
 # ── Local SDR captures ───────────────────────────────────────────
 examples/wlan_ah/bin/2026-04-27-15-22-31_wlan_ah_905M_4Msps_10s.cf32
+
+# ── Generated WLAN AH plot data ──────────────────────────────────
+examples/wlan_ah/plots/*.cf32
+examples/wlan_ah/plots/*.f32
+examples/wlan_ah/plotv2/*.cf32
+examples/wlan_ah/plotv2/*.f32

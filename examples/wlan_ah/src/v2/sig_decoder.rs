@@ -8,25 +8,123 @@ use futuresdr::prelude::*;
 
 use crate::v2::ctx::FrameCtx;
 use crate::v2::helpers::{TCP, TS, dft_shift, frac_shift_ramp};
-use crate::{FFT_SIZE, FrameParam, Mcs, crc4, sc, sig_data_sc};
+use crate::{FFT_SIZE, FrameParam, MAX_PSDU_SIZE, MAX_SYM, Mcs, ViterbiDecoder, crc4, sig_data_sc};
+
+const SIG_INTERLEAVER_PATTERN: [usize; 48] = [
+    0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 1, 4, 7, 10, 13,
+    16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 2, 5, 8, 11, 14, 17, 20, 23, 26,
+    29, 32, 35, 38, 41, 44, 47,
+];
 
 #[derive(Block)]
 #[message_inputs(frame)]
 #[message_outputs(frame, preamble_symbols, preamble_symbols2)]
-pub struct SigDecoder {}
+pub struct SigDecoder {
+    debug_print: bool,
+    decoder: ViterbiDecoder,
+    decoded_bits: [u8; 48],
+}
 
 impl SigDecoder {
     pub fn new() -> Self {
-        Self {}
+        Self::new_with_debug_print(false)
+    }
+
+    pub fn new_with_debug_print(debug_print: bool) -> Self {
+        Self {
+            debug_print,
+            decoder: ViterbiDecoder::new(),
+            decoded_bits: [0; 48],
+        }
+    }
+
+    fn decode_candidate(&mut self, sig_bits: &[u8; 96], is_long: bool) -> Option<FrameParam> {
+        let mut deinterleaved = [0u8; 96];
+        for sym in 0..2 {
+            let offset = sym * 48;
+            for i in 0..48 {
+                deinterleaved[offset + i] = sig_bits[offset + SIG_INTERLEAVER_PATTERN[i]];
+            }
+        }
+
+        self.decoder
+            .decode_raw(&deinterleaved, &mut self.decoded_bits, 48);
+
+        let sig_info = &self.decoded_bits;
+        let crc_calc = crc4(&sig_info[0..38]);
+        let mut crc_sig = 0u8;
+        for i in 0..4 {
+            if sig_info[38 + i] > 0 {
+                crc_sig |= 1 << (3 - i);
+            }
+        }
+        if crc_calc != crc_sig {
+            return None;
+        }
+
+        let stbc = sig_info[1];
+        if stbc != 0 {
+            return None;
+        }
+        let bw = (sig_info[3] as u8) | ((sig_info[4] as u8) << 1);
+        if bw != 0 {
+            return None;
+        }
+        let nsts = (sig_info[5] as u8) | ((sig_info[6] as u8) << 1);
+        if nsts != 0 {
+            return None;
+        }
+        let coding = sig_info[17];
+        if coding != 0 {
+            return None;
+        }
+
+        let mcs_idx = (sig_info[19] as u8)
+            | ((sig_info[20] as u8) << 1)
+            | ((sig_info[21] as u8) << 2)
+            | ((sig_info[22] as u8) << 3);
+        let mcs = Mcs::from_mcs_index(mcs_idx)?;
+        let short_gi = sig_info[16] > 0;
+        let aggregation = sig_info[24] > 0;
+        let mut length: usize = 0;
+        for (i, &b) in sig_info[25..=33].iter().enumerate() {
+            length |= (b as usize) << i;
+        }
+        let traveling_pilots = if is_long {
+            sig_info[37] > 0
+        } else {
+            sig_info[36] > 0
+        };
+
+        let frame_param = FrameParam::with_options(
+            mcs,
+            length,
+            aggregation,
+            traveling_pilots,
+            short_gi,
+            is_long,
+        );
+        if frame_param.n_symbols() > MAX_SYM || frame_param.psdu_size() > MAX_PSDU_SIZE {
+            return None;
+        }
+
+        Some(frame_param)
     }
 
     async fn frame(
         &mut self,
-        _io: &mut WorkIo,
+        io: &mut WorkIo,
         mio: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
+        if matches!(p, Pmt::Finished) {
+            mio.post("frame", Pmt::Finished).await?;
+            mio.post("preamble_symbols", Pmt::Finished).await?;
+            mio.post("preamble_symbols2", Pmt::Finished).await?;
+            io.finished = true;
+            return Ok(Pmt::Null);
+        }
         if let Pmt::Any(a) = &p {
             if let Some(ctx) = a.downcast_ref::<FrameCtx>() {
                 let mut ctx = ctx.clone();
@@ -55,7 +153,7 @@ impl SigDecoder {
                 }
 
                 let sig_idxs = sig_data_sc();
-                let sig_scale = (48.0f32 / 56.0).sqrt();
+                let sig_scale = (52.0f32 / 56.0).sqrt();
                 let mut sig_eq = [[Complex32::new(0.0, 0.0); 48]; 2];
                 for j in 0..2 {
                     for (i, &idx) in sig_idxs.iter().enumerate() {
@@ -79,79 +177,50 @@ impl SigDecoder {
                 )
                 .await?;
 
-                // S1G_SHORT (BPSK on imag axis both symbols) vs S1G_LONG
-                // (BPSK imag for sym0, real for sym1).
-                let (re_pow, im_pow) = sig_eq[1]
-                    .iter()
-                    .fold((0.0f32, 0.0f32), |(r, i), c| {
-                        (r + c.re * c.re, i + c.im * c.im)
-                    });
-                let is_long = re_pow > im_pow;
+                let mut short_bits = [0u8; 96];
+                let mut long_bits = [0u8; 96];
+                for i in 0..48 {
+                    short_bits[i] = (sig_eq[0][i].im > 0.0) as u8;
+                    short_bits[48 + i] = (sig_eq[1][i].im > 0.0) as u8;
 
-                let mut sig_bits = [0u8; 96];
-                if is_long {
-                    for i in 0..48 {
-                        sig_bits[i] = (sig_eq[0][i].im > 0.0) as u8;
-                        sig_bits[48 + i] = (sig_eq[1][i].re > 0.0) as u8;
+                    long_bits[i] = (sig_eq[0][i].im > 0.0) as u8;
+                    long_bits[48 + i] = (sig_eq[1][i].re > 0.0) as u8;
+                }
+
+                let short_frame = self.decode_candidate(&short_bits, false);
+                let long_frame = self.decode_candidate(&long_bits, true);
+                let frame_param = match (short_frame, long_frame) {
+                    (Some(short), None) => short,
+                    (None, Some(long)) => long,
+                    (Some(short), Some(_long)) => short,
+                    (None, None) => {
+                        if self.debug_print {
+                            let imag_pow: f32 = sig_eq[1].iter().map(|z| z.im * z.im).sum();
+                            let real_pow: f32 = sig_eq[1].iter().map(|z| z.re * z.re).sum();
+                            info!(
+                                "[v2.sig] decode failed: sym2 imag_pow={:.3} real_pow={:.3}",
+                                imag_pow,
+                                real_pow
+                            );
+                        }
+                        return Ok(Pmt::Null);
                     }
-                } else {
-                    for i in 0..48 {
-                        sig_bits[i] = (sig_eq[0][i].im > 0.0) as u8;
-                        sig_bits[48 + i] = (sig_eq[1][i].im > 0.0) as u8;
-                    }
-                }
-
-                let mut deitl = [0u8; 96];
-                for blk in 0..2 {
-                    let offset = blk * 48;
-                    for k in 0..48 {
-                        let perm = 3 * (k % 16) + k / 16;
-                        deitl[offset + perm] = sig_bits[offset + k];
-                    }
-                }
-
-                let sig_info = match viterbi_decode_48(&deitl) {
-                    Some(v) => v,
-                    None => return Ok(Pmt::Null),
-                };
-                let crc_calc = crc4(&sig_info[0..38]);
-                let crc_sig: u8 = sig_info[38]
-                    | (sig_info[39] << 1)
-                    | (sig_info[40] << 2)
-                    | (sig_info[41] << 3);
-                if crc_calc != crc_sig {
-                    return Ok(Pmt::Null);
-                }
-
-                let mcs_idx = sig_info[19]
-                    | (sig_info[20] << 1)
-                    | (sig_info[21] << 2)
-                    | (sig_info[22] << 3);
-                let mcs = match Mcs::from_mcs_index(mcs_idx) {
-                    Some(m) => m,
-                    None => return Ok(Pmt::Null),
-                };
-                let short_gi = sig_info[16] != 0;
-                let aggregation = sig_info[24] != 0;
-                let mut length: usize = 0;
-                for (i, &b) in sig_info[25..=33].iter().enumerate() {
-                    length |= (b as usize) << i;
-                }
-                let traveling_pilots = if is_long {
-                    sig_info[37] != 0
-                } else {
-                    sig_info[36] != 0
                 };
 
-                let _ = sc; // keep import used via macro transitively
-                ctx.frame_param = Some(FrameParam::with_options(
-                    mcs,
-                    length,
-                    aggregation,
-                    traveling_pilots,
-                    short_gi,
-                    is_long,
-                ));
+                if self.debug_print {
+                    info!(
+                        "[v2.sig] decoded: mcs={:?} n_sym={} psdu={} long={} tp={} sgi={} agg={}",
+                        frame_param.mcs(),
+                        frame_param.n_symbols(),
+                        frame_param.psdu_size(),
+                        frame_param.is_long,
+                        frame_param.traveling_pilots,
+                        frame_param.short_gi,
+                        frame_param.aggregation
+                    );
+                }
+
+                ctx.frame_param = Some(frame_param);
 
                 mio.post("frame", Pmt::Any(Box::new(ctx))).await?;
             }
@@ -167,51 +236,3 @@ impl Default for SigDecoder {
 }
 
 impl Kernel for SigDecoder {}
-
-/// Rate-1/2 BCC Viterbi (k=7, G0=171 oct, G1=133 oct). Input: 96 coded bits;
-/// Output: 48 decoded info bits. Returns `None` when the trellis is empty.
-fn viterbi_decode_48(coded: &[u8; 96]) -> Option<[u8; 48]> {
-    const STATES: usize = 64;
-    const INF: u32 = u32::MAX / 4;
-    let mut m = [[INF; STATES]; 49];
-    let mut back = [[0u8; STATES]; 48];
-    m[0][0] = 0;
-    for t in 0..48 {
-        let c0 = coded[2 * t] as u32;
-        let c1 = coded[2 * t + 1] as u32;
-        for s in 0..STATES {
-            if m[t][s] >= INF {
-                continue;
-            }
-            for bit in 0..2u32 {
-                let new_state = ((s as u32) << 1 | bit) & 0x3f;
-                let reg = ((bit << 6) | (s as u32)) & 0x7f;
-                let p0 = ((reg & 0o171).count_ones() & 1) as u32;
-                let p1 = ((reg & 0o133).count_ones() & 1) as u32;
-                let d = (p0 ^ c0) + (p1 ^ c1);
-                let cost = m[t][s].saturating_add(d);
-                if cost < m[t + 1][new_state as usize] {
-                    m[t + 1][new_state as usize] = cost;
-                    back[t][new_state as usize] = ((s as u8) << 1) | (bit as u8);
-                }
-            }
-        }
-    }
-    let mut best_s = 0usize;
-    for s in 0..STATES {
-        if m[48][s] < m[48][best_s] {
-            best_s = s;
-        }
-    }
-    if m[48][best_s] >= INF {
-        return None;
-    }
-    let mut bits = [0u8; 48];
-    let mut s = best_s;
-    for t in (0..48).rev() {
-        let b = back[t][s];
-        bits[t] = b & 1;
-        s = (b >> 1) as usize;
-    }
-    Some(bits)
-}

@@ -25,6 +25,9 @@
 //     -p clock_recovery_mm_plugin -p null_sink_plugin -p blob_to_udp_plugin \
 //     -p wlan_dc_offset_plugin -p wlan_ah_sync_short_plugin -p wlan_ah_sync_long_plugin \
 //     -p wlan_ah_frame_equalizer_plugin -p wlan_ah_decoder_plugin \
+//     -p wlan_ah_v2_stf_detector_plugin -p wlan_ah_v2_cfo_corrector_plugin \
+//     -p wlan_ah_v2_sto_corrector_plugin -p wlan_ah_v2_channel_estimator_plugin \
+//     -p wlan_ah_v2_sig_decoder_plugin -p wlan_ah_v2_data_demod_plugin \
 //     -p delay_complex_plugin -p complex_to_mag2_plugin \
 //     -p moving_average_f32_plugin -p moving_average_complex_plugin \
 //     -p mult_conj_plugin -p divide_mag_plugin -p fft_complex_plugin
@@ -44,10 +47,10 @@ use plugin_api::{FlowgraphController, default_plugin_dir};
 /// Auto-rotation sequence: every SWAP_PERIOD, swap to the next entry.
 const ROTATION: &[&str] = &[
     "flows/zigbee_rx.toml",
-    "flows/wlan_ah_rx.toml",
+    "flows/wlan_ah_rx_v2.toml",
 ];
 
-const SWAP_PERIOD: Duration = Duration::from_secs(10);
+const SWAP_PERIOD: Duration = Duration::from_secs(9);
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     futuresdr::runtime::init();

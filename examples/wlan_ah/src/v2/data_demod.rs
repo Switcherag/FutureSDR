@@ -28,8 +28,10 @@ where
 {
     #[output]
     output: O,
+    debug_print: bool,
     queue: VecDeque<Queued>,
     emitting: Option<(Vec<u8>, FrameParam, usize)>,
+    upstream_finished: bool,
 }
 
 impl<O> DataDemod<O>
@@ -37,25 +39,50 @@ where
     O: CpuBufferWriter<Item = u8>,
 {
     pub fn new() -> Self {
+        Self::new_with_debug_print(false)
+    }
+
+    pub fn new_with_debug_print(debug_print: bool) -> Self {
         Self {
             output: O::default(),
+            debug_print,
             queue: VecDeque::new(),
             emitting: None,
+            upstream_finished: false,
         }
     }
 
     async fn frame(
         &mut self,
-        _io: &mut WorkIo,
+        io: &mut WorkIo,
         mio: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
+        if matches!(p, Pmt::Finished) {
+            self.upstream_finished = true;
+            mio.post("symbols", Pmt::Finished).await?;
+            io.call_again = true;
+            return Ok(Pmt::Null);
+        }
         if let Pmt::Any(a) = &p {
             if let Some(ctx) = a.downcast_ref::<FrameCtx>() {
                 if let Some((bytes, param, syms)) = demod_frame(ctx) {
+                    if self.debug_print {
+                        info!(
+                            "[v2.data] demodulated: n_sym={} bytes={} constellation_points={}",
+                            param.n_symbols(),
+                            bytes.len(),
+                            syms.len()
+                        );
+                    }
                     mio.post("symbols", Pmt::VecCF32(syms)).await?;
                     self.queue.push_back(Queued { bytes, param });
+                    io.call_again = true;
+                } else {
+                    if self.debug_print {
+                        info!("[v2.data] demod_frame returned None");
+                    }
                 }
             }
         }
@@ -78,7 +105,7 @@ where
 {
     async fn work(
         &mut self,
-        _io: &mut WorkIo,
+        io: &mut WorkIo,
         _mio: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
@@ -110,6 +137,12 @@ where
             } else {
                 break;
             }
+        }
+        if self.upstream_finished && self.emitting.is_none() && self.queue.is_empty() {
+            io.finished = true;
+        }
+        if self.emitting.is_some() || !self.queue.is_empty() {
+            io.call_again = true;
         }
         Ok(())
     }

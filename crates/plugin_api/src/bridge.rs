@@ -43,10 +43,10 @@ impl NamedMessagePipe {
     }
 }
 
-// Item-count capacity for each type (all ≈ 32 KiB of data).
-const CAP_U8:  usize = 32_768; // 32 KiB × 1 byte
-const CAP_F32: usize =  8_192; // 32 KiB / 4 bytes
-const CAP_C32: usize =  4_096; // 32 KiB / 8 bytes
+// Item-count capacity for each type.
+const CAP_U8:  usize =   32_768; // 32 KiB × 1 byte
+const CAP_F32: usize =    8_192; // 32 KiB / 4 bytes
+const CAP_C32: usize = 1_048_576; // 8 MiB / 8 bytes, enough to absorb swap-time retune gaps
 
 macro_rules! make_bridge {
     ($sink:ident, $source:ident, $t:ty, $cap:expr) => {

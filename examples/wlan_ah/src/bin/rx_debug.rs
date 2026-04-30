@@ -4,6 +4,7 @@ use futuresdr::blocks::Combine;
 use futuresdr::blocks::Delay;
 use futuresdr::blocks::Fft;
 use futuresdr::blocks::FftDirection;
+use futuresdr::blocks::FileSink;
 use futuresdr::blocks::FileSource;
 use futuresdr::blocks::MessagePipe;
 use futuresdr::blocks::WebsocketPmtSink;
@@ -25,11 +26,14 @@ struct Args {
     #[clap(short, long, default_value_t = false)]
     dc_offset: bool,
     /// Input file path
-    #[clap(short = 'i', long, default_value = "2024-12-22-21-19-29_baby-monitor_4Msps.sigmf-data")]
+    #[clap(short = 'i', long, default_value = "bin/2026-04-27-15-22-31_wlan_ah_905M_4Msps_10s.cf32")]
     file: String,
     /// Throttle rate in samples/sec (use high value like 1e9 for batch)
-    #[clap(short, long, default_value_t = 1e3)]
+    #[clap(short, long, default_value_t = 1e9)]
     rate: f64,
+    /// Output directory for the raw .cf32 / .f32 dumps consumed by plots/render.py.
+    #[clap(long, default_value = "plots")]
+    plot_dir: String,
 }
 
 fn main() -> Result<()> {
@@ -40,17 +44,12 @@ fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
 
     // ── Source ──────────────────────────────────────────────────────────
-    let source = FileSource::<Complex<i16>>::new(
-        &args.file,
-        true,
-    );
-    let throttle = futuresdr::blocks::Throttle::<Complex<i16>>::new(args.rate);
-    let convert = Apply::<_, _, _>::new(|c: &Complex<i16>| {
-        Complex32::new(
-            c.re as f32 * (1.0 / 32768.0),
-            c.im as f32 * (1.0 / 32768.0),
-        )
-    });
+    // .cf32 file = native Complex<f32> (matches notebook's np.fromfile(..., 'complex64')).
+    let source = FileSource::<Complex32>::new(&args.file, false);
+    let throttle = futuresdr::blocks::Throttle::<Complex32>::new(args.rate);
+    // Identity Apply kept so downstream `convert_id` still has a stable BlockId
+    // and the optional DC-offset stage can chain in/out cleanly.
+    let convert = Apply::<_, _, _>::new(|c: &Complex32| *c);
     connect!(fg, source > throttle > convert);
     let convert_id: BlockId = convert.into();
 
@@ -73,14 +72,14 @@ fn main() -> Result<()> {
 
     // ── Schmidl-Cox short preamble detector ────────────────────────────
     // Window lengths match the analysis notebook at fs = 4 MSps:
-    //   Tu  = 128, Tcp = 32, Ts = 160
-    //   correlation window = 2·Ts − Tu/4 = 288   (`np.convolve` length)
-    //   power-norm window  = Ts/2 = 80           (notebook uses mean here)
-    //   delay              = Tu/4 = 32
+    //   correlation window = 2·Ts − Tu/4               (`np.convolve` length)
+    //   power-norm window  = Ts/2                      (notebook uses mean)
+    //   delay              = Tu/4
     // M[n] = |Σ_{288} x·conj(x_delayed)| / Σ_{80} |x|²
-    const STF_DELAY: usize = 32;        // Tu/4 at 4 MSps
-    const STF_CORR_WIN: usize = 288;    // 2·Ts − Tu/4 at 4 MSps
-    const STF_POWER_WIN: usize = 80;    // Ts/2 at 4 MSps
+    const STF_TS: usize = SYMBOL_LEN;                       // Ts = Tu + Tu/4
+    const STF_DELAY: usize = FFT_SIZE / 4;                  // Tu/4 = 32 @ 4 MSps
+    const STF_CORR_WIN: usize = 2 * SYMBOL_LEN - STF_DELAY; // 288 @ 4 MSps
+    const STF_POWER_WIN: usize = SYMBOL_LEN / 2;            // 80  @ 4 MSps
     let delay = fg.add_block(Delay::<Complex32>::new(STF_DELAY as isize));
     fg.connect_dyn(prev, output, &delay, "input")?;
 
@@ -97,51 +96,111 @@ fn main() -> Result<()> {
     connect!(fg, mult_conj > complex_avg;
                  delay > in1.mult_conj);
 
+    // ── Dump complex_avg to disk ────────────────────────────────────────
+    // complex_avg[n] is the running 288-sample correlation sum — the rust
+    // analogue of the notebook's `stf_corr_complex` (np.convolve output).
+    // Written as native Complex<f32>; plots/render.py loads it.
+    std::fs::create_dir_all(&args.plot_dir).ok();
+    let stf_corr_path = format!("{}/stf_corr.cf32", args.plot_dir);
+    let stf_metric_path = format!("{}/stf_metric.f32", args.plot_dir);
+    let stf_corr_sink = FileSink::<Complex32>::new(&stf_corr_path);
+    connect!(fg, complex_avg > stf_corr_sink);
+
     let divide_mag = fg.add_block(
         Combine::<_, _, _, _>::new(|a: &Complex32, b: &f32| a.norm() / b),
     );
     connect!(fg, complex_avg > in0.divide_mag; float_avg > in1.divide_mag);
     let divide_mag_id: BlockId = divide_mag.into();
 
+    // ── Dump the streaming detection metric M[n] = |Σcorr|/Σpower to disk ──
+    // The python script in plots/render.py applies the notebook's block
+    // argmax + local-max + 30 dB threshold to this stream.
+    let stf_metric_sink = fg.add_block(FileSink::<f32>::new(&stf_metric_path));
+    fg.connect_dyn(divide_mag_id, "output", &stf_metric_sink, "input")?;
+
     // ── STF detection-metric printer ────────────────────────────────────
-    // Mirrors the notebook's `max_value_norm` peak detection. Windows above
-    // (288 / 80 / delay 32) match the notebook at fs = 4 MSps, so peak
-    // *positions and shapes* are now directly comparable.
+    // Faithful port of the notebook's detection rule:
     //
-    // Scale offset: rust uses sum-of-power (Σ|x|²), notebook uses mean
-    // (Σ|x|²/N_pow). The two differ by N_pow = 80 → 10·log10(80) ≈ 19.03 dB.
-    // The "nb-equiv dB" column adds this constant so it lines up with the
-    // notebook's 30 dB threshold directly.
+    //   detect_window     = 6·Ts                                  (= 960)
+    //   local_maxima_win  = ±2·Ts around the block argmax         (= ±320)
+    //   threshold         = 30 dB on `max_value_norm` (mean-based)
     //
-    // Theoretical peak amplitude at a clean STF: N_corr/N_pow = 288/80 = 3.6.
-    // Notebook 30 dB threshold ↔ 12.5 in rust linear units.
-    let print_threshold: f32 = 5.0; // linear ≈ 7 dB rust ≈ 26 dB nb-equiv
-    let mut idx: usize = 0;
-    let mut peak_val: f32 = 0.0;
-    let mut peak_idx: usize = 0;
-    let mut above: bool = false;
+    // Notebook code:
+    //   stf_corr_w = stf_corr.reshape(-1, 6*Ts)
+    //   for j: a = argmax(stf_corr_w[j])
+    //          local_max = stf_corr_w[j,a] >= max(stf_corr[b ± 2·Ts])
+    //          detect = max_value_norm >= 10**(30/10)
+    //
+    // Scale offset: rust metric is sum-based (|Σcorr|/Σpower), notebook is
+    // mean-based (|Σcorr|/mean(power)). They differ by N_power = 80 →
+    // 10·log10(80) ≈ 19.03 dB. So notebook's 30 dB threshold maps to
+    // 30 - 19.03 ≈ 10.97 dB rust ≈ 12.5 linear.
+    const DETECT_WIN: usize = 6 * STF_TS;   // 960
+    const LOCAL_MAX_R: usize = 2 * STF_TS;  // 320
+    const NEED: usize = DETECT_WIN + 2 * LOCAL_MAX_R; // 1600
+
+    let nb_threshold_db: f32 = 30.0;
+    let rust_threshold: f32 =
+        10f32.powf(nb_threshold_db / 10.0) / (STF_POWER_WIN as f32); // = 12.5
+
+    let mut buf: Vec<f32> = Vec::with_capacity(NEED + 16);
+    let mut block_global_start: usize = 0; // metric-stream index of buf[0]
     let mut peak_count: usize = 0;
+
+    println!(
+        "[STF detector] threshold = {:.2} (linear)  ≈ {:+.2} dB rust ≈ {:+.2} dB nb-equiv",
+        rust_threshold,
+        10.0 * rust_threshold.log10(),
+        10.0 * rust_threshold.log10() + 19.03
+    );
+
     let metric_print = fg.add_block(Apply::<_, _, _>::new(move |&m: &f32| -> f32 {
-        if m > print_threshold {
-            if !above {
-                above = true;
-                peak_val = m;
-                peak_idx = idx;
-            } else if m > peak_val {
-                peak_val = m;
-                peak_idx = idx;
+        buf.push(m);
+        while buf.len() >= NEED {
+            // argmax inside the *middle* block (offset LOCAL_MAX_R, length DETECT_WIN)
+            let mut max_val = f32::NEG_INFINITY;
+            let mut max_rel = 0usize;
+            for i in 0..DETECT_WIN {
+                let v = buf[LOCAL_MAX_R + i];
+                if v > max_val {
+                    max_val = v;
+                    max_rel = i;
+                }
             }
-        } else if above {
-            let db = 10.0 * peak_val.log10();
-            println!(
-                "STF peak #{:<5} sample={:>10}  M={:.4}  ({:+.2} dB, +19.0 dB nb-equiv = {:+.2} dB)",
-                peak_count, peak_idx, peak_val, db, db + 19.03
-            );
-            peak_count += 1;
-            above = false;
-            peak_val = 0.0;
+            // local-max check: peak must be >= max in [arg − 2·Ts, arg + 2·Ts)
+            let arg_buf = LOCAL_MAX_R + max_rel;
+            let mut local_max = f32::NEG_INFINITY;
+            for i in (arg_buf - LOCAL_MAX_R)..(arg_buf + LOCAL_MAX_R) {
+                if buf[i] > local_max {
+                    local_max = buf[i];
+                }
+            }
+            let is_local_max = max_val >= local_max;
+            let above_thresh = max_val >= rust_threshold;
+
+            if above_thresh && is_local_max {
+                let metric_idx = block_global_start + arg_buf;
+                // x-sample-index of the START of the correlation window:
+                //   subtract (STF_CORR_WIN - 1) + STF_DELAY = 287 + 32 = 319
+                let x_start = metric_idx.saturating_sub(STF_CORR_WIN - 1 + STF_DELAY);
+                let db_rust = 10.0 * max_val.log10();
+                println!(
+                    "STF peak #{:<3} block={:<4} metric_idx={:>9}  x_start≈{:>9}  M={:.4}  ({:+.2} dB rust / {:+.2} dB nb)",
+                    peak_count,
+                    block_global_start / DETECT_WIN,
+                    metric_idx,
+                    x_start,
+                    max_val,
+                    db_rust,
+                    db_rust + 19.03
+                );
+                peak_count += 1;
+            }
+
+            // advance one block
+            buf.drain(0..DETECT_WIN);
+            block_global_start += DETECT_WIN;
         }
-        idx = idx.wrapping_add(1);
         m
     }));
     let metric_print_id: BlockId = metric_print.into();
@@ -155,8 +214,14 @@ fn main() -> Result<()> {
                  complex_avg > in_abs.sync_short);
     fg.connect_dyn(divide_mag_id, "output", &sync_short, "in_cor")?;
 
+    // Tap: capture sync_short output (CFO-corrected time-domain stream that
+    // sync_long sees). Useful to check whether the LTF preamble is intact.
+    // Inserted in-line on sync_short → sync_long.
+    let sync_short_out_path = format!("{}/sync_short_out.cf32", args.plot_dir);
+    let sync_short_dump = fg.add_block(FileSink::<Complex32>::new(&sync_short_out_path));
     let sync_long: SyncLong = SyncLong::new();
-    connect!(fg, sync_short > sync_long);
+    connect!(fg, sync_short > sync_long;
+                 sync_short > sync_short_dump);
 
     let fft: Fft = Fft::new(FFT_SIZE);
     let frame_equalizer: FrameEqualizer = FrameEqualizer::new();
@@ -171,6 +236,38 @@ fn main() -> Result<()> {
     connect!(fg, decoder.rx_frames | message_pipe;
                  decoder.rx_frames | udp1;
                  decoder.rftap | udp2);
+
+    // ── First-PPDU capture (for plots/render.py) ───────────────────────
+    // Subscribes to the message ports the FrameEqualizer already emits:
+    //   channel_est       → VecCF32 of length N_ACTIVE_SC (= 56)
+    //   preamble_symbols  → VecCF32 of length 48  (SIG / SIG-A symbol 1)
+    //   preamble_symbols2 → VecCF32 of length 48  (SIG / SIG-A symbol 2)
+    //   symbols           → VecCF32 of length N_sym × 52 (data symbols)
+    // We take only the first message on each port — that's the first PPDU.
+    let (chest_tx, mut chest_rx) = mpsc::channel::<Pmt>(64);
+    let (sig1_tx, mut sig1_rx) = mpsc::channel::<Pmt>(64);
+    let (sig2_tx, mut sig2_rx) = mpsc::channel::<Pmt>(64);
+    let (data_tx, mut data_rx) = mpsc::channel::<Pmt>(64);
+    let (ltf1_tx, mut ltf1_rx) = mpsc::channel::<Pmt>(64);
+    let (stf_tx, mut stf_rx) = mpsc::channel::<Pmt>(64);
+    let (cm_tx, mut cm_rx) = mpsc::channel::<Pmt>(64);
+    let (lt_tx, mut lt_rx) = mpsc::channel::<Pmt>(64);
+    let chest_pipe = MessagePipe::new(chest_tx);
+    let sig1_pipe = MessagePipe::new(sig1_tx);
+    let sig2_pipe = MessagePipe::new(sig2_tx);
+    let data_pipe = MessagePipe::new(data_tx);
+    let ltf1_pipe = MessagePipe::new(ltf1_tx);
+    let stf_pipe = MessagePipe::new(stf_tx);
+    let cm_pipe = MessagePipe::new(cm_tx);
+    let lt_pipe = MessagePipe::new(lt_tx);
+    connect!(fg, frame_equalizer.channel_est       | chest_pipe;
+                 frame_equalizer.preamble_symbols  | sig1_pipe;
+                 frame_equalizer.preamble_symbols2 | sig2_pipe;
+                 frame_equalizer.symbols           | data_pipe;
+                 frame_equalizer.ltf1_eq           | ltf1_pipe;
+                 sync_long.stf_td                  | stf_pipe;
+                 sync_long.corr_mag                | cm_pipe;
+                 sync_long.ltf_td                  | lt_pipe);
 
     // ── Visualization sinks ────────────────────────────────────────────
     // Spectrogram (waterfall) — ws://127.0.0.1:9013
@@ -219,17 +316,103 @@ fn main() -> Result<()> {
     fg.connect_dyn(src_mag_id, "output", src_ws_id, "input")?;
 
     // ── Run ────────────────────────────────────────────────────────────
+    let plot_dir = args.plot_dir.clone();
     let (_fg, _handle) = rt.start_sync(fg)?;
     rt.block_on(async move {
+        // Drain rx_frame as before — keeps the loop alive until the file
+        // ends and all flowgraph senders close.
         while let Some(x) = rx_frame.next().await {
             match x {
-                Pmt::Blob(data) => {
-                    println!("received frame ({:?} bytes)", data.len());
-                }
+                Pmt::Blob(data) => println!("received frame ({} bytes)", data.len()),
                 _ => break,
             }
         }
+
+        // Helper: extract a VecCF32 from the first message on a port.
+        async fn first_veccf32(rx: &mut mpsc::Receiver<Pmt>) -> Option<Vec<Complex32>> {
+            match rx.next().await {
+                Some(Pmt::VecCF32(v)) => Some(v),
+                _ => None,
+            }
+        }
+        async fn first_vecf32(rx: &mut mpsc::Receiver<Pmt>) -> Option<Vec<f32>> {
+            match rx.next().await {
+                Some(Pmt::VecF32(v)) => Some(v),
+                _ => None,
+            }
+        }
+        let first_chest = first_veccf32(&mut chest_rx).await;
+        let first_sig1 = first_veccf32(&mut sig1_rx).await;
+        let first_sig2 = first_veccf32(&mut sig2_rx).await;
+        let first_data = first_veccf32(&mut data_rx).await;
+        let first_ltf1 = first_veccf32(&mut ltf1_rx).await;
+        let first_stf = first_veccf32(&mut stf_rx).await;
+        let first_corr_mag = first_vecf32(&mut cm_rx).await;
+        let first_ltf_td = first_veccf32(&mut lt_rx).await;
+
+        let write_cf32 = |path: &str, v: &[Complex32]| -> std::io::Result<()> {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    v.as_ptr() as *const u8,
+                    v.len() * std::mem::size_of::<Complex32>(),
+                )
+            };
+            std::fs::write(path, bytes)
+        };
+
+        if let Some(v) = first_chest.as_ref() {
+            let p = format!("{}/h_est.cf32", plot_dir);
+            let _ = write_cf32(&p, v);
+            println!("[dump] {} ({} subcarriers)", p, v.len());
+        } else {
+            eprintln!("[dump] no channel_est captured (no PPDU decoded)");
+        }
+        if let Some(v) = first_sig1.as_ref() {
+            let p = format!("{}/sig1.cf32", plot_dir);
+            let _ = write_cf32(&p, v);
+            println!("[dump] {} ({} points)", p, v.len());
+        }
+        if let Some(v) = first_sig2.as_ref() {
+            let p = format!("{}/sig2.cf32", plot_dir);
+            let _ = write_cf32(&p, v);
+            println!("[dump] {} ({} points)", p, v.len());
+        }
+        if let Some(v) = first_data.as_ref() {
+            let p = format!("{}/data_syms.cf32", plot_dir);
+            let _ = write_cf32(&p, v);
+            println!("[dump] {} ({} points = {} symbols × 52)", p, v.len(), v.len() / 52);
+        }
+        if let Some(v) = first_ltf1.as_ref() {
+            let p = format!("{}/ltf1_eq.cf32", plot_dir);
+            let _ = write_cf32(&p, v);
+            println!("[dump] {} ({} points = 2 × 56)", p, v.len());
+        }
+        if let Some(v) = first_stf.as_ref() {
+            let p = format!("{}/stf_td.cf32", plot_dir);
+            let _ = write_cf32(&p, v);
+            println!("[dump] {} ({} samples)", p, v.len());
+        }
+        if let Some(v) = first_ltf_td.as_ref() {
+            let p = format!("{}/ltf_td.cf32", plot_dir);
+            let _ = write_cf32(&p, v);
+            println!("[dump] {} ({} samples)", p, v.len());
+        }
+        if let Some(v) = first_corr_mag.as_ref() {
+            let p = format!("{}/sync_long_corr_mag.f32", plot_dir);
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    v.as_ptr() as *const u8,
+                    v.len() * std::mem::size_of::<f32>(),
+                )
+            };
+            let _ = std::fs::write(&p, bytes);
+            println!("[dump] {} ({} samples = SyncLong correlation magnitudes)", p, v.len());
+        }
     });
+
+    println!("[dump] {}", stf_corr_path);
+    println!("[dump] {}", stf_metric_path);
+    println!("[dump] render with: python {}/render.py", args.plot_dir);
 
     Ok(())
 }

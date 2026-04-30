@@ -21,11 +21,17 @@ impl StoCorrector {
 
     async fn frame(
         &mut self,
-        _io: &mut WorkIo,
+        io: &mut WorkIo,
         mio: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
+        if matches!(p, Pmt::Finished) {
+            mio.post("frame", Pmt::Finished).await?;
+            mio.post("ltf_td", Pmt::Finished).await?;
+            io.finished = true;
+            return Ok(Pmt::Null);
+        }
         if let Pmt::Any(a) = &p {
             if let Some(ctx) = a.downcast_ref::<FrameCtx>() {
                 let mut ctx = ctx.clone();
