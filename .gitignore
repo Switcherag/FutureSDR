@@ -65,3 +65,11 @@ examples/wlan_ah/plots/*.cf32
 examples/wlan_ah/plots/*.f32
 examples/wlan_ah/plotv2/*.cf32
 examples/wlan_ah/plotv2/*.f32
+
+# ── SDR capture / sample artifacts ───────────────────────────────
+*.f32
+
+# ── Generated images ──────────────────────────────────────────────
+*.png
+*.cf32
+*.csv

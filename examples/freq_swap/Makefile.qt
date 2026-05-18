@@ -1,0 +1,26 @@
+CC      ?= gcc
+CFLAGS  ?= -O2 -g -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200809L
+LDLIBS  ?= -lbladeRF -lpthread
+
+# libbladeRF lives under /usr/local on this host (lib64 on Fedora).
+BLADERF_PREFIX ?= /usr/local
+CFLAGS  += -I$(BLADERF_PREFIX)/include
+LDFLAGS += -L$(BLADERF_PREFIX)/lib64 -L$(BLADERF_PREFIX)/lib \
+           -Wl,-rpath,$(BLADERF_PREFIX)/lib64 -Wl,-rpath,$(BLADERF_PREFIX)/lib
+
+freq_swap_qt: freq_swap_qt.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
+
+run: freq_swap_qt
+	./freq_swap_qt
+
+plot: freq_swap.cf32
+	python3 plot_freq_swap.py
+
+inspect: freq_swap.cf32
+	inspectrum -r 4000000 -f cf32 freq_swap.cf32
+
+clean:
+	rm -f freq_swap_qt freq_swap.cf32 freq_swap.meta.json freq_swap*.png
+
+.PHONY: run plot inspect clean

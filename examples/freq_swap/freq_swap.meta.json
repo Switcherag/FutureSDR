@@ -1,0 +1,13 @@
+{
+  "sample_rate_hz": 4000000,
+  "rx_start_freq_hz": 830000000,
+  "tx_start_freq_hz": 828500000,
+  "tx_target_freq_hz": 831500000,
+  "rx_target_freq_hz": 832000000,
+  "tx_retune_t_s": 0.200779,
+  "rx_retune_t_s": 0.401154,
+  "capture_total_s": 0.600000,
+  "iq_path": "freq_swap.cf32",
+  "format": "cf32 (interleaved float32 I,Q little-endian)",
+  "backend": "libbladeRF + quick_tune"
+}

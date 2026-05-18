@@ -100,6 +100,7 @@ where
                 Pmt::F64(v) => self.dev.set_frequency(Tx, *c, *v)?,
                 Pmt::U32(v) => self.dev.set_frequency(Tx, *c, *v as f64)?,
                 Pmt::U64(v) => self.dev.set_frequency(Tx, *c, *v as f64)?,
+                Pmt::Null => return Ok(Pmt::F64(self.dev.frequency(Tx, *c)?)),
                 _ => return Ok(Pmt::InvalidValue),
             };
         }

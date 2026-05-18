@@ -19,6 +19,14 @@ dst = "stf.input"
 type = "c32"
 from = "head"
 
+# Output to the network tail FG (length-prefixed u8 stream).
+[[ports]]
+id = "frames"
+direction = "out"
+src = "to_tail.output"
+type = "u8"
+to = "tail"
+
 [[blocks]]
 id = "stf"
 plugin = "wlan_ah_v2_stf_detector_plugin"
@@ -63,6 +71,12 @@ id = "udp_rftap"
 plugin = "blob_to_udp_plugin"
 config = "127.0.0.1:55556"
 
+# Forward each decoded frame to the network tail FG as a length-prefixed
+# byte stream.
+[[blocks]]
+id = "to_tail"
+plugin = "blob_to_lp_stream_plugin"
+
 [[connections]]
 src = "stf.frame"
 dst = "cfo.frame"
@@ -100,6 +114,12 @@ message = true
 [[connections]]
 src = "decoder.rftap"
 dst = "udp_rftap.in"
+message = true
+
+# Decoded frames → network tail (via length-prefixed u8 bridge).
+[[connections]]
+src = "decoder.rx_frames"
+dst = "to_tail.rx"
 message = true
 
 [[controller_taps]]

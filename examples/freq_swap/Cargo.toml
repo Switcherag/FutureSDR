@@ -1,0 +1,50 @@
+[package]
+name = "freq_swap"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["dylib", "rlib"]
+
+[[bin]]
+name = "cpu"
+
+[[bin]]
+name = "freq_swap"
+
+[[bin]]
+name = "freq_swap_reconfigure_streaming"
+
+[[bin]]
+name = "freq_sine_tx"
+
+[[bin]]
+name = "freq_recorder"
+
+[[bin]]
+name = "vulkan"
+required-features = ["vulkan"]
+
+[features]
+default = []
+vulkan = ["futuresdr/vulkan", "vulkano", "vulkano-shaders"]
+wgpu = ["futuresdr/wgpu"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+futuresdr = { path = "../..", features = ["soapy"] }
+vulkano = { version = "0.35", optional = true }
+vulkano-shaders = { version = "0.35", optional = true }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+gloo-net = "0.6"
+log = "0.4"
+leptos = { version = "0.8", features = ["csr", "nightly"] }
+prophecy = { path = "../../crates/prophecy" }
+serde_json = "1.0"

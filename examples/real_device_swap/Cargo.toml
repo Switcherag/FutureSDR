@@ -8,7 +8,16 @@ build = "../../plugin_build.rs"
 name = "real_device_swap"
 path = "src/main.rs"
 
+[[bin]]
+name = "per_frame_swap"
+path = "src/per_frame_swap.rs"
+
+[[bin]]
+name = "phy_per"
+path = "src/phy_per.rs"
+
 [dependencies]
 futuresdr = { path = "../..", features = ["plugin"] }
 plugin_api = { path = "../../crates/plugin_api" }
 toml = "0.8"
+clap = { version = "4", features = ["derive"] }

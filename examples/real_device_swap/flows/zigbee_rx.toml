@@ -18,6 +18,16 @@ dst = "demod.input"
 type = "c32"
 from = "head"          # auto-wired to the registered radio head's output
 
+# Output to the network tail FG. Auto-wired by the controller to whichever
+# permanent FG declares a `[tail]` section. Wire format is the
+# length-prefixed u8 stream produced by `to_tail` below.
+[[ports]]
+id = "frames"
+direction = "out"
+src = "to_tail.output"
+type = "u8"
+to = "tail"
+
 # ── Blocks ──────────────────────────────────────────────────────────
 
 [[blocks]]
@@ -51,6 +61,13 @@ id = "udp_rftap"
 plugin = "blob_to_udp_plugin"
 config = "127.0.0.1:55555"
 
+# Forward each decoded MAC frame to the network tail FG as a
+# length-prefixed byte stream (the only inter-FG transport the
+# controller supports).
+[[blocks]]
+id = "to_tail"
+plugin = "blob_to_lp_stream_plugin"
+
 # ── Stream connections ──────────────────────────────────────────────
 
 [[connections]]
@@ -75,6 +92,12 @@ message = true
 [[connections]]
 src = "mac.rftap"
 dst = "udp_rftap.in"
+message = true
+
+# Decoded MAC frames → network tail (via length-prefixed u8 bridge).
+[[connections]]
+src = "mac.rxed"
+dst = "to_tail.rx"
 message = true
 
 # ── Controller taps ─────────────────────────────────────────────────

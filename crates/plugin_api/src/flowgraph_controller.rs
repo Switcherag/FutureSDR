@@ -80,6 +80,11 @@ struct PortDef {
     /// auto-wire this port to the registered radio head's output.
     #[serde(default)]
     from: Option<String>,
+    /// Optional destination marker for output ports. Set `to = "tail"` to
+    /// auto-wire this output to a permanent FG that declares a `[tail]`
+    /// section.
+    #[serde(default)]
+    to: Option<String>,
 }
 
 #[derive(Deserialize, Clone, PartialEq)]
@@ -184,6 +189,23 @@ pub struct HeadSectionDef {
 #[derive(Deserialize)]
 struct HeadFile {
     head: HeadSectionDef,
+}
+
+/// `[tail]` section of a tail-FG TOML. Mirror of `[head]`: declares which
+/// input port of this FG receives bridged-in stream data from whichever
+/// swappable FG marks an output port `to = "tail"`. Used for shared
+/// post-PHY plumbing (e.g. a network/file-sink chain).
+#[derive(Deserialize, Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct TailSectionDef {
+    pub name: Option<String>,
+    pub input_port: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TailFile {
+    #[serde(default)]
+    tail: Option<TailSectionDef>,
 }
 
 /// Optional `[radio]` section. Two roles:
@@ -523,6 +545,49 @@ impl FlowgraphControllerBuilder {
         // no `connect_radio`) is no longer auto-provisioned — register a
         // head TOML via `add_head(...)` instead.
 
+        // Tail wiring: any permanent FG carrying a `[tail]` section with
+        // `input_port = "X"` becomes a tail. Every swappable that marks an
+        // output port `to = "tail"` is auto-connected to it (from-side ↔
+        // tail.input_port). Symmetric mirror of the head wiring above.
+        for (perm_idx, entry) in self.flowgraphs.iter().enumerate() {
+            if !entry.permanent {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&entry.toml_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let tail_file: TailFile = match toml::from_str(&content) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let Some(tail_section) = tail_file.tail else {
+                continue; // Not a tail FG.
+            };
+            let Some(tail_in_port) = tail_section.input_port.clone() else {
+                continue;
+            };
+            // For each swappable that publishes `to = "tail"`, auto-add the
+            // stream Connection. Skip silently if no swappable opts in.
+            for (sw_idx, sw_def) in parsed_defs.iter().enumerate() {
+                if self.flowgraphs[sw_idx].permanent {
+                    continue;
+                }
+                let Some(out_port) = sw_def.ports.iter().find(|p| {
+                    matches!(p.direction, PortDirection::Out)
+                        && p.to.as_deref() == Some("tail")
+                }) else {
+                    continue;
+                };
+                self.connections.push(Connection {
+                    from_fg: sw_idx,
+                    from_port: out_port.id.clone(),
+                    to_fg: perm_idx,
+                    to_port: tail_in_port.clone(),
+                });
+            }
+        }
+
         let mut channels: HashMap<String, SharedBuf> = HashMap::new();
         for conn in &self.connections {
             let from_key = format!("{}:{}", conn.from_fg, conn.from_port);
@@ -780,6 +845,34 @@ impl FlowgraphController {
         &mut self.registry
     }
 
+    /// Live-tune the radio's RX gain without restarting any flowgraph.
+    ///
+    /// Reuses the same `apply_radio_demand` dispatch path that `swap()`
+    /// hits — so it works for both the head-FG model (`add_head`) and
+    /// the legacy `RadioController` model.
+    pub async fn set_gain(
+        &mut self,
+        gain_db: f64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let rsec = RadioSectionDef {
+            gain_db: Some(gain_db),
+            ..Default::default()
+        };
+        self.apply_radio_demand(&rsec).await
+    }
+
+    /// Live-tune the radio's RX center frequency.
+    pub async fn set_frequency(
+        &mut self,
+        frequency_hz: f64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let rsec = RadioSectionDef {
+            frequency_hz: Some(frequency_hz),
+            ..Default::default()
+        };
+        self.apply_radio_demand(&rsec).await
+    }
+
     pub async fn start_permanent(
         &mut self,
         fg_idx: usize,
@@ -865,6 +958,8 @@ impl FlowgraphController {
         &mut self,
         rsec: &RadioSectionDef,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use std::time::Instant;
+
         if let (Some(head_idx), Some(sdr_block_name)) =
             (self.head_fg_idx, self.head_sdr_block.clone())
         {
@@ -878,21 +973,41 @@ impl FlowgraphController {
                     "head fg/{head_idx}/ not started — apply_radio_demand called too early"
                 ))?;
             if let Some(f) = rsec.frequency_hz {
+                let t_freq = Instant::now();
                 handle.callback(block_id, "freq", Pmt::F64(f)).await
                     .map_err(|e| format!("retune freq via head: {e}"))?;
+                println!(
+                    "        [retune] head freq callback: {:.3} ms",
+                    t_freq.elapsed().as_secs_f64() * 1000.0
+                );
             }
             if let Some(g) = rsec.gain_db {
+                let t_gain = Instant::now();
                 handle.callback(block_id, "gain", Pmt::F64(g)).await
                     .map_err(|e| format!("retune gain via head: {e}"))?;
+                println!(
+                    "        [retune] head gain callback: {:.3} ms",
+                    t_gain.elapsed().as_secs_f64() * 1000.0
+                );
             }
         } else if let Some(radio) = self.radio.as_mut() {
             if let Some(f) = rsec.frequency_hz {
+                let t_freq = Instant::now();
                 radio.set_frequency(f).await
                     .map_err(|e| format!("retune radio freq: {e}"))?;
+                println!(
+                    "        [retune] radio set_frequency: {:.3} ms",
+                    t_freq.elapsed().as_secs_f64() * 1000.0
+                );
             }
             if let Some(g) = rsec.gain_db {
+                let t_gain = Instant::now();
                 radio.set_gain(g).await
                     .map_err(|e| format!("retune radio gain: {e}"))?;
+                println!(
+                    "        [retune] radio set_gain: {:.3} ms",
+                    t_gain.elapsed().as_secs_f64() * 1000.0
+                );
             }
         }
         Ok(())

@@ -1,0 +1,58 @@
+# Network/file-sink "tail" flowgraph.
+#
+# Permanent FG that lives downstream of whichever PHY is currently active.
+# Mirror of `sdr_head.toml`: the `[tail]` section names an `input_port`,
+# and any swappable flow that marks an output port `to = "tail"` is
+# auto-wired to it by the FlowgraphController.
+#
+# Wire format on the inter-FG bridge: `[u32 LE len][len bytes payload]`,
+# produced by `blob_to_lp_stream_plugin` in the PHY flow and decoded here
+# by `lp_stream_to_blob_plugin` back into Pmt::Blob frames.
+
+[tail]
+name = "default_tail"
+input_port = "in"
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "decode.input"
+type = "u8"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+# Re-frame the length-prefixed u8 stream into Pmt::Blob messages.
+[[blocks]]
+id = "decode"
+plugin = "lp_stream_to_blob_plugin"
+
+# Dual-mode network bridge: the PHY label is encoded in each frame's
+# control payload (b'Z' / b'H'), so configuring as "auto" makes the
+# extractor handle either kind. (The plugin treats anything other than
+# "halow"/"wlan_ah"/"wlan" as zigbee-style; we expose both via the
+# control-payload search so it works for both PHYs uniformly.)
+[[blocks]]
+id = "network"
+plugin = "network_extractor_plugin"
+config = "auto"
+config_type = "String"
+
+# Append every emitted line to data/network.log (path is relative to the
+# binary's CWD).
+[[blocks]]
+id = "net_file"
+plugin = "message_file_sink_plugin"
+config = "data/network.log"
+config_type = "String"
+
+# ── Connections ─────────────────────────────────────────────────────
+
+[[connections]]
+src = "decode.out"
+dst = "network.rx"
+message = true
+
+[[connections]]
+src = "network.out"
+dst = "net_file.in"
+message = true
