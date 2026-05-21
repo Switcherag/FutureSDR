@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 )]
 struct Args {
     /// Seify device args (e.g. soapy=pluto, soapy=hackrf, ...)
-    #[arg(long, default_value = "soapy=pluto")]
+    #[arg(long, default_value = "")]
     device: String,
 
     /// RX channel index

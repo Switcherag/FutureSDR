@@ -6,4 +6,7 @@ cargo clean --release 2>&1 | tail -3 && cargo build --release -p real-device-swa
   -p wlan_ah_v2_channel_estimator_plugin -p wlan_ah_v2_sig_decoder_plugin -p wlan_ah_v2_data_demod_plugin \
   -p wlan_ah_decoder_plugin \
   -p network_extractor_plugin -p message_file_sink_plugin \
-  -p blob_to_lp_stream_plugin -p lp_stream_to_blob_plugin 2>&1 | tail -8
+  -p blob_to_lp_stream_plugin -p lp_stream_to_blob_plugin
+
+
+

@@ -38,6 +38,7 @@ members = [
     "crates/prophecy",
     "examples/wlan",
     "examples/zigbee",
+    "examples/lora",
     "examples/cross_flowgraph",
     "examples/sdr_cross_flowgraph",
     "examples/real_device_swap",

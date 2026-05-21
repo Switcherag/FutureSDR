@@ -322,6 +322,7 @@ pub fn lookup_builtin_parser(type_name: &str) -> Option<ConfigParser> {
         "(f32,usize)" => (f32, usize),
         "(u32,u16)" => (u32, u16),
         "(u32,u32)" => (u32, u32),
+        "(u8,bool)" => (u8, bool),
         "(usize,usize)" => (usize, usize),
         "(usize,f32)" => (usize, f32),
         "(String,bool)" => (String, bool),
@@ -343,6 +344,7 @@ pub fn lookup_builtin_parser(type_name: &str) -> Option<ConfigParser> {
         "(String,f64,f64,f64)" => (String, f64, f64, f64),
         "(usize,bool,bool,Option<f32>)" => (usize, bool, bool, Option<f32>),
         "(f32,f32,f32,f32)" => (f32, f32, f32, f32),
+        "(u32,u8,u8,u8)" => (u32, u8, u8, u8),
     }
 
     // ── 5-tuples ─────────────────────────────────────────────

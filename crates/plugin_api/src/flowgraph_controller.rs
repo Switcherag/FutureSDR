@@ -122,14 +122,6 @@ impl SharedBuf {
             StreamType::C32 => SharedBuf::C32(Arc::new(Mutex::new(VecDeque::new()))),
         }
     }
-
-    fn clear(&self) {
-        match self {
-            SharedBuf::U8(b)  => b.lock().unwrap().clear(),
-            SharedBuf::F32(b) => b.lock().unwrap().clear(),
-            SharedBuf::C32(b) => b.lock().unwrap().clear(),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -602,11 +594,9 @@ impl FlowgraphControllerBuilder {
         }
 
         // Insert RadioController output buffers as C32 channels
-        let mut radio_bufs: Vec<(usize, crate::radio_controller::RadioOutputBuf)> = Vec::new();
         for ri in &self.radio_inputs {
             let to_key = format!("{}:{}", ri.to_fg, ri.to_port);
             channels.insert(to_key, SharedBuf::C32(ri.buf.clone()));
-            radio_bufs.push((ri.to_fg, ri.buf.clone()));
         }
 
         let mut registry = PluginRegistry::new(&self.plugin_dir);
@@ -629,7 +619,7 @@ impl FlowgraphControllerBuilder {
             .collect();
 
         let mut ctrl = FlowgraphController::new(
-            registry, channels, custom_parsers, self.connections, radio_bufs,
+            registry, channels, custom_parsers, self.connections,
         );
         ctrl.radio = self.radio;
         ctrl.tap_sender = self.tap_channel.map(|(tx, _)| tx);
@@ -761,8 +751,6 @@ pub struct FlowgraphController {
     channels: HashMap<String, SharedBuf>,
     custom_parsers: HashMap<String, fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>>,
     connections: Vec<Connection>,
-    /// External radio buffers: (fg_idx, buf) — cleared during swap.
-    radio_bufs: Vec<(usize, crate::radio_controller::RadioOutputBuf)>,
     perm_handles: HashMap<usize, FlowgraphHandle>,
     perm_block_ids: HashMap<usize, HashMap<String, BlockId>>,
     perm_port_defs: HashMap<usize, Vec<PortDef>>,
@@ -807,10 +795,9 @@ impl FlowgraphController {
         channels: HashMap<String, SharedBuf>,
         custom_parsers: HashMap<String, fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>>,
         connections: Vec<Connection>,
-        radio_bufs: Vec<(usize, crate::radio_controller::RadioOutputBuf)>,
     ) -> Self {
         Self {
-            registry, channels, custom_parsers, connections, radio_bufs,
+            registry, channels, custom_parsers, connections,
             perm_handles: HashMap::new(),
             perm_block_ids: HashMap::new(),
             perm_port_defs: HashMap::new(),
@@ -1027,6 +1014,36 @@ impl FlowgraphController {
             .ok_or_else(|| format!("unknown swappable fg/{fg_idx}/"))?;
         let prev_toml = state.current_toml.clone();
 
+        // Parse new TOML once at the top so we have [radio] for the early
+        // retune and [[blocks]] for plugin loading.
+        let content = std::fs::read_to_string(new_toml)
+            .map_err(|e| format!("cannot read '{new_toml}': {e}"))?;
+        let def: FlowgraphDef = toml::from_str(&content)
+            .map_err(|e| format!("invalid TOML '{new_toml}': {e}"))?;
+
+        // 0. Retune the SDR FIRST.
+        //
+        // The head FG keeps producing into the shared bridge deque
+        // throughout the swap; we deliberately do NOT clear it. Sequence:
+        //   - send freq/gain to SDR (hardware retune is ~10 µs on a fast-lock
+        //     device, comparable to a few resampler-output samples)
+        //   - terminate the old protocol FG → its BridgeSource is dropped,
+        //     which "disconnects" the deque from the protocol side
+        //   - rebuild + start the new protocol FG (tens of ms) — during this
+        //     window the deque accumulates fresh on-frequency IQ
+        //   - new protocol's BridgeSource pulls accumulated samples
+        //
+        // The handful of pre-retune / transient samples that were in flight
+        // sit at the front of the deque and are processed in the new FG's
+        // first work() calls; everything queued behind is settled new-freq
+        // IQ, so downtime is bounded by SDR retune latency, not by rebuild
+        // latency.
+        if let Some(rsec) = def.radio.as_ref() {
+            let t_step = Instant::now();
+            self.apply_radio_demand(rsec).await?;
+            println!("    [swap] 0-retune_radio:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        }
+
         // 1. Park selectors connected to this FG (if any)
         let t_step = Instant::now();
         let connected_sels: Vec<usize> = self.selector_infos.iter()
@@ -1048,43 +1065,23 @@ impl FlowgraphController {
         }
         println!("    [swap] 1-park_selectors:  {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
 
-        // 2. Terminate old FG
+        // 2. Terminate old FG — drops the old BridgeSource, leaving the
+        //    deque untouched (head FG continues filling it).
         let t_step = Instant::now();
         self.swap_states.get_mut(&fg_idx).unwrap()
             .handle.terminate_and_wait().await
             .map_err(|e| format!("terminate fg/{fg_idx}/: {e}"))?;
         println!("    [swap] 2-terminate:       {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
 
-        // 3. Clear connected buffers
+        // 3. Load new plugins if needed
         let t_step = Instant::now();
-        for conn in &self.connections {
-            if conn.to_fg == fg_idx {
-                let from_key = format!("{}:{}", conn.from_fg, conn.from_port);
-                if let Some(buf) = self.channels.get(&from_key) {
-                    buf.clear();
-                }
-            }
-        }
-        for (ri_fg, ri_buf) in &self.radio_bufs {
-            if *ri_fg == fg_idx {
-                ri_buf.lock().unwrap().clear();
-            }
-        }
-        println!("    [swap] 3-clear_buffers:   {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
-
-        // 4. Load new plugins if needed
-        let t_step = Instant::now();
-        let content = std::fs::read_to_string(new_toml)
-            .map_err(|e| format!("cannot read '{new_toml}': {e}"))?;
-        let def: FlowgraphDef = toml::from_str(&content)
-            .map_err(|e| format!("invalid TOML '{new_toml}': {e}"))?;
         for block in &def.blocks {
             self.registry.ensure_loaded(&block.plugin)
                 .map_err(|e| format!("swap fg/{fg_idx}/: {e}"))?;
         }
-        println!("    [swap] 4-load_plugins:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        println!("    [swap] 3-load_plugins:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
 
-        // 5. Build & start (with fallback)
+        // 4. Build & start (with fallback)
         let t_step = Instant::now();
         match self.build_flowgraph_full(fg_idx, new_toml) {
             Ok((fg, _, _)) => {
@@ -1105,9 +1102,9 @@ impl FlowgraphController {
                 return Err(format!("build fg/{fg_idx}/ failed ({e}), restored '{prev_toml}'").into());
             }
         }
-        println!("    [swap] 5-build_and_start: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        println!("    [swap] 4-build_and_start: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
 
-        // 6. Unpark selectors
+        // 5. Unpark selectors
         let t_step = Instant::now();
         for &idx in &connected_sels {
             let sel = &self.selector_infos[idx];
@@ -1115,14 +1112,7 @@ impl FlowgraphController {
             handle.callback(sel.block_id, "output_index", Pmt::U32(1)).await
                 .map_err(|e| format!("unpark selector: {e}"))?;
         }
-        println!("    [swap] 6-unpark_selectors: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
-
-        // 7. Auto-retune the radio from the new TOML's [radio] section.
-        if let Some(rsec) = def.radio.as_ref() {
-            let t_step = Instant::now();
-            self.apply_radio_demand(rsec).await?;
-            println!("    [swap] 7-retune_radio:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
-        }
+        println!("    [swap] 5-unpark_selectors: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
 
         println!("    [swap] total:             {:.3} ms", t_swap.elapsed().as_secs_f64() * 1000.0);
 

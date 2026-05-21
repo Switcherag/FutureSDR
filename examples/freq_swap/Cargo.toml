@@ -24,6 +24,9 @@ name = "freq_sine_tx"
 name = "freq_recorder"
 
 [[bin]]
+name = "bw_recorder"
+
+[[bin]]
 name = "vulkan"
 required-features = ["vulkan"]
 

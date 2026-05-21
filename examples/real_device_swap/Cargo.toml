@@ -13,6 +13,10 @@ name = "per_frame_swap"
 path = "src/per_frame_swap.rs"
 
 [[bin]]
+name = "zigbee_swap"
+path = "src/zigbee_swap.rs"
+
+[[bin]]
 name = "phy_per"
 path = "src/phy_per.rs"
 

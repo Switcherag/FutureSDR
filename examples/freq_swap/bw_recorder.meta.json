@@ -1,0 +1,19 @@
+{
+  "device": "",
+  "channel": 0,
+  "freq_hz": 831000000,
+  "gain_db": 0,
+  "initial_ms": 200,
+  "dwell_ms": 200,
+  "capture_total_s": 3.208320757,
+  "iq_path": "bw_recorder.cf32",
+  "format": "cf32 (interleaved float32 I,Q little-endian)",
+  "sample_rate_sweep_hz": [1000000, 2000000, 4000000, 8000000, 16000000],
+  "switch_events": [
+    {"t_s": 0, "sample_rate_hz": 1000000, "error": null},
+    {"t_s": 1.129355894, "sample_rate_hz": 2000000, "error": null},
+    {"t_s": 1.615621156, "sample_rate_hz": 4000000, "error": null},
+    {"t_s": 2.744142662, "sample_rate_hz": 8000000, "error": null},
+    {"t_s": 3.008272571, "sample_rate_hz": 16000000, "error": null}
+  ]
+}
