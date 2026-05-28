@@ -5,9 +5,18 @@
 # and any swappable flow that marks an output port `to = "tail"` is
 # auto-wired to it by the FlowgraphController.
 #
-# Wire format on the inter-FG bridge: `[u32 LE len][len bytes payload]`,
-# produced by `blob_to_lp_stream_plugin` in the PHY flow and decoded here
-# by `lp_stream_to_blob_plugin` back into Pmt::Blob frames.
+# Wire format on the inter-FG bridge: `[u32 LE len][len bytes payload]`.
+# Each `payload` is an **RFtap-encapsulated frame** (12B RFtap header —
+# magic "RFta" + flags + DLT — followed by the inner MAC frame). The
+# DLT is set by the per-PHY producer (zigbee_mac: 195, halow decoder: 105),
+# so downstream consumers (Wireshark, AF_XDP parsers) chain into the
+# correct dissector for whichever PHY was active when the frame was
+# received.
+#
+# Tail topology:
+#   decode → umac → ┬─ udp_rftap   (UDP/55555, for live Wireshark)
+#                   ├─ nic         (TAP iface sdrtap0, for AF_XDP / Linux net stack)
+#                   └─ network → net_file  (CSV-ish per-frame log)
 
 [tail]
 name = "default_tail"
@@ -21,16 +30,43 @@ type = "u8"
 
 # ── Blocks ──────────────────────────────────────────────────────────
 
-# Re-frame the length-prefixed u8 stream into Pmt::Blob messages.
+# Re-frame the length-prefixed u8 stream into Pmt::Blob messages
+# (each blob is one RFtap-encapsulated frame).
 [[blocks]]
 id = "decode"
 plugin = "lp_stream_to_blob_plugin"
 
+# Universal MAC — bypass for now. Future home of MAC-level normalization
+# (dedup, ack/retry handling, addressing) before frames fan out to NIC /
+# UDP / extractor consumers.
+[[blocks]]
+id = "umac"
+plugin = "universal_mac_plugin"
+
+# UDP RFtap egress for live Wireshark capture.
+# `wireshark -k -i lo -f 'udp port 55555' -Y rftap` (or "Decode As..." on
+# the UDP payload) dissects the inner frame using the RFtap-carried DLT.
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+
+# Linux TAP NIC. Each RFtap-encapsulated frame is wrapped in a minimal
+# Ethernet header (ethertype 0x88B5) and written to /dev/net/tun. The
+# resulting `sdrtap0` interface is visible to `ip link`, tcpdump, and
+# any AF_XDP program that binds to it. Needs CAP_NET_ADMIN (run as root
+# or `setcap cap_net_admin+ep` on the binary).
+[[blocks]]
+id = "nic"
+plugin = "tap_nic_plugin"
+config = "sdrtap0:de:ad:be:ef:00:01"
+config_type = "String"
+
 # Dual-mode network bridge: the PHY label is encoded in each frame's
 # control payload (b'Z' / b'H'), so configuring as "auto" makes the
-# extractor handle either kind. (The plugin treats anything other than
-# "halow"/"wlan_ah"/"wlan" as zigbee-style; we expose both via the
-# control-payload search so it works for both PHYs uniformly.)
+# extractor handle either kind. The 12-byte RFtap prefix is harmless to
+# the extractor's byte-scan parser — it skips past it naturally because
+# "RFta" decodes to a u32 way above its sanity bound.
 [[blocks]]
 id = "network"
 plugin = "network_extractor_plugin"
@@ -47,8 +83,25 @@ config_type = "String"
 
 # ── Connections ─────────────────────────────────────────────────────
 
+# Bridge bytes → RFtap blobs → universal MAC.
 [[connections]]
 src = "decode.out"
+dst = "umac.in"
+message = true
+
+# Universal MAC fans out to all downstream consumers.
+[[connections]]
+src = "umac.out"
+dst = "udp_rftap.in"
+message = true
+
+[[connections]]
+src = "umac.out"
+dst = "nic.rx"
+message = true
+
+[[connections]]
+src = "umac.out"
 dst = "network.rx"
 message = true
 

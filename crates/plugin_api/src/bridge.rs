@@ -129,11 +129,22 @@ macro_rules! make_bridge {
                 let mut buf = self.buf.lock().unwrap();
                 let to_produce = buf.len().min(o.len());
                 if to_produce > 0 {
-                    {
-                        // make_contiguous() ensures a single contiguous slice —
-                        // one copy_from_slice instead of N individual assignments.
-                        let src = buf.make_contiguous();
-                        o[..to_produce].copy_from_slice(&src[..to_produce]);
+                    // Use `as_slices()` instead of `make_contiguous()`: the
+                    // latter rotates the entire deque to a single slice — an
+                    // O(N) memmove where N = buf.len(), held under the lock.
+                    // With a deep buffer (post-swap pile-up, up to 32 MiB for
+                    // C32) that rotation alone can take ms, blocking the Sink
+                    // long enough for the upstream SeifySource to overflow.
+                    // as_slices() returns the two contiguous halves in place,
+                    // so we copy only `to_produce` items in (at most) two
+                    // chunks — lock hold time scales with the copy, not the
+                    // total buffered size.
+                    let (first, second) = buf.as_slices();
+                    let n1 = first.len().min(to_produce);
+                    o[..n1].copy_from_slice(&first[..n1]);
+                    if n1 < to_produce {
+                        let n2 = to_produce - n1;
+                        o[n1..to_produce].copy_from_slice(&second[..n2]);
                     }
                     buf.drain(..to_produce);
                     drop(buf);

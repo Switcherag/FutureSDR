@@ -66,13 +66,10 @@ id = "udp_rx"
 plugin = "blob_to_udp_plugin"
 config = "127.0.0.1:55555"
 
-[[blocks]]
-id = "udp_rftap"
-plugin = "blob_to_udp_plugin"
-config = "127.0.0.1:55556"
-
-# Forward each decoded frame to the network tail FG as a length-prefixed
-# byte stream.
+# Forward each RFtap-encapsulated frame to the network tail FG as a
+# length-prefixed byte stream. The tail owns the UDP/RFtap egress + TAP NIC
+# distribution so all PHYs share one set of network blocks instead of each
+# duplicating their own udp sink.
 [[blocks]]
 id = "to_tail"
 plugin = "blob_to_lp_stream_plugin"
@@ -111,14 +108,11 @@ src = "decoder.rx_frames"
 dst = "udp_rx.in"
 message = true
 
+# RFtap-encapsulated frames → network tail (via length-prefixed u8 bridge).
+# The 12-byte RFtap header (magic "RFta" + flags + DLT 105 for IEEE 802.11)
+# is what the tail's downstream blocks consume.
 [[connections]]
 src = "decoder.rftap"
-dst = "udp_rftap.in"
-message = true
-
-# Decoded frames → network tail (via length-prefixed u8 bridge).
-[[connections]]
-src = "decoder.rx_frames"
 dst = "to_tail.rx"
 message = true
 

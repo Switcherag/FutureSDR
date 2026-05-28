@@ -771,6 +771,27 @@ pub struct FlowgraphController {
     /// `freq`/`gain` messages. Looked up against `perm_block_ids` at
     /// dispatch time.
     head_sdr_block: Option<String>,
+    /// Last frequency successfully *dispatched* to the SDR (Hz). Used to
+    /// skip no-op retunes when a swap's [radio] section matches what the
+    /// SDR is already on. Updated as soon as the retune is queued on the
+    /// background thread (not when it completes), so back-to-back swaps
+    /// to the same freq don't pile up redundant work.
+    last_applied_freq_hz: Option<f64>,
+    /// Last gain successfully dispatched to the SDR (dB). Same skip-no-op
+    /// semantics as `last_applied_freq_hz`.
+    last_applied_gain_db: Option<f64>,
+    /// Optional fast-path frequency setter. When present, [`apply_radio_demand`]
+    /// dispatches this closure on a background thread *instead of* sending a
+    /// `freq` message through the flowgraph's mpsc inbox. Bypasses
+    /// scheduler/work-loop latency entirely — typical use is for the caller
+    /// to hold a cloned `seify::Device` and call `dev.set_frequency` directly,
+    /// so the retune happens at hardware speed (10–50 µs) instead of
+    /// waiting for the SeifySource block to service its message queue
+    /// (which can be milliseconds when `streamer.read` is blocking).
+    fast_freq_setter: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+    /// Same as `fast_freq_setter` but for gain. Independent of freq: either
+    /// can be set without the other.
+    fast_gain_setter: Option<Arc<dyn Fn(f64) + Send + Sync>>,
 }
 
 impl FlowgraphController {
@@ -807,7 +828,41 @@ impl FlowgraphController {
             tap_sender: None,
             head_fg_idx: None,
             head_sdr_block: None,
+            last_applied_freq_hz: None,
+            last_applied_gain_db: None,
+            fast_freq_setter: None,
+            fast_gain_setter: None,
         }
+    }
+
+    /// Register a fast-path frequency setter. When set, retunes bypass the
+    /// flowgraph message system and run this closure directly on a
+    /// background thread. Typical use:
+    ///
+    /// ```ignore
+    /// let radio_dev = seify::Device::from_args("driver=hackrf")?;
+    /// let dev = radio_dev.clone();
+    /// ctrl.set_fast_freq_setter(move |freq_hz| {
+    ///     let _ = dev.set_frequency(seify::Direction::Rx, 0, freq_hz);
+    /// });
+    /// ```
+    ///
+    /// Pre-condition: the underlying SDR driver must allow multiple `Device`
+    /// handles on the same hardware (most SoapySDR-based drivers do).
+    pub fn set_fast_freq_setter<F>(&mut self, f: F)
+    where
+        F: Fn(f64) + Send + Sync + 'static,
+    {
+        self.fast_freq_setter = Some(Arc::new(f));
+    }
+
+    /// Register a fast-path gain setter — same semantics as
+    /// [`set_fast_freq_setter`] but for gain (dB).
+    pub fn set_fast_gain_setter<F>(&mut self, f: F)
+    where
+        F: Fn(f64) + Send + Sync + 'static,
+    {
+        self.fast_gain_setter = Some(Arc::new(f));
     }
 
     /// Access the attached RadioController (if any).
@@ -934,9 +989,18 @@ impl FlowgraphController {
     /// Dispatch a `[radio]` demand to whichever radio is wired up:
     ///
     /// - **head-FG path** (`add_head` was used): live `freq`/`gain`
-    ///   messages are sent to the head's `sdr_block`.
+    ///   messages are sent to the head's `sdr_block`, **dispatched on a
+    ///   background thread** so the caller (typically `swap`) doesn't pay
+    ///   the hardware retune latency in line.
     /// - **legacy path** (`attach_radio` / auto-provisioned `RadioController`):
-    ///   `set_frequency` / `set_gain` are called on the controller.
+    ///   `set_frequency` / `set_gain` are called on the controller (still
+    ///   awaited; legacy radio doesn't expose a clone-able handle).
+    ///
+    /// Calls whose `frequency_hz` / `gain_db` match what was last dispatched
+    /// are skipped (no message sent, no thread spawned). Bookkeeping is
+    /// updated as soon as the retune is *queued*, not when the SDR finishes
+    /// settling — so back-to-back swaps to the same channel collapse to a
+    /// single retune in flight.
     ///
     /// `sample_rate_hz` in the demand is *not* live-applied (resampler is
     /// fixed at startup); the builder validates rate-consistency across
@@ -947,6 +1011,81 @@ impl FlowgraphController {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Instant;
 
+        // Skip-if-unchanged: only dispatch what actually differs.
+        // Use small epsilons so float noise (e.g. TOML 2.45e9 vs 2_450_000_000.0)
+        // doesn't trigger a no-op retune.
+        const FREQ_EPS_HZ: f64 = 0.5;
+        const GAIN_EPS_DB: f64 = 0.001;
+
+        let mut freq_to_apply = match (rsec.frequency_hz, self.last_applied_freq_hz) {
+            (Some(new), Some(cur)) if (new - cur).abs() <= FREQ_EPS_HZ => None,
+            (Some(new), _) => Some(new),
+            _ => None,
+        };
+        let mut gain_to_apply = match (rsec.gain_db, self.last_applied_gain_db) {
+            (Some(new), Some(cur)) if (new - cur).abs() <= GAIN_EPS_DB => None,
+            (Some(new), _) => Some(new),
+            _ => None,
+        };
+
+        if freq_to_apply.is_none() && gain_to_apply.is_none() {
+            println!("        [retune] skipped (params already current)");
+            return Ok(());
+        }
+
+        // Fast path: if the caller registered direct setters, bypass the
+        // flowgraph message system entirely. The closures run on a bg thread
+        // and typically call seify Device::set_frequency directly on a
+        // shared device handle — saving the mpsc inbox + work()-loop
+        // scheduling latency (which can be milliseconds).
+        let use_fast_freq = freq_to_apply.is_some() && self.fast_freq_setter.is_some();
+        let use_fast_gain = gain_to_apply.is_some() && self.fast_gain_setter.is_some();
+        if use_fast_freq || use_fast_gain {
+            let t_dispatch = Instant::now();
+            if use_fast_freq {
+                let f = freq_to_apply.unwrap();
+                self.last_applied_freq_hz = Some(f);
+                let setter = self.fast_freq_setter.as_ref().unwrap().clone();
+                std::thread::spawn(move || {
+                    let t = Instant::now();
+                    setter(f);
+                    println!(
+                        "        [fast retune] freq {:.3} MHz settled in {:.3} ms",
+                        f / 1e6,
+                        t.elapsed().as_secs_f64() * 1000.0
+                    );
+                });
+            }
+            if use_fast_gain {
+                let g = gain_to_apply.unwrap();
+                self.last_applied_gain_db = Some(g);
+                let setter = self.fast_gain_setter.as_ref().unwrap().clone();
+                std::thread::spawn(move || {
+                    let t = Instant::now();
+                    setter(g);
+                    println!(
+                        "        [fast retune] gain {g:.2} dB settled in {:.3} ms",
+                        t.elapsed().as_secs_f64() * 1000.0
+                    );
+                });
+            }
+            println!(
+                "        [retune] dispatched (fast path) in {:.3} ms",
+                t_dispatch.elapsed().as_secs_f64() * 1000.0
+            );
+            // Anything not covered by a fast setter still goes via the message
+            // path below — fall through with only the uncovered fields.
+            if use_fast_freq {
+                freq_to_apply = None;
+            }
+            if use_fast_gain {
+                gain_to_apply = None;
+            }
+            if freq_to_apply.is_none() && gain_to_apply.is_none() {
+                return Ok(());
+            }
+        }
+
         if let (Some(head_idx), Some(sdr_block_name)) =
             (self.head_fg_idx, self.head_sdr_block.clone())
         {
@@ -955,42 +1094,71 @@ impl FlowgraphController {
                 .ok_or_else(|| format!(
                     "head sdr_block '{sdr_block_name}' not found in fg/{head_idx}/"
                 ))?;
-            let handle = self.perm_handles.get_mut(&head_idx)
+            let mut handle = self.perm_handles.get(&head_idx)
                 .ok_or_else(|| format!(
                     "head fg/{head_idx}/ not started — apply_radio_demand called too early"
-                ))?;
-            if let Some(f) = rsec.frequency_hz {
-                let t_freq = Instant::now();
-                handle.callback(block_id, "freq", Pmt::F64(f)).await
-                    .map_err(|e| format!("retune freq via head: {e}"))?;
-                println!(
-                    "        [retune] head freq callback: {:.3} ms",
-                    t_freq.elapsed().as_secs_f64() * 1000.0
-                );
+                ))?
+                .clone();
+
+            // Bookkeep BEFORE spawning so a concurrent caller sees the new
+            // intended state immediately (no duplicate dispatch).
+            if let Some(f) = freq_to_apply {
+                self.last_applied_freq_hz = Some(f);
             }
-            if let Some(g) = rsec.gain_db {
-                let t_gain = Instant::now();
-                handle.callback(block_id, "gain", Pmt::F64(g)).await
-                    .map_err(|e| format!("retune gain via head: {e}"))?;
-                println!(
-                    "        [retune] head gain callback: {:.3} ms",
-                    t_gain.elapsed().as_secs_f64() * 1000.0
-                );
+            if let Some(g) = gain_to_apply {
+                self.last_applied_gain_db = Some(g);
             }
+
+            let t_dispatch = Instant::now();
+            std::thread::spawn(move || {
+                if let Some(f) = freq_to_apply {
+                    let t = Instant::now();
+                    match futuresdr::async_io::block_on(
+                        handle.callback(block_id, "freq", Pmt::F64(f))
+                    ) {
+                        Ok(_) => println!(
+                            "        [async retune] freq {:.3} MHz settled in {:.3} ms",
+                            f / 1e6,
+                            t.elapsed().as_secs_f64() * 1000.0
+                        ),
+                        Err(e) => eprintln!("[async retune] freq {f} failed: {e}"),
+                    }
+                }
+                if let Some(g) = gain_to_apply {
+                    let t = Instant::now();
+                    match futuresdr::async_io::block_on(
+                        handle.callback(block_id, "gain", Pmt::F64(g))
+                    ) {
+                        Ok(_) => println!(
+                            "        [async retune] gain {g:.2} dB settled in {:.3} ms",
+                            t.elapsed().as_secs_f64() * 1000.0
+                        ),
+                        Err(e) => eprintln!("[async retune] gain {g} failed: {e}"),
+                    }
+                }
+            });
+            println!(
+                "        [retune] dispatched in {:.3} ms (hardware settle runs on bg thread)",
+                t_dispatch.elapsed().as_secs_f64() * 1000.0
+            );
         } else if let Some(radio) = self.radio.as_mut() {
-            if let Some(f) = rsec.frequency_hz {
+            // Legacy path: RadioController doesn't expose a clone-able handle,
+            // so we still await here. Same skip-if-unchanged semantics apply.
+            if let Some(f) = freq_to_apply {
                 let t_freq = Instant::now();
                 radio.set_frequency(f).await
                     .map_err(|e| format!("retune radio freq: {e}"))?;
+                self.last_applied_freq_hz = Some(f);
                 println!(
                     "        [retune] radio set_frequency: {:.3} ms",
                     t_freq.elapsed().as_secs_f64() * 1000.0
                 );
             }
-            if let Some(g) = rsec.gain_db {
+            if let Some(g) = gain_to_apply {
                 let t_gain = Instant::now();
                 radio.set_gain(g).await
                     .map_err(|e| format!("retune radio gain: {e}"))?;
+                self.last_applied_gain_db = Some(g);
                 println!(
                     "        [retune] radio set_gain: {:.3} ms",
                     t_gain.elapsed().as_secs_f64() * 1000.0

@@ -24,7 +24,13 @@ use std::time::{Duration, Instant};
 use futuresdr::async_io::Timer;
 use futuresdr::futures::{FutureExt, StreamExt, select};
 use futuresdr::runtime::Pmt;
+use futuresdr::seify;
 use plugin_api::{FlowgraphController, default_plugin_dir};
+
+/// Args used by both the SeifySource block (inside the head FG) and the
+/// fast-retune `Device` we open here. Empty string = pick first available
+/// device; matches `sdr_head.toml`'s `[[blocks]] id = "sdr"` config.
+const SDR_DEVICE_ARGS: &str = "";
 
 const FLOW_ZIGBEE_A: &str = "flows/zigbee_rxA.toml";
 const FLOW_ZIGBEE_B: &str = "flows/zigbee_rxB.toml";
@@ -95,6 +101,26 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Initial PHY: zigbee_rxA (2.425 GHz); alternating with zigbee_rxB (2.45 GHz)");
     println!("CSV → {CSV_PATH}\n");
 
+    // Open a second handle to the SDR for fast retunes. The SeifySource
+    // block (in the head FG) opens its own handle on the same hardware;
+    // for SoapySDR-backed drivers both handles share the underlying
+    // device, so set_frequency from either affects the radio. Calling
+    // set_frequency on this handle bypasses the flowgraph message system
+    // and the SeifySource's work-loop scheduling, dropping retune
+    // latency from ms-scale to the hardware floor (~50 µs).
+    let fast_retune_dev = match seify::Device::from_args(SDR_DEVICE_ARGS) {
+        Ok(dev) => {
+            println!("opened second SDR handle for fast retune");
+            Some(dev)
+        }
+        Err(e) => {
+            eprintln!(
+                "could not open second SDR handle ({e}) — falling back to message-based retune"
+            );
+            None
+        }
+    };
+
     let (builder, mut tap_rx) = FlowgraphController::builder(default_plugin_dir())
         .add_head(HEAD_FLOW)
         .add_permanent(TAIL_FLOW)
@@ -116,6 +142,23 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 println!("Starting swappable fg/{idx}/ from '{path}'");
                 ctrl.start_swappable(idx, path, &rt_handle).await?;
             }
+        }
+
+        // Wire the fast-retune device (if we got one) into the controller
+        // *after* the head FG is running — calling set_frequency before
+        // the SeifySource has activated its streamer can confuse the driver.
+        if let Some(dev) = fast_retune_dev {
+            let dev_freq = dev.clone();
+            ctrl.set_fast_freq_setter(move |freq_hz| {
+                if let Err(e) = dev_freq.set_frequency(seify::Direction::Rx, 0, freq_hz) {
+                    eprintln!("[fast retune] set_frequency({freq_hz}) failed: {e}");
+                }
+            });
+            ctrl.set_fast_gain_setter(move |gain_db| {
+                if let Err(e) = dev.set_gain(seify::Direction::Rx, 0, gain_db) {
+                    eprintln!("[fast retune] set_gain({gain_db}) failed: {e}");
+                }
+            });
         }
 
         let swap_target = entries

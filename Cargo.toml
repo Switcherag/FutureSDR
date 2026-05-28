@@ -29,6 +29,7 @@ members = [
     "crates/types",
     "crates/plugin_api",
     "crates/plugin_gen",
+    "crates/seify",
     "examples/dylib",
     "examples/dyn_fm-receiver",
     "examples/dyn_phy-swap",
@@ -55,6 +56,7 @@ audio = ["dep:cpal", "dep:hound", "dep:rodio"]
 burn = ["dep:burn"]
 flow_scheduler = ["dep:spin", "dep:concurrent-queue"]
 bladerf1 = ["seify/bladerf1"]
+bladerf2 = ["seify/bladerf2"]
 hackrf = ["seify/hackrfone"]
 rtlsdr = ["seify/rtlsdr"]
 seify = ["dep:seify", "futuresdr-types/seify"]
@@ -109,7 +111,7 @@ num-integer = "0.1"
 num_cpus = "1.17"
 once_cell = "1.21"
 rustfft = "6.4"
-seify = { version = "0.19", default-features = false, optional = true }
+seify = { path = "crates/seify", default-features = false, optional = true }
 slab = "0.4"
 spin = { version = "0.10", optional = true }
 serde = { version = "1.0", features = ["derive"] }

@@ -56,14 +56,10 @@ plugin = "zigbee_mac_plugin"
 id = "snk"
 plugin = "null_sink_plugin"
 
-[[blocks]]
-id = "udp_rftap"
-plugin = "blob_to_udp_plugin"
-config = "127.0.0.1:55555"
-
-# Forward each decoded MAC frame to the network tail FG as a
-# length-prefixed byte stream (the only inter-FG transport the
-# controller supports).
+# Forward each RFtap-encapsulated MAC frame to the network tail FG as a
+# length-prefixed byte stream. The tail owns the UDP/RFtap egress + TAP NIC
+# distribution so all PHYs share one set of network blocks instead of each
+# duplicating their own udp sink.
 [[blocks]]
 id = "to_tail"
 plugin = "blob_to_lp_stream_plugin"
@@ -89,14 +85,11 @@ src = "decoder.out"
 dst = "mac.rx"
 message = true
 
+# RFtap-encapsulated frames → network tail (via length-prefixed u8 bridge).
+# The 12-byte RFtap header (magic "RFta" + flags + DLT 195 for 802.15.4)
+# is what the tail's downstream blocks consume.
 [[connections]]
 src = "mac.rftap"
-dst = "udp_rftap.in"
-message = true
-
-# Decoded MAC frames → network tail (via length-prefixed u8 bridge).
-[[connections]]
-src = "mac.rxed"
 dst = "to_tail.rx"
 message = true
 

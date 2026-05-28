@@ -1,11 +1,11 @@
 {
-  "device": "soapy=pluto",
+  "device": "",
   "channel": 0,
   "sample_rate_hz": 4000000,
   "start_freq_hz": 830000000,
   "target_freq_hz": 832000000,
   "switch_ms": 100,
-  "retune_t_s": 0.100214162,
+  "retune_t_s": 0.100164508,
   "gain_db": 0,
   "capture_total_ms": 500,
   "iq_path": "freq_recorder.cf32",

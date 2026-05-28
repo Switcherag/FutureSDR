@@ -27,6 +27,9 @@ name = "freq_recorder"
 name = "bw_recorder"
 
 [[bin]]
+name = "retune_timing"
+
+[[bin]]
 name = "vulkan"
 required-features = ["vulkan"]
 

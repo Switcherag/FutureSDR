@@ -1,0 +1,19 @@
+{
+  "device": "",
+  "channel": 0,
+  "sample_rate_hz": 8000000,
+  "start_freq_hz": 830000000,
+  "target_freq_hz": 832100000,
+  "switch_ms": 100,
+  "gain_db": 0,
+  "mark_amp": 10,
+  "mark_samples": 8,
+  "capture_total_ms": 1000,
+  "t_mark_fire_s": 0.10003546,
+  "t_mark_acked_s": 0.100052522,
+  "t_freq_fire_s": 0.100052623,
+  "t_freq_acked_s": 0.10040218,
+  "t_stop_s": 1.000097846,
+  "iq_path": "retune_timing.cf32",
+  "format": "cf32 (interleaved float32 I,Q little-endian)"
+}

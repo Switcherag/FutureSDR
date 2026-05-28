@@ -30,4 +30,4 @@ clap = { version = "4", features = ["derive"] }
 futuresdr = { path = "../..", features = ["plugin", "soapy", "bladerf1"] }
 plugin_api = { path = "../../crates/plugin_api" }
 rand = "0.9"
-seify = { version = "0.19", default-features = false, features = ["soapy", "bladerf1"] }
+seify = { path = "../../crates/seify", default-features = false, features = ["soapy", "bladerf1"] }

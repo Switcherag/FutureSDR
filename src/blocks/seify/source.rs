@@ -102,16 +102,30 @@ where
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        for c in &self.channels {
-            match &p {
-                Pmt::F32(v) => self.dev.set_frequency(Rx, *c, *v as f64)?,
-                Pmt::F64(v) => self.dev.set_frequency(Rx, *c, *v)?,
-                Pmt::U32(v) => self.dev.set_frequency(Rx, *c, *v as f64)?,
-                Pmt::U64(v) => self.dev.set_frequency(Rx, *c, *v as f64)?,
-                Pmt::Null => return Ok(Pmt::F64(self.dev.frequency(Rx, *c)?)),
-                _ => return Ok(Pmt::InvalidValue),
-            };
+        // Query branch must stay synchronous (we return the current freq).
+        if matches!(p, Pmt::Null) {
+            return Ok(Pmt::F64(self.dev.frequency(Rx, self.channels[0])?));
         }
+        let freq_hz = match &p {
+            Pmt::F32(v) => *v as f64,
+            Pmt::F64(v) => *v,
+            Pmt::U32(v) => *v as f64,
+            Pmt::U64(v) => *v as f64,
+            _ => return Ok(Pmt::InvalidValue),
+        };
+        // Dispatch the hardware retune on a separate thread. The seify
+        // `set_frequency` call is a synchronous USB round-trip + PLL lock
+        // (5–50 ms); if we awaited it here, `work()` couldn't run during
+        // that window and the driver's RX buffer would overflow.
+        let dev = self.dev.clone();
+        let channels = self.channels.clone();
+        std::thread::spawn(move || {
+            for c in &channels {
+                if let Err(e) = dev.set_frequency(Rx, *c, freq_hz) {
+                    eprintln!("[seify async retune] freq {freq_hz} ch{c} failed: {e}");
+                }
+            }
+        });
         Ok(Pmt::Ok)
     }
 
@@ -122,16 +136,27 @@ where
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        for c in &self.channels {
-            match &p {
-                Pmt::F32(v) => self.dev.set_gain(Rx, *c, *v as f64)?,
-                Pmt::F64(v) => self.dev.set_gain(Rx, *c, *v)?,
-                Pmt::U32(v) => self.dev.set_gain(Rx, *c, *v as f64)?,
-                Pmt::U64(v) => self.dev.set_gain(Rx, *c, *v as f64)?,
-                Pmt::Null => return Ok(Pmt::F64(self.dev.gain(Rx, *c)?.unwrap_or(f64::NAN))),
-                _ => return Ok(Pmt::InvalidValue),
-            };
+        if matches!(p, Pmt::Null) {
+            return Ok(Pmt::F64(self.dev.gain(Rx, self.channels[0])?.unwrap_or(f64::NAN)));
         }
+        let gain_db = match &p {
+            Pmt::F32(v) => *v as f64,
+            Pmt::F64(v) => *v,
+            Pmt::U32(v) => *v as f64,
+            Pmt::U64(v) => *v as f64,
+            _ => return Ok(Pmt::InvalidValue),
+        };
+        // Same rationale as `freq`: dispatch off-task so `work()` keeps
+        // pulling from the USB driver during the gain change.
+        let dev = self.dev.clone();
+        let channels = self.channels.clone();
+        std::thread::spawn(move || {
+            for c in &channels {
+                if let Err(e) = dev.set_gain(Rx, *c, gain_db) {
+                    eprintln!("[seify async retune] gain {gain_db} ch{c} failed: {e}");
+                }
+            }
+        });
         Ok(Pmt::Ok)
     }
 

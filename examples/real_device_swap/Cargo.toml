@@ -20,8 +20,12 @@ path = "src/zigbee_swap.rs"
 name = "phy_per"
 path = "src/phy_per.rs"
 
+[[bin]]
+name = "receiver"
+path = "src/receiver.rs"
+
 [dependencies]
-futuresdr = { path = "../..", features = ["plugin"] }
+futuresdr = { path = "../..", features = ["plugin", "seify", "soapy"] }
 plugin_api = { path = "../../crates/plugin_api" }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }

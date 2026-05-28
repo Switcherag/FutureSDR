@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""100%-stacked histogram of zigbee_swap reception, per wait bin.
+"""100%-stacked histogram of zigbee_swap reception, per wait_ms bin.
 
 Counterpart of `plot_first_drop.py` for the multizig firmware: the TX side
-alternates between two Zigbee channels (A: 2.425 GHz, B: 2.45 GHz). The
-on-wire wait field is u32 microseconds (full µs range, no cap); for
-display we convert to milliseconds. The `run` counter in `zigbee_swap.csv`
-makes per-run classification exact, including runs with zero receptions.
+alternates between two Zigbee channels (A: 2.425 GHz, B: 2.45 GHz). Each
+frame carries a `step` counter and a `wait_us` field giving the inter-frame
+delay TX waited after that frame.
 
-The sweep range is auto-detected from the union of waits observed across
-all runs. Each bin is one distinct wait_us value; the x-axis labels show
-ms (wait_us / 1000) for readability.
+X-axis = wait_ms ascending (0 ms left → max ms right), matching the
+original `plot_first_drop.py` orientation. The TX sweep schedule is
+auto-detected:
+  - quantum  = min |Δwait| between consecutive received steps
+  - schedule = [0, quantum, 2·quantum, ..., max(observed_wait)]
+
+Drops = schedule − received per run. So waits that were never received in
+any run still show as drops, and 0 ms is always a bin even if the TX
+firmware doesn't sweep that low (then it just shows as a perpetual drop).
 
 Outputs:
     first_drop_zigbee.png             — aggregate stacked histogram
@@ -58,10 +63,7 @@ for key, _lo, _hi, label in STREAK_BUCKETS:
     LABELS[key] = f"rcv streak {label}"
 
 CATEGORY_INDEX = {key: idx for idx, key in enumerate(STACK_ORDER)}
-PHY_COLORS = {
-    "A": "#1f77b4",
-    "B": "#ff7f0e",
-}
+PHY_COLORS = {"A": "#1f77b4", "B": "#ff7f0e"}
 PHY_LABELS = {
     "A": "zigbee A (2.425 GHz)",
     "B": "zigbee B (2.45 GHz)",
@@ -69,11 +71,7 @@ PHY_LABELS = {
 
 
 def load_rows(path: Path):
-    """Return (rows, phy_counts_by_run).
-
-    rows: list of (run, step, wait_us) for every successfully-parsed rx frame.
-    phy_counts_by_run: {run: {"A": n, "B": n}} from the `phy_active` column.
-    """
+    """Return (rows, phy_counts_by_run)."""
     rows = []
     phy_counts_by_run: dict[int, dict[str, int]] = {}
     with path.open(newline="") as f:
@@ -97,6 +95,42 @@ def load_rows(path: Path):
     return rows, phy_counts_by_run
 
 
+def infer_schedule(rows):
+    """Infer the TX sweep schedule and direction.
+
+    Returns (schedule_us, quantum_us, sweep_direction).
+        schedule_us: sorted list of expected wait_us values from 0 to max.
+        quantum_us:  smallest |Δwait| between adjacent steps observed.
+        sweep_direction: "high_to_low" if step 0 has higher wait than step N,
+                         else "low_to_high". Used to pick "first drop".
+    """
+    step_to_wait: dict[int, int] = {}
+    for _run, step, wait in rows:
+        # last-write-wins; sweep schedule is assumed stable across runs
+        step_to_wait[step] = wait
+
+    if not step_to_wait:
+        return [], 1000, "low_to_high"
+
+    by_step = sorted(step_to_wait.items())
+
+    diffs = []
+    for (s1, w1), (s2, w2) in zip(by_step, by_step[1:]):
+        if s2 == s1 + 1:
+            d = abs(w2 - w1)
+            if d > 0:
+                diffs.append(d)
+    quantum_us = min(diffs) if diffs else 1000
+
+    max_wait = max(step_to_wait.values())
+    schedule = list(range(0, max_wait + 1, quantum_us))
+    if schedule[-1] != max_wait:
+        schedule.append(max_wait)
+
+    direction = "high_to_low" if by_step[0][1] > by_step[-1][1] else "low_to_high"
+    return schedule, quantum_us, direction
+
+
 def streak_bucket_key(run_len: int) -> str:
     for key, lo, hi, _ in STREAK_BUCKETS:
         if lo <= run_len <= hi:
@@ -104,39 +138,46 @@ def streak_bucket_key(run_len: int) -> str:
     return STREAK_BUCKETS[-1][0]
 
 
-def run_length_in_set(value: int, sorted_index: dict[int, int], ordered: list[int]) -> int:
-    """Length of the contiguous (by sweep position) streak containing `value`.
+def build_runs(rows, schedule_us, sweep_direction):
+    """Per-run reception analysis against the inferred schedule."""
+    per_run_received: dict[int, set[int]] = {}
+    for run, _step, wait in rows:
+        per_run_received.setdefault(run, set()).add(wait)
 
-    `value` is a wait_us reading; `sorted_index` maps each expected wait_us to
-    its position in the sweep; `ordered` is the sweep itself. A streak is a
-    maximal run of *positions* whose wait_us are all in the received set.
-    """
-    if value not in sorted_index:
-        return 0
-    return 1  # placeholder, real computation done in classify_bucket
+    schedule_set = set(schedule_us)
+    runs = []
+    for run_id in sorted(per_run_received.keys()):
+        received = per_run_received[run_id] & schedule_set
+        missed = schedule_set - received
+        if missed:
+            first_missed = max(missed) if sweep_direction == "high_to_low" else min(missed)
+        else:
+            first_missed = None
+        runs.append({
+            "run": run_id,
+            "received_us": received,
+            "missed_us": missed,
+            "first_missed": first_missed,
+        })
+    return runs
 
 
-def classify_bucket(bucket: dict, ordered_waits: list[int], n_bins: int) -> np.ndarray:
-    """Classify each sweep position as drop_first / drop_other / rcv_<bucket>.
+def classify_bucket(bucket: dict, schedule_us: list[int]) -> np.ndarray:
+    """Classify each schedule bin as drop_first / drop_other / rcv_<bucket>."""
+    n = len(schedule_us)
+    categories = np.full(n, CATEGORY_INDEX["drop_other"], dtype=int)
+    received = bucket["received_us"]
 
-    `ordered_waits[i]` is the i-th wait_us in the sweep (here we use ascending
-    order; the visual axis is wait_us, which is monotonic).
-    """
-    categories = np.full(n_bins, CATEGORY_INDEX["drop_other"], dtype=int)
-    recv_set = bucket["received_ms"]
-    miss_set = bucket["missed_ms_set"]
-    first_miss = bucket["first_missed_ms"]
-
-    received_mask = np.array([w in recv_set for w in ordered_waits], dtype=bool)
-
-    # Compute streak length around each received position (contiguous in sweep order).
+    # Streaks are contiguous runs in schedule order; matches TX time order
+    # (up to direction reversal — streak length is invariant either way).
+    received_mask = np.array([w in received for w in schedule_us], dtype=bool)
     i = 0
-    while i < n_bins:
+    while i < n:
         if not received_mask[i]:
             i += 1
             continue
         j = i
-        while j < n_bins and received_mask[j]:
+        while j < n and received_mask[j]:
             j += 1
         length = j - i
         bucket_key = streak_bucket_key(length)
@@ -144,21 +185,49 @@ def classify_bucket(bucket: dict, ordered_waits: list[int], n_bins: int) -> np.n
             categories[k] = CATEGORY_INDEX[bucket_key]
         i = j
 
-    if first_miss is not None and first_miss in miss_set:
-        # Map wait_us → position in ordered_waits.
+    first_missed = bucket["first_missed"]
+    if first_missed is not None:
         try:
-            pos = ordered_waits.index(first_miss)
+            pos = schedule_us.index(first_missed)
             categories[pos] = CATEGORY_INDEX["drop_first"]
         except ValueError:
             pass
-
     return categories
 
 
-def plot_aggregate_view(fracs, counts, total_runs, ordered_waits):
-    n_bins = len(ordered_waits)
-    x = np.arange(n_bins)
-    bottom = np.zeros(n_bins)
+def _apply_wait_ms_ticks(ax, schedule_us):
+    """Label up to 12 ticks with wait_ms = wait_us / 1000."""
+    n = len(schedule_us)
+    if n == 0:
+        return
+    tick_count = min(n, 12)
+    tick_positions = np.linspace(0, n - 1, num=tick_count, dtype=int)
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([f"{schedule_us[i] / 1000.0:.1f}" for i in tick_positions])
+
+
+def _wire_cursor(ax, schedule_us, run_ids=None):
+    n = len(schedule_us)
+
+    def fmt(x, y):
+        idx = int(round(x))
+        if 0 <= idx < n:
+            x_str = f"wait={schedule_us[idx] / 1000.0:.3f} ms (bin {idx})"
+        else:
+            x_str = f"x={x:.2f}"
+        if run_ids is not None:
+            row = int(round(y))
+            if 0 <= row < len(run_ids):
+                return f"{x_str}, run={run_ids[row]}"
+            return f"{x_str}, y={y:.2f}"
+        return f"{x_str}, frac={y:.3f}"
+    ax.format_coord = fmt
+
+
+def plot_aggregate_view(fracs, counts, total_runs, schedule_us):
+    n = len(schedule_us)
+    x = np.arange(n)
+    bottom = np.zeros(n)
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.set_facecolor("#e8e8e8")
     for category in STACK_ORDER:
@@ -172,11 +241,11 @@ def plot_aggregate_view(fracs, counts, total_runs, ordered_waits):
         )
         bottom += fracs[category]
 
-    ax.set_xlim(-0.5, n_bins - 0.5)
+    ax.set_xlim(-0.5, n - 0.5)
     ax.set_ylim(0, 1.0)
-    _apply_wait_ms_ticks(ax, ordered_waits)
-    _wire_cursor(ax, ordered_waits)
-    ax.set_xlabel("wait (TX inter-frame delay, ms)")
+    _apply_wait_ms_ticks(ax, schedule_us)
+    _wire_cursor(ax, schedule_us)
+    ax.set_xlabel("wait (TX inter-frame delay, ms) — 0 ms left → max right")
     ax.set_ylabel("fraction of runs")
     ax.set_title(f"zigbee_swap reception by streak length — {total_runs} run(s)")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, fontsize=8)
@@ -186,8 +255,8 @@ def plot_aggregate_view(fracs, counts, total_runs, ordered_waits):
     return fig
 
 
-def plot_runs_view(classified_runs: np.ndarray, total_runs: int, ordered_waits, run_ids):
-    n_bins = len(ordered_waits)
+def plot_runs_view(classified_runs, total_runs, schedule_us, run_ids):
+    n = len(schedule_us)
     fig_height = max(4.5, min(0.35 * total_runs + 2.0, 18.0))
     fig, ax = plt.subplots(figsize=(14, fig_height))
     cmap = ListedColormap([COLORS[key] for key in STACK_ORDER])
@@ -200,9 +269,9 @@ def plot_runs_view(classified_runs: np.ndarray, total_runs: int, ordered_waits, 
         vmax=len(STACK_ORDER) - 0.5,
         origin="upper",
     )
-    ax.set_xlim(-0.5, n_bins - 0.5)
-    _apply_wait_ms_ticks(ax, ordered_waits)
-    _wire_cursor(ax, ordered_waits, run_ids=run_ids)
+    ax.set_xlim(-0.5, n - 0.5)
+    _apply_wait_ms_ticks(ax, schedule_us)
+    _wire_cursor(ax, schedule_us, run_ids=run_ids)
     ax.set_xlabel("wait (TX inter-frame delay, ms)")
     ax.set_ylabel("run index")
     ax.set_title("zigbee_swap reception by run — unmerged stacked rows")
@@ -230,7 +299,7 @@ def plot_runs_view(classified_runs: np.ndarray, total_runs: int, ordered_waits, 
     return fig
 
 
-def plot_phy_share_view(phy_share_rows: np.ndarray, run_ids: list[int]):
+def plot_phy_share_view(phy_share_rows, run_ids):
     fig, ax = plt.subplots(figsize=(14, 5.5))
     x = np.arange(len(run_ids))
     bottom = np.zeros(len(run_ids))
@@ -273,76 +342,7 @@ def plot_phy_share_view(phy_share_rows: np.ndarray, run_ids: list[int]):
     return fig
 
 
-def _apply_wait_ms_ticks(ax, ordered_waits):
-    """Label up to 12 ticks with wait_us / 1000 (ms) at those positions."""
-    n = len(ordered_waits)
-    if n == 0:
-        return
-    tick_count = min(n, 12)
-    tick_positions = np.linspace(0, n - 1, num=tick_count, dtype=int)
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([f"{ordered_waits[i] / 1000.0:.2f}" for i in tick_positions])
-
-
-def _wire_cursor(ax, ordered_waits, run_ids=None):
-    """Override format_coord so the toolbar shows the real wait_ms (and run id)
-    at the cursor position instead of the raw bin index / row number."""
-    n = len(ordered_waits)
-    rids = run_ids if run_ids is not None else None
-
-    def fmt(x, y):
-        idx = int(round(x))
-        if 0 <= idx < n:
-            wait_ms = ordered_waits[idx] / 1000.0
-            x_str = f"wait={wait_ms:.3f} ms (bin {idx})"
-        else:
-            x_str = f"x={x:.2f}"
-        if rids is not None:
-            row = int(round(y))
-            if 0 <= row < len(rids):
-                return f"{x_str}, run={rids[row]}"
-            return f"{x_str}, y={y:.2f}"
-        return f"{x_str}, y={y:.3f}"
-
-    ax.format_coord = fmt
-
-
-def build_runs(rows: list[tuple[int, int, int]]):
-    received_by_run: dict[int, set[int]] = {}
-    all_waits: set[int] = set()
-
-    for run, _step, wait in rows:
-        received_by_run.setdefault(run, set()).add(wait)
-        all_waits.add(wait)
-
-    if not received_by_run:
-        return [], [], 0
-
-    ordered_waits = sorted(all_waits)
-    expected = set(ordered_waits)
-
-    run_start = min(received_by_run)
-    run_stop = max(received_by_run)
-    runs = []
-    for run in range(run_start, run_stop + 1):
-        received_ms = received_by_run.get(run, set())
-        missed_ms_set = expected - received_ms
-        # "First drop" in microsecond sweep direction: the largest wait_us
-        # that was missed (since the TX sweeps from large → small wait, the
-        # first missed bin in sweep order is the largest missed wait_us).
-        first_missed_ms = max(missed_ms_set) if missed_ms_set else None
-        runs.append(
-            {
-                "run": run,
-                "received_ms": received_ms,
-                "missed_ms_set": missed_ms_set,
-                "first_missed_ms": first_missed_ms,
-            }
-        )
-    return runs, ordered_waits, len(received_by_run)
-
-
-def build_phy_share_rows(phy_counts_by_run: dict[int, dict[str, int]], run_ids: list[int]) -> np.ndarray:
+def build_phy_share_rows(phy_counts_by_run, run_ids):
     rows = []
     for run_id in run_ids:
         counts = phy_counts_by_run.get(run_id, {"A": 0, "B": 0})
@@ -362,26 +362,25 @@ def main():
     if not rows:
         sys.exit(f"{CSV_PATH} has no decoded frames")
 
-    runs, ordered_waits, runs_with_hits = build_runs(rows)
+    schedule_us, quantum_us, sweep_direction = infer_schedule(rows)
+    if not schedule_us:
+        sys.exit(f"{CSV_PATH} has no usable schedule")
+
+    runs = build_runs(rows, schedule_us, sweep_direction)
     total_runs = len(runs)
-    if total_runs == 0 or not ordered_waits:
+    if total_runs == 0:
         sys.exit(f"{CSV_PATH} has no valid runs")
 
     print(
-        f"using explicit run counters from {CSV_PATH.name}: "
-        f"{runs_with_hits} run(s) with receptions, {total_runs} total run(s) in range"
-    )
-    print(
-        f"wait bins: {len(ordered_waits)} unique values from "
-        f"{ordered_waits[0] / 1000.0:.3f} ms to {ordered_waits[-1] / 1000.0:.3f} ms"
+        f"runs: {total_runs}, schedule: {len(schedule_us)} bins from "
+        f"0 ms to {schedule_us[-1] / 1000.0:.3f} ms "
+        f"(quantum {quantum_us / 1000.0:.3f} ms, sweep {sweep_direction})"
     )
 
-    n_bins = len(ordered_waits)
-    counts = {c: np.zeros(n_bins, dtype=int) for c in STACK_ORDER}
+    counts = {c: np.zeros(len(schedule_us), dtype=int) for c in STACK_ORDER}
     classified_runs = []
-
     for bucket in runs:
-        bucket_classes = classify_bucket(bucket, ordered_waits, n_bins)
+        bucket_classes = classify_bucket(bucket, schedule_us)
         classified_runs.append(bucket_classes)
         for category in STACK_ORDER:
             counts[category] += (bucket_classes == CATEGORY_INDEX[category]).astype(int)
@@ -390,15 +389,14 @@ def main():
     classified_runs = np.vstack(classified_runs)
     run_ids = [bucket["run"] for bucket in runs]
 
-    plot_aggregate_view(fracs, counts, total_runs, ordered_waits)
-    plot_runs_view(classified_runs, total_runs, ordered_waits, run_ids)
+    plot_aggregate_view(fracs, counts, total_runs, schedule_us)
+    plot_runs_view(classified_runs, total_runs, schedule_us, run_ids)
     phy_share_rows = build_phy_share_rows(phy_counts_by_run, run_ids)
     plot_phy_share_view(phy_share_rows, run_ids)
     plt.show()
     print(f"wrote {OUT_PATH}")
     print(f"wrote {RUNS_OUT_PATH}")
     print(f"wrote {PHY_SHARE_OUT_PATH}")
-    print(f"runs: {total_runs}")
     for c in STACK_ORDER:
         print(f"  {LABELS[c]:25s} total events: {int(counts[c].sum())}")
 

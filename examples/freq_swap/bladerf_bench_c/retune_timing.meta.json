@@ -1,0 +1,42 @@
+{
+  "source": "libbladeRF direct (no seify/FutureSDR) — quick-tune vs set_frequency",
+  "device": "",
+  "channel": 0,
+  "sample_rate_hz": 8000000.000000,
+  "start_freq_hz": 830000000.000000,
+  "target_freq_hz": 831000000.000000,
+  "slow_target_freq_hz": 832000000.000000,
+  "slow_offset_hz": 1000000.000000,
+  "switch_ms": 80.000000,
+  "switch_ms_slow": 160.000000,
+  "gain_db": 0,
+  "mark_amp": 10.000000,
+  "mark_samples": 8,
+  "capture_total_ms": 250.000000,
+  "events": [
+    {
+      "label": "quick_tune",
+      "method": "bladerf_schedule_retune + cached quick_tune",
+      "target_freq_hz": 831000000.000000,
+      "marker_axis": "I",
+      "marker_sample_idx": 655360,
+      "t_mark_s": 0.080057679,
+      "t_call_fire_s": 0.080057860,
+      "t_call_ack_s": 0.080342393
+    },
+    {
+      "label": "slow_set_frequency",
+      "method": "bladerf_set_frequency (full PLL recalibration)",
+      "target_freq_hz": 832000000.000000,
+      "marker_axis": "Q",
+      "marker_sample_idx": 1295360,
+      "t_mark_s": 0.160067633,
+      "t_call_fire_s": 0.160067676,
+      "t_call_ack_s": 0.170138979
+    }
+  ],
+  "t_stop_s": 0.253348152,
+  "total_samples": 1944576,
+  "iq_path": "retune_timing.cf32",
+  "format": "cf32 (interleaved float32 I,Q little-endian)"
+}

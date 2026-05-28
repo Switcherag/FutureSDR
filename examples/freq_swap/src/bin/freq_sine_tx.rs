@@ -32,8 +32,11 @@ struct Args {
     #[arg(long, default_value_t = 0.0)]
     center_hz: f32,
 
-    /// Peak FM deviation in Hz (instantaneous freq = center ± deviation)
-    #[arg(long, default_value_t = 1_000_000.0)]
+    /// Peak FM deviation in Hz (instantaneous freq = center ± deviation).
+    /// Must satisfy |center| + |deviation| < sample_rate / 2 or the tone
+    /// will alias around Nyquist (visible as the swept tone wrapping back
+    /// into the visible band).
+    #[arg(long, default_value_t = 200_000.0)]
     deviation_hz: f32,
 
     /// FM sweep period in milliseconds (one full sine of the inst. frequency)
@@ -56,6 +59,24 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     futuresdr::runtime::init();
+
+    // Anti-alias guard: the instantaneous baseband frequency must fit
+    // inside Nyquist (sample_rate/2) with a small margin, otherwise the
+    // swept tone wraps around and you see overlapping aliased copies in
+    // the spectrum.
+    let nyquist = (args.sample_rate / 2.0) as f32;
+    let bb_max = args.center_hz.abs() + args.deviation_hz.abs();
+    let margin = 0.95 * nyquist;
+    if bb_max > margin {
+        anyhow::bail!(
+            "baseband swing ({:.3} kHz = |center| + |deviation|) exceeds 95% of Nyquist \
+             ({:.3} kHz at fs = {:.3} MS/s) — the tone will alias. \
+             Either raise --sample-rate, lower --deviation-hz, or move --center-hz closer to 0.",
+            bb_max / 1e3,
+            margin / 1e3,
+            args.sample_rate / 1e6,
+        );
+    }
 
     let mut fg = Flowgraph::new();
 
@@ -90,6 +111,13 @@ fn main() -> Result<()> {
         args.center_hz / 1e3,
         args.deviation_hz / 1e3,
         args.period_ms,
+    );
+    println!(
+        "  baseband swing: [{:+.3}, {:+.3}] kHz (Nyquist ±{:.3} kHz, margin used {:.1}%)",
+        (args.center_hz - args.deviation_hz) / 1e3,
+        (args.center_hz + args.deviation_hz) / 1e3,
+        nyquist / 1e3,
+        100.0 * bb_max / nyquist,
     );
     println!(
         "  RF sweep:      {:.3} MHz ↔ {:.3} MHz (mean {:.3} MHz)",

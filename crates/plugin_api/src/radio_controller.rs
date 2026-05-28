@@ -98,8 +98,11 @@ impl RadioController {
         Ok(())
     }
 
-    /// Set the center frequency (live message callback on the SDR block —
-    /// does not interrupt the stream).
+    /// Set the center frequency. **Fire-and-forget**: clones the SDR block
+    /// handle and dispatches the `freq` message on a background thread, then
+    /// returns immediately. The caller does not pay the hardware retune
+    /// latency; the SDR settles on its own. Errors from the dispatched
+    /// callback are reported via stderr (not via this function's Result).
     pub async fn set_frequency(
         &mut self,
         freq_hz: f64,
@@ -107,12 +110,27 @@ impl RadioController {
         self.frequency_hz = freq_hz;
         let state = self.state.as_mut()
             .ok_or("RadioController: not started")?;
-        state.handle.callback(state.sdr_block_id, "freq", Pmt::F64(freq_hz)).await
-            .map_err(|e| format!("RadioController: set freq: {e}"))?;
+        let mut handle = state.handle.clone();
+        let sdr_block_id = state.sdr_block_id;
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            match futuresdr::async_io::block_on(
+                handle.callback(sdr_block_id, "freq", Pmt::F64(freq_hz))
+            ) {
+                Ok(_) => println!(
+                    "        [RadioController async retune] freq {:.3} MHz settled in {:.3} ms",
+                    freq_hz / 1e6,
+                    t.elapsed().as_secs_f64() * 1000.0
+                ),
+                Err(e) => eprintln!("[RadioController async retune] freq {freq_hz} failed: {e}"),
+            }
+        });
         Ok(())
     }
 
-    /// Set the gain (live message callback on the SDR block).
+    /// Set the gain. **Fire-and-forget** (same semantics as
+    /// [`set_frequency`]): dispatches the `gain` message on a background
+    /// thread and returns immediately.
     pub async fn set_gain(
         &mut self,
         gain_db: f64,
@@ -120,8 +138,20 @@ impl RadioController {
         self.gain_db = gain_db;
         let state = self.state.as_mut()
             .ok_or("RadioController: not started")?;
-        state.handle.callback(state.sdr_block_id, "gain", Pmt::F64(gain_db)).await
-            .map_err(|e| format!("RadioController: set gain: {e}"))?;
+        let mut handle = state.handle.clone();
+        let sdr_block_id = state.sdr_block_id;
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            match futuresdr::async_io::block_on(
+                handle.callback(sdr_block_id, "gain", Pmt::F64(gain_db))
+            ) {
+                Ok(_) => println!(
+                    "        [RadioController async retune] gain {gain_db:.2} dB settled in {:.3} ms",
+                    t.elapsed().as_secs_f64() * 1000.0
+                ),
+                Err(e) => eprintln!("[RadioController async retune] gain {gain_db} failed: {e}"),
+            }
+        });
         Ok(())
     }
 
