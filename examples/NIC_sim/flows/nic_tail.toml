@@ -1,0 +1,62 @@
+# NIC tail — permanent stage that lands replayed frames on a Linux TAP NIC.
+#
+# Mirror of real_device_swap's network_tail: the `[tail]` section names an
+# `input_port`, and any swappable that marks an output port `to = "tail"` is
+# auto-wired to it by the FlowgraphController.
+#
+# Wire format on the inter-FG bridge: `[u32 LE len][len bytes payload]`, where
+# each payload is a bare RFtap frame (12B RFtap header — "RFta" + flags + DLT —
+# followed by the inner MAC frame), exactly as a real PHY decoder emits it.
+#
+# Tail topology:
+#   decode → ┬─ nic   (writes the bare RFtap frame verbatim to the sdrtap0 TAP —
+#            │         no Ethernet wrapping, so a capture starts with "RFta")
+#            └─ udp   (UDP/55555 mirror of the same raw RFtap frame, so Wireshark's
+#                      RFtap dissector recognizes it: "Decode As" the UDP payload)
+
+[tail]
+name = "nic_sim_tail"
+input_port = "in"
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "decode.input"
+type = "u8"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+# Re-frame the length-prefixed u8 bridge stream back into Pmt::Blob frames.
+[[blocks]]
+id = "decode"
+plugin = "lp_stream_to_blob_plugin"
+
+# Linux TAP NIC. Writes each frame blob directly to /dev/net/tun. The
+# resulting sdrtap0 interface is visible to `ip link`, tcpdump, and AF_XDP.
+# Needs CAP_NET_ADMIN — pre-create the iface (see src/main.rs header) or run
+# as root.
+[[blocks]]
+id = "nic"
+plugin = "tap_nic_plugin"
+config = "sdrtap0:de:ad:be:ef:00:01"
+config_type = "String"
+
+# UDP mirror so the replay can be observed without TAP privileges:
+#   nc -u -l 55555   (or  tcpdump -i lo -A udp port 55555)
+[[blocks]]
+id = "udp"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+config_type = "String"
+
+# ── Connections ─────────────────────────────────────────────────────
+
+[[connections]]
+src = "decode.out"
+dst = "nic.rx"
+message = true
+
+[[connections]]
+src = "decode.out"
+dst = "udp.in"
+message = true

@@ -8,7 +8,7 @@ crate-type = ["dylib"]
 
 [dependencies]
 plugin_api = { path = "../../crates/plugin_api" }
-futuresdr = { path = "../../", features = ["plugin", "seify"] }
+futuresdr = { workspace = true }
 
 [features]
 default = ["soapy"]

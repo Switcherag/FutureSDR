@@ -25,7 +25,7 @@
 //   cd examples/sdr_cross_flowgraph
 //   ../../target/debug/swap_bench [iterations]
 
-use plugin_api::{FlowgraphController, RadioController, default_plugin_dir};
+use plugin_host::{FlowgraphController, RadioController, default_plugin_dir};
 use std::time::Instant;
 
 /// Radio parameters for each swap target, parsed from TOML [radio] sections.

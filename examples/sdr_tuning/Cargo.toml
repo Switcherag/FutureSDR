@@ -28,6 +28,6 @@ path = "src/bladerf2_agc.rs"
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 futuresdr = { path = "../..", features = ["plugin", "soapy", "bladerf1"] }
-plugin_api = { path = "../../crates/plugin_api" }
+plugin_host = { path = "../../crates/plugin_host" }
 rand = "0.9"
 seify = { path = "../../crates/seify", default-features = false, features = ["soapy", "bladerf1"] }

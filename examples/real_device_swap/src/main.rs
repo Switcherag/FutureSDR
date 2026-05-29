@@ -42,7 +42,7 @@ use std::time::Duration;
 
 use futuresdr::async_io::Timer;
 use futuresdr::futures::{FutureExt, StreamExt, select};
-use plugin_api::{FlowgraphController, default_plugin_dir};
+use plugin_host::{FlowgraphController, default_plugin_dir};
 
 /// Auto-rotation sequence: every SWAP_PERIOD, swap to the next entry.
 const ROTATION: &[&str] = &[

@@ -14,5 +14,5 @@ path = "src/cross_fg_bench.rs"
 
 [dependencies]
 futuresdr = { path = "../..", features = ["plugin"] }
-plugin_api = { path = "../../crates/plugin_api" }
+plugin_host = { path = "../../crates/plugin_host" }
 toml = "0.8"

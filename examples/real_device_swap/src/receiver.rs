@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use futuresdr::futures::StreamExt;
-use plugin_api::{FlowgraphController, default_plugin_dir};
+use plugin_host::{FlowgraphController, default_plugin_dir};
 
 const HEAD_FLOW: &str = "flows/sdr_head.toml";
 const TAIL_FLOW: &str = "flows/network_tail.toml";

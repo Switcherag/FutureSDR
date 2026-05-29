@@ -14,7 +14,7 @@
 //   echo -n '-s flows/discard.toml'   | nc -u 127.0.0.1 7879
 //   echo -n Q                         | nc -u 127.0.0.1 7879
 
-use plugin_api::{FlowgraphController, default_plugin_dir};
+use plugin_host::{FlowgraphController, default_plugin_dir};
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     futuresdr::runtime::init();

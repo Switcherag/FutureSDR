@@ -11,7 +11,7 @@ use futuresdr::async_io::block_on;
 use futuresdr::blocks::{NullSink, VectorSource};
 use futuresdr::num_complex::Complex32;
 use futuresdr::runtime::{Flowgraph, Runtime};
-use plugin_api::LoadedPlugin;
+use plugin_host::LoadedPlugin;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::Instant;

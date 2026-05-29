@@ -25,7 +25,7 @@ name = "receiver"
 path = "src/receiver.rs"
 
 [dependencies]
-futuresdr = { path = "../..", features = ["plugin", "seify", "soapy"] }
-plugin_api = { path = "../../crates/plugin_api" }
+futuresdr = { workspace = true }
+plugin_host = { path = "../../crates/plugin_host" }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }

@@ -1,5 +1,5 @@
 [package]
-name = "zigbee_demod_plugin"
+name = "pcap_source_plugin"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,4 +9,3 @@ crate-type = ["dylib"]
 [dependencies]
 plugin_api = { path = "../../crates/plugin_api" }
 futuresdr = { workspace = true }
-num-complex = "0.4"

@@ -1,0 +1,41 @@
+# Interleaved replay source — feeds both captures into the NIC tail one frame
+# at a time.
+#
+# pcap_source reads BOTH pcaps (comma-separated config), keeps their 0x88B5
+# RFtap frames, and emits them round-robin — HaLow frame, Zigbee frame, HaLow
+# frame, … — one per second. blob_to_lp_stream serializes each frame to the
+# length-prefixed u8 bridge stream the tail consumes. The `frames` output is
+# auto-wired to whichever permanent FG declares a `[tail]` section.
+
+[[ports]]
+id = "frames"
+direction = "out"
+src = "to_tail.output"
+type = "u8"
+to = "tail"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+[[blocks]]
+id = "pcap"
+plugin = "pcap_source_plugin"
+config = "/home/alakhdar/halow_tap.pcap,/home/alakhdar/zigbee_tap.pcap"
+config_type = "String"
+
+[[blocks]]
+id = "to_tail"
+plugin = "blob_to_lp_stream_plugin"
+
+# ── Connections ─────────────────────────────────────────────────────
+
+[[connections]]
+src = "pcap.out"
+dst = "to_tail.rx"
+message = true
+
+# ── Controller tap ──────────────────────────────────────────────────
+# Forward each replayed frame to the controller policy so main can log it.
+
+[[controller_taps]]
+src = "pcap.out"
+name = "frame"

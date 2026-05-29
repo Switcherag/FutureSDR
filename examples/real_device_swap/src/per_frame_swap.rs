@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use futuresdr::async_io::Timer;
 use futuresdr::futures::{FutureExt, StreamExt, select};
 use futuresdr::runtime::Pmt;
-use plugin_api::{FlowgraphController, default_plugin_dir};
+use plugin_host::{FlowgraphController, default_plugin_dir};
 
 const FLOW_ZIGBEE: &str = "flows/zigbee_rx.toml";
 const FLOW_HALOW: &str = "flows/wlan_ah_rx_v2.toml";

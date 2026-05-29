@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
-# Full release build of the real_device_swap plugin ecosystem.
+# Release build of the NIC_sim plugin ecosystem.
 #
-# Everything is built in ONE cargo invocation so futuresdr is compiled
-# exactly once, with one feature unification (the ABI contract in the root
+# Everything is built in ONE cargo invocation so futuresdr is compiled exactly
+# once, with one feature unification (the ABI contract in the root
 # [workspace.dependencies]). The example binary, libfuturesdr.so and every
 # plugin land in target/release/ and find each other at runtime via the
 # $ORIGIN rpath set by plugin_build.rs.
 set -uo pipefail
 
-# Run from the workspace root so .cargo/config.toml (-C prefer-dynamic) and
-# the workspace Cargo.toml are picked up regardless of where this is invoked.
+# Run from the workspace root so .cargo/config.toml (-C prefer-dynamic) and the
+# workspace Cargo.toml are picked up regardless of where this is invoked.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 ECOSYSTEM=(
-  real-device-swap-example
-  seify_source_plugin fir_resampler_plugin
-  zigbee_demod_plugin clock_recovery_mm_plugin zigbee_decoder_plugin zigbee_mac_plugin null_sink_plugin
+  nic-sim-example
+  pcap_source_plugin
+  blob_to_lp_stream_plugin
+  lp_stream_to_blob_plugin
+  tap_nic_plugin
   blob_to_udp_plugin
-  wlan_ah_v2_stf_detector_plugin wlan_ah_v2_cfo_corrector_plugin wlan_ah_v2_sto_corrector_plugin
-  wlan_ah_v2_channel_estimator_plugin wlan_ah_v2_sig_decoder_plugin wlan_ah_v2_data_demod_plugin
-  wlan_ah_decoder_plugin
-  network_extractor_plugin message_file_sink_plugin
-  blob_to_lp_stream_plugin lp_stream_to_blob_plugin
-  universal_mac_plugin tap_nic_plugin
 )
 
 PKG_ARGS=()

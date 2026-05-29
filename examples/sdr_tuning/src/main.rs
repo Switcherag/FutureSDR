@@ -11,7 +11,7 @@ use futuresdr::blocks::seify::Builder;
 use futuresdr::blocks::{NullSink, NullSource};
 use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
-use plugin_api::LoadedPlugin;
+use plugin_host::LoadedPlugin;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]

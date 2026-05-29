@@ -11,7 +11,7 @@ use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::prelude::Pmt;
 use futuresdr::runtime::{BlockId, Flowgraph, Runtime};
-use plugin_api::LoadedPlugin;
+use plugin_host::LoadedPlugin;
 use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]

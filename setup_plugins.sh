@@ -120,7 +120,11 @@ build_package() {
 # ── Build libfuturesdr.so ────────────────────────────────────────
 if $BUILD_LIB; then
     echo "=== Building futuresdr ($PROFILE_NAME) ==="
-    cargo build $PROFILE_FLAG -p futuresdr 2>&1
+    # Must match the plugin ABI contract in [workspace.dependencies].
+    # A bare `-p futuresdr` builds with default features only, producing a
+    # libfuturesdr.so whose StableCrateId (and thus every exported symbol)
+    # differs from what plugins link against — they would fail to load.
+    cargo build $PROFILE_FLAG -p futuresdr --features plugin,seify,soapy 2>&1
     echo ""
 fi
 

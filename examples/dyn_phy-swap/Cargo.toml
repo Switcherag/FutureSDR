@@ -25,4 +25,4 @@ anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
 futuresdr = { path = "../..", features = ["plugin", "soapy"] }
-plugin_api = { path = "../../crates/plugin_api" }
+plugin_host = { path = "../../crates/plugin_host" }

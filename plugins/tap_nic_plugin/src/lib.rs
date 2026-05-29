@@ -39,6 +39,9 @@ impl TapNic {
             Pmt::Blob(blob) => {
                 if let Some(fd) = self.fd.as_ref() {
                     let raw = fd.as_raw_fd();
+                    // Write the payload (a bare RFtap frame) verbatim — no
+                    // Ethernet wrapping. A capture therefore starts with the
+                    // "RFta" magic, which Wireshark's RFtap dissector recognizes.
                     let n = unsafe { libc::write(raw, blob.as_ptr() as *const _, blob.len()) };
                     if n < 0 {
                         let err = std::io::Error::last_os_error();
@@ -239,7 +242,7 @@ fn tx_drain(fd: RawFd, iface: String) {
 
 plugin_api::export_plugin! {
     name: "TapNic",
-    description: "Linux TAP NIC: writes incoming blob bytes directly to the TAP device (RX only; TX stubbed).",
+    description: "Linux TAP NIC: writes each incoming blob (a bare RFtap frame) verbatim to the TAP device — no Ethernet wrapping (RX only; TX stubbed).",
     config: String,
     create: |cfg, _id| {
         TapNic::new(cfg)

@@ -1,13 +1,13 @@
 [package]
-name = "add_one_dyn_example"
+name = "nic-sim-example"
 version = "0.1.0"
 edition = "2021"
 build = "../../plugin_build.rs"
 
 [[bin]]
-name = "add_one_dyn"
+name = "nic_sim"
 path = "src/main.rs"
 
 [dependencies]
-futuresdr = { path = "../..", features = ["plugin"] }
+futuresdr = { workspace = true }
 plugin_host = { path = "../../crates/plugin_host" }

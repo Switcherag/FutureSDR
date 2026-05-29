@@ -10,7 +10,7 @@ use clap::Parser;
 use futuresdr::blocks::{FileSink, Head, NullSource};
 use futuresdr::macros::connect;
 use futuresdr::runtime::{Flowgraph, Runtime};
-use plugin_api::LoadedPlugin;
+use plugin_host::LoadedPlugin;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::Instant;

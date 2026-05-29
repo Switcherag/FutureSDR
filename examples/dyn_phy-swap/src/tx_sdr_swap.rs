@@ -15,7 +15,7 @@ use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::prelude::Pmt;
 use futuresdr::runtime::{BlockId, Flowgraph, Runtime};
-use plugin_api::LoadedPlugin;
+use plugin_host::LoadedPlugin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

@@ -25,7 +25,7 @@ use futuresdr::async_io::Timer;
 use futuresdr::futures::{FutureExt, StreamExt, select};
 use futuresdr::runtime::Pmt;
 use futuresdr::seify;
-use plugin_api::{FlowgraphController, default_plugin_dir};
+use plugin_host::{FlowgraphController, default_plugin_dir};
 
 /// Args used by both the SeifySource block (inside the head FG) and the
 /// fast-retune `Device` we open here. Empty string = pick first available

@@ -2,7 +2,7 @@ use anyhow::Result;
 use futuresdr::blocks::{NullSource, FileSink};
 use futuresdr::macros::connect;
 use futuresdr::runtime::{Flowgraph, Runtime};
-use plugin_api::LoadedPlugin;
+use plugin_host::LoadedPlugin;
 
 fn main() -> Result<()> {
     let mut fg = Flowgraph::new();

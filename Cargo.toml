@@ -28,6 +28,7 @@ members = [
     "crates/macros",
     "crates/types",
     "crates/plugin_api",
+    "crates/plugin_host",
     "crates/plugin_gen",
     "crates/seify",
     "examples/dylib",
@@ -43,10 +44,29 @@ members = [
     "examples/cross_flowgraph",
     "examples/sdr_cross_flowgraph",
     "examples/real_device_swap",
+    "examples/NIC_sim",
     "examples/halowv2",
     "examples/wlan_ah",
     "plugins/*",
 ]
+
+# ── Plugin ABI contract ──────────────────────────────────────────
+# Single source of truth for how every plugin (and every plugin-host
+# example) depends on futuresdr. The exact feature set here is baked
+# into futuresdr's StableCrateId, which is part of every exported
+# Rust-ABI symbol name. Keeping it identical across all members means
+# any plugin can be rebuilt in isolation and still resolve symbols
+# against an already-deployed libfuturesdr.so.
+#
+# RULES:
+#   * Members in the dlopen ecosystem MUST use `futuresdr.workspace = true`
+#     with no extra features. Adding a feature changes the metadata hash
+#     and breaks ABI with the rest of the ecosystem.
+#   * Build the deployed libfuturesdr.so with EXACTLY these features.
+#   * Standalone (non-plugin) examples are NOT in the ecosystem and keep
+#     their own explicit `futuresdr = { path = "...", features = [...] }`.
+[workspace.dependencies]
+futuresdr = { path = ".", features = ["plugin", "seify", "soapy"] }
 
 [features]
 default = ["tracing_max_level_debug", "tracing_release_max_level_info"]
@@ -108,6 +128,13 @@ futuresdr-macros = { path = "crates/macros", version = "0.0.9-dev" }
 futuresdr-types = { path = "crates/types", version = "0.0.15-dev" }
 num-complex = "0.4"
 num-integer = "0.1"
+# ABI pin: force num-traits/libm ON unconditionally. Some ecosystem packages
+# (e.g. rand_distr) enable this transitive feature; a lone `cargo build -p
+# one_plugin` would not, which flips num-traits' metadata and cascades through
+# num-complex/rustfft/futuredsp into every futuresdr symbol hash — breaking
+# plugins built in isolation against the frozen libfuturesdr.so. Declaring it
+# here (futuresdr is in every plugin's closure) makes the resolution invariant.
+num-traits = { version = "0.2", features = ["libm"] }
 num_cpus = "1.17"
 once_cell = "1.21"
 rustfft = "6.4"

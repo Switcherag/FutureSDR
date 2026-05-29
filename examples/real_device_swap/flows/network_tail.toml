@@ -51,11 +51,12 @@ id = "udp_rftap"
 plugin = "blob_to_udp_plugin"
 config = "127.0.0.1:55555"
 
-# Linux TAP NIC. Each RFtap-encapsulated frame is wrapped in a minimal
-# Ethernet header (ethertype 0x88B5) and written to /dev/net/tun. The
-# resulting `sdrtap0` interface is visible to `ip link`, tcpdump, and
-# any AF_XDP program that binds to it. Needs CAP_NET_ADMIN (run as root
-# or `setcap cap_net_admin+ep` on the binary).
+# Linux TAP NIC. Each RFtap-encapsulated frame is written verbatim to
+# /dev/net/tun (no Ethernet wrapping), so a capture starts with the "RFta"
+# magic and Wireshark's RFtap dissector recognizes it. The resulting
+# `sdrtap0` interface is visible to `ip link`, tcpdump, and any AF_XDP
+# program that binds to it. Needs CAP_NET_ADMIN (run as root or
+# `setcap cap_net_admin+ep` on the binary).
 [[blocks]]
 id = "nic"
 plugin = "tap_nic_plugin"

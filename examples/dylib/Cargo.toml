@@ -36,4 +36,4 @@ path = "src/benchmark/swap_static.rs"
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 futuresdr = { path = "../..", features = ["plugin"] }
-plugin_api = { path = "../../crates/plugin_api" }
+plugin_host = { path = "../../crates/plugin_host" }

@@ -15,7 +15,7 @@ use futuresdr::blocks::audio::AudioSink;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::num_integer::gcd;
 use futuresdr::runtime::{Flowgraph, Pmt, Runtime};
-use plugin_api::LoadedPlugin;
+use plugin_host::LoadedPlugin;
 
 #[derive(Parser, Debug)]
 struct Args {
