@@ -1,0 +1,36 @@
+# send_ack — TX flow: stream a precomputed ACK .cf32 straight out through the
+# radio head's transmit side. This is the "tx version" of a listen flow: swap it
+# in to send one ACK burst, then swap back to a listen flow.
+#
+# Topology:  [file source: ack_*.cf32] --c32--> radio head (TX sink)
+#
+# STATUS — not yet live. Wiring this through the controller needs two pieces the
+# current plugin_host does not have:
+#   1. a Complex32 file-source plugin — the stock `file_source_plugin` is u8;
+#      a `FileSource::<Complex32>` reads interleaved f32 I/Q (cf32) directly.
+#   2. TX/sink-head support: a swappable output marked `to = "head"` wired into
+#      the head's transmit sink (the mirror of a listen flow's `from = "head"`).
+#      Today the head is RX-only (source → swappable input).
+# Until then the runtime transmits ACKs via the code path (AckBurst → the head's
+# [tx] sink). This file is the target spec for the TOML-driven TX.
+
+[radio]
+frequency_hz   = 2.425e9   # ACK band; retuned per swap to match the paired listen flow
+sample_rate_hz = 4e6
+gain_db        = 40.0
+
+# Precomputed ACK waveform, replayed once per swap-in.
+[[blocks]]
+id = "ackfile"
+plugin = "file_source_c32_plugin"      # FileSource::<Complex32> over interleaved f32 I/Q (cf32)
+config = ["ack_zigbee.cf32", false]    # (path, repeat = false → a single burst)
+config_type = "(String, bool)"
+
+# c32 output → the radio head's TX sink. Mirror of a listen flow's
+# `[[ports]] from = "head"`, in the transmit direction.
+[[ports]]
+id = "iq"
+direction = "out"
+src = "ackfile.output"
+type = "c32"
+to = "head"

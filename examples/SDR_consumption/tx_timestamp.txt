@@ -1,0 +1,3 @@
+TX consumption sweep: 96 configs × 10.0s = 960s total
+Device args: ""  amplitude: 1
+

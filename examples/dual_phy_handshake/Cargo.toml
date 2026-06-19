@@ -1,0 +1,45 @@
+[package]
+name = "dual-phy-handshake"
+version = "0.1.0"
+edition = "2021"
+default-run = "dual_phy_handshake"
+# rpath so the runtime binary finds libfuturesdr.so + plugin .so files via $ORIGIN.
+build = "../../plugin_build.rs"
+
+# Runtime: controller + radio registry, loads plugins (no zigbee/halowv2 here).
+[[bin]]
+name = "dual_phy_handshake"
+path = "src/main.rs"
+
+# Runtime variant: listen PHY is chosen arbitrarily at startup; ACKs the PHY
+# the frame arrived on, then swaps to the other PHY and ACKs again.
+[[bin]]
+name = "ack"
+path = "src/ack.rs"
+
+# Single-radio zigbee loopback: TX the precomputed ACK and decode it on the
+# same bladeRF's RX (full-duplex), to verify the ACK emits and decodes.
+[[bin]]
+name = "loopback"
+path = "src/loopback.rs"
+
+# Side execution: runs the real TX PHYs once and writes the ACK IQ to .cf32
+# files that the runtime ACK block replays. Uses the zigbee/halowv2 crates.
+[[bin]]
+name = "gen_waveforms"
+path = "src/gen_waveforms.rs"
+
+[features]
+default = ["soapy"]
+soapy = ["futuresdr/soapy", "zigbee/soapy", "halowv2/soapy"]
+bladerf2 = ["futuresdr/bladerf2"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+futuresdr = { workspace = true }
+plugin_host = { path = "../../crates/plugin_host" }
+zigbee = { path = "../zigbee", default-features = false }
+halowv2 = { path = "../halowv2", default-features = false }

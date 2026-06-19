@@ -1,0 +1,29 @@
+[package]
+name = "sdr_consumption"
+version = "0.1.0"
+edition = "2024"
+# Embed rpaths ($ORIGIN + toolchain sysroot) so the binaries find
+# libfuturesdr.so / libstd at runtime without LD_LIBRARY_PATH.
+build = "../../plugin_build.rs"
+
+# Standalone workspace: keep this example out of the root workspace so it
+# never perturbs the plugin-ABI feature contract baked into libfuturesdr.
+[workspace]
+
+[lib]
+name = "sdr_consumption"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rx"
+path = "src/bin/rx.rs"
+
+[[bin]]
+name = "tx"
+path = "src/bin/tx.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+futuresdr = { path = "../..", features = ["soapy"] }
+rand = "0.9"

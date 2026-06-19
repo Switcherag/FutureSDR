@@ -217,6 +217,9 @@ struct TailFile {
 struct RadioSectionDef {
     frequency_hz: Option<f64>,
     gain_db: Option<f64>,
+    /// Analog filter bandwidth (Hz). Routed through the seify block's `cmd`
+    /// port (head path) or `RadioController::set_bandwidth` (primary path).
+    bandwidth_hz: Option<f64>,
     sample_rate_hz: Option<f64>,
     hardware_rate_hz: Option<f64>,
     device_args: Option<String>,
@@ -299,6 +302,10 @@ struct RadioInput {
     to_port: String,
 }
 
+/// Registry name under which [`attach_radio`](FlowgraphControllerBuilder::attach_radio)
+/// stores its radio (and marks it for swap auto-retune).
+pub const PRIMARY_RADIO: &str = "primary";
+
 /// Builder for [`FlowgraphController`].
 pub struct FlowgraphControllerBuilder {
     plugin_dir: String,
@@ -307,7 +314,15 @@ pub struct FlowgraphControllerBuilder {
     radio_inputs: Vec<RadioInput>,
     udp_port: Option<u16>,
     custom_parsers: HashMap<String, fn(ConfigValue) -> Result<Box<dyn Any + Send>, String>>,
-    radio: Option<crate::radio_controller::RadioController>,
+    /// Named registry of radios (RX sources + TX sinks). All are started and
+    /// shut down together; each is retunable by name via
+    /// [`FlowgraphController::radio`]. `attach_radio` registers under
+    /// [`PRIMARY_RADIO`] and additionally marks it for swap auto-retune.
+    radios: Vec<(String, crate::radio_controller::RadioController)>,
+    /// Name of the radio (in `radios`) that the swap/`[radio]` auto-retune path
+    /// drives. Set by `attach_radio`. `None` ⇒ no radio auto-retunes (head-FG
+    /// model, or radios are all manually controlled).
+    primary_radio_name: Option<String>,
     tap_channel: Option<(mpsc::Sender<(String, Pmt)>, usize)>,
     /// Optional radio-head TOML — see [`HeadSectionDef`].
     head_path: Option<String>,
@@ -399,12 +414,36 @@ impl FlowgraphControllerBuilder {
         to_port: impl Into<String>,
     ) -> Self {
         let buf = radio.output_buf().clone();
-        self.radio = Some(radio);
+        self.radios.push((PRIMARY_RADIO.to_string(), radio));
+        self.primary_radio_name = Some(PRIMARY_RADIO.to_string());
         self.radio_inputs.push(RadioInput {
             buf,
             to_fg,
             to_port: to_port.into(),
         });
+        self
+    }
+
+    /// Register an additional named radio (RX source or TX sink).
+    ///
+    /// Unlike [`attach_radio`](Self::attach_radio) — which moves a single radio
+    /// into the swap-auto-retune slot and wires its buffer to a flowgraph input
+    /// — this just adds a radio to a named registry. All registered radios are
+    /// started by [`FlowgraphController::start_radio`] and individually
+    /// controllable via [`FlowgraphController::radio`].
+    ///
+    /// Wiring is the caller's responsibility:
+    /// - a **source** radio's `output_buf()` can be passed to
+    ///   [`connect_radio`](Self::connect_radio) to feed a flowgraph input;
+    /// - a **sink** radio's input buffer (the one returned by `new_sink`) is
+    ///   fed by pushing IQ into it directly (e.g. a precomputed burst) or by a
+    ///   producing flowgraph.
+    pub fn register_radio(
+        mut self,
+        name: impl Into<String>,
+        radio: crate::radio_controller::RadioController,
+    ) -> Self {
+        self.radios.push((name.into(), radio));
         self
     }
 
@@ -621,7 +660,8 @@ impl FlowgraphControllerBuilder {
         let mut ctrl = FlowgraphController::new(
             registry, channels, custom_parsers, self.connections,
         );
-        ctrl.radio = self.radio;
+        ctrl.radios = self.radios.into_iter().collect();
+        ctrl.primary_radio_name = self.primary_radio_name;
         ctrl.tap_sender = self.tap_channel.map(|(tx, _)| tx);
         ctrl.head_fg_idx = self.head_fg_idx;
         ctrl.head_sdr_block = head_sdr_block;
@@ -759,7 +799,14 @@ pub struct FlowgraphController {
     /// Optional RadioController — auto-retuned on swap when the target TOML
     /// declares a `[radio]` section. Used when `add_head` was *not* called
     /// (back-compat with `attach_radio` / `connect_radio`).
-    radio: Option<crate::radio_controller::RadioController>,
+    /// Named registry of radios (RX sources + TX sinks), registered via
+    /// [`register_radio`](FlowgraphControllerBuilder::register_radio) or
+    /// [`attach_radio`](FlowgraphControllerBuilder::attach_radio). Started and
+    /// shut down together; retuned individually via [`radio`](Self::radio).
+    radios: HashMap<String, crate::radio_controller::RadioController>,
+    /// Name of the radio in `radios` that the swap/`[radio]` auto-retune path
+    /// drives (set by `attach_radio`). `None` ⇒ head-FG model or all-manual.
+    primary_radio_name: Option<String>,
     /// Optional sender cloned into every `NamedMessagePipe` block that the
     /// controller injects for `[[controller_taps]]` entries.
     tap_sender: Option<mpsc::Sender<(String, Pmt)>>,
@@ -780,6 +827,8 @@ pub struct FlowgraphController {
     /// Last gain successfully dispatched to the SDR (dB). Same skip-no-op
     /// semantics as `last_applied_freq_hz`.
     last_applied_gain_db: Option<f64>,
+    /// Last analog-filter bandwidth dispatched (Hz). Same skip-no-op semantics.
+    last_applied_bandwidth_hz: Option<f64>,
     /// Optional fast-path frequency setter. When present, [`apply_radio_demand`]
     /// dispatches this closure on a background thread *instead of* sending a
     /// `freq` message through the flowgraph's mpsc inbox. Bypasses
@@ -804,7 +853,8 @@ impl FlowgraphController {
             radio_inputs: Vec::new(),
             udp_port: None,
             custom_parsers: HashMap::new(),
-            radio: None,
+            radios: Vec::new(),
+            primary_radio_name: None,
             tap_channel: None,
             head_path: None,
             head_fg_idx: None,
@@ -824,12 +874,14 @@ impl FlowgraphController {
             perm_port_defs: HashMap::new(),
             selector_infos: Vec::new(),
             swap_states: HashMap::new(),
-            radio: None,
+            radios: HashMap::new(),
+            primary_radio_name: None,
             tap_sender: None,
             head_fg_idx: None,
             head_sdr_block: None,
             last_applied_freq_hz: None,
             last_applied_gain_db: None,
+            last_applied_bandwidth_hz: None,
             fast_freq_setter: None,
             fast_gain_setter: None,
         }
@@ -865,19 +917,30 @@ impl FlowgraphController {
         self.fast_gain_setter = Some(Arc::new(f));
     }
 
-    /// Access the attached RadioController (if any).
+    /// Access the primary (swap-auto-retuned) radio — the one registered via
+    /// `attach_radio`. Equivalent to `self.radio(PRIMARY_RADIO)` when one was
+    /// attached. `None` under the head-FG model.
     pub fn radio_mut(&mut self) -> Option<&mut crate::radio_controller::RadioController> {
-        self.radio.as_mut()
+        let name = self.primary_radio_name.clone()?;
+        self.radios.get_mut(&name)
     }
 
-    /// Start the attached RadioController, if present. Idempotent: returns
-    /// `Ok(())` when no radio was attached.
+    /// Access a registered radio by name (see
+    /// [`FlowgraphControllerBuilder::register_radio`]). Use this to retune a
+    /// specific radio, e.g. `ctrl.radio("tx").unwrap().set_frequency(f).await`.
+    pub fn radio(&mut self, name: &str) -> Option<&mut crate::radio_controller::RadioController> {
+        self.radios.get_mut(name)
+    }
+
+    /// Start every registered radio. Idempotent: each radio's own `start` is a
+    /// no-op if already running.
     pub async fn start_radio(
         &mut self,
         rt_handle: &RuntimeHandle,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(r) = self.radio.as_mut() {
-            r.start(rt_handle).await?;
+        for (name, r) in self.radios.iter_mut() {
+            r.start(rt_handle).await
+                .map_err(|e| format!("radio '{name}': start failed: {e}"))?;
         }
         Ok(())
     }
@@ -910,6 +973,19 @@ impl FlowgraphController {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let rsec = RadioSectionDef {
             frequency_hz: Some(frequency_hz),
+            ..Default::default()
+        };
+        self.apply_radio_demand(&rsec).await
+    }
+
+    /// Live-tune the analog filter bandwidth on the head/primary radio.
+    /// For non-primary registered radios, use `ctrl.radio(name).set_bandwidth(b)`.
+    pub async fn set_bandwidth(
+        &mut self,
+        bandwidth_hz: f64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let rsec = RadioSectionDef {
+            bandwidth_hz: Some(bandwidth_hz),
             ..Default::default()
         };
         self.apply_radio_demand(&rsec).await
@@ -1016,9 +1092,15 @@ impl FlowgraphController {
         // doesn't trigger a no-op retune.
         const FREQ_EPS_HZ: f64 = 0.5;
         const GAIN_EPS_DB: f64 = 0.001;
+        const BW_EPS_HZ: f64 = 0.5;
 
         let mut freq_to_apply = match (rsec.frequency_hz, self.last_applied_freq_hz) {
             (Some(new), Some(cur)) if (new - cur).abs() <= FREQ_EPS_HZ => None,
+            (Some(new), _) => Some(new),
+            _ => None,
+        };
+        let bw_to_apply = match (rsec.bandwidth_hz, self.last_applied_bandwidth_hz) {
+            (Some(new), Some(cur)) if (new - cur).abs() <= BW_EPS_HZ => None,
             (Some(new), _) => Some(new),
             _ => None,
         };
@@ -1028,7 +1110,7 @@ impl FlowgraphController {
             _ => None,
         };
 
-        if freq_to_apply.is_none() && gain_to_apply.is_none() {
+        if freq_to_apply.is_none() && gain_to_apply.is_none() && bw_to_apply.is_none() {
             println!("        [retune] skipped (params already current)");
             return Ok(());
         }
@@ -1081,7 +1163,9 @@ impl FlowgraphController {
             if use_fast_gain {
                 gain_to_apply = None;
             }
-            if freq_to_apply.is_none() && gain_to_apply.is_none() {
+            // Bandwidth has no fast-setter equivalent — it always goes via the
+            // message path below.
+            if freq_to_apply.is_none() && gain_to_apply.is_none() && bw_to_apply.is_none() {
                 return Ok(());
             }
         }
@@ -1107,6 +1191,9 @@ impl FlowgraphController {
             }
             if let Some(g) = gain_to_apply {
                 self.last_applied_gain_db = Some(g);
+            }
+            if let Some(b) = bw_to_apply {
+                self.last_applied_bandwidth_hz = Some(b);
             }
 
             let t_dispatch = Instant::now();
@@ -1136,14 +1223,36 @@ impl FlowgraphController {
                         Err(e) => eprintln!("[async retune] gain {g} failed: {e}"),
                     }
                 }
+                if let Some(b) = bw_to_apply {
+                    // Routed through the seify block's `cmd` port: it accepts
+                    // a Config-shaped MapStrPmt and calls dev.set_bandwidth.
+                    // No dedicated `bandwidth` block port needed.
+                    let t = Instant::now();
+                    let mut m = std::collections::HashMap::new();
+                    m.insert("bandwidth".to_string(), Pmt::F64(b));
+                    match futuresdr::async_io::block_on(
+                        handle.callback(block_id, "cmd", Pmt::MapStrPmt(m))
+                    ) {
+                        Ok(_) => println!(
+                            "        [async retune] bandwidth {:.3} MHz settled in {:.3} ms",
+                            b / 1e6,
+                            t.elapsed().as_secs_f64() * 1000.0
+                        ),
+                        Err(e) => eprintln!("[async retune] bandwidth {b} failed: {e}"),
+                    }
+                }
             });
             println!(
                 "        [retune] dispatched in {:.3} ms (hardware settle runs on bg thread)",
                 t_dispatch.elapsed().as_secs_f64() * 1000.0
             );
-        } else if let Some(radio) = self.radio.as_mut() {
-            // Legacy path: RadioController doesn't expose a clone-able handle,
-            // so we still await here. Same skip-if-unchanged semantics apply.
+        } else if let Some(radio) = self
+            .primary_radio_name
+            .clone()
+            .and_then(|n| self.radios.get_mut(&n))
+        {
+            // Primary-radio path: RadioController doesn't expose a clone-able
+            // handle, so we still await here. Same skip-if-unchanged semantics.
             if let Some(f) = freq_to_apply {
                 let t_freq = Instant::now();
                 radio.set_frequency(f).await
@@ -1162,6 +1271,16 @@ impl FlowgraphController {
                 println!(
                     "        [retune] radio set_gain: {:.3} ms",
                     t_gain.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            if let Some(b) = bw_to_apply {
+                let t_bw = Instant::now();
+                radio.set_bandwidth(b).await
+                    .map_err(|e| format!("retune radio bandwidth: {e}"))?;
+                self.last_applied_bandwidth_hz = Some(b);
+                println!(
+                    "        [retune] radio set_bandwidth: {:.3} ms",
+                    t_bw.elapsed().as_secs_f64() * 1000.0
                 );
             }
         }
@@ -1320,7 +1439,7 @@ impl FlowgraphController {
                 eprintln!("warn: terminate permanent fg/{idx}/: {e}");
             }
         }
-        if let Some(r) = self.radio.as_mut() {
+        for (_, r) in self.radios.iter_mut() {
             r.shutdown().await;
         }
     }

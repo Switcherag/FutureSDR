@@ -157,7 +157,7 @@ where
                                 data.push(current);
                                 *byte = None;
                                 if data.len() == *len {
-                                    // info!("decoded frame");
+                                    info!("decoded frame");
                                     mio.post("out", Pmt::Blob(std::mem::take(data))).await?;
                                     self.state = State::Search;
                                 }

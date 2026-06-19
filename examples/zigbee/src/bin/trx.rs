@@ -3,8 +3,10 @@ use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::async_io::block_on;
 use futuresdr::blocks::Apply;
+use futuresdr::blocks::BlobToUdp;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
+use futuresdr::seify::Device;
 use std::time::Duration;
 
 use zigbee::ClockRecoveryMm;
@@ -21,9 +23,9 @@ struct Args {
     rx_freq: f64,
     #[clap(id = "tx-channel", long, value_parser = parse_channel, default_value = "26")]
     tx_freq: f64,
-    #[clap(long, default_value_t = 50.0)]
+    #[clap(long, default_value_t = 20.0)]
     rx_gain: f64,
-    #[clap(long, default_value_t = 18.0)]
+    #[clap(long, default_value_t = 20.0)]
     tx_gain: f64,
 }
 
@@ -33,6 +35,11 @@ fn main() -> Result<()> {
 
     let mut fg = Flowgraph::new();
 
+    // Open the radio once and share the handle between TX and RX so the device
+    // runs full-duplex from a single open/config, instead of two competing
+    // handles each applying their own configuration to the same hardware.
+    let dev = Device::from_args("")?;
+
     // ========================================
     // TRANSMITTER
     // ========================================
@@ -41,11 +48,17 @@ fn main() -> Result<()> {
     let modulator = modulator(&mut fg);
     let iq_delay: IqDelay = IqDelay::new();
     let iq_delay = fg.add_block(iq_delay);
+    // Each zigbee burst is `2 * 40_000 (IqDelay padding) + 128 * frame_len + 2` samples.
+    // The Mac emits frames up to 132 bytes (116-byte payload + 16-byte overhead), so size
+    // the sink's input buffer for the largest possible burst. Otherwise the burst can't be
+    // transmitted atomically and the sink truncates it (panics on the burst-len assertion).
+    const MAX_BURST_SAMPLES: usize = 2 * 40_000 + 128 * 132 + 2; // 96_898
     let snk = fg.add_block(
-        Builder::new("")?
+        Builder::from_device(dev.clone())
             .frequency(args.tx_freq)
             .sample_rate(4e6)
             .gain(args.tx_gain)
+            .min_in_buffer_size(MAX_BURST_SAMPLES)
             .build_sink()?,
     );
 
@@ -56,7 +69,7 @@ fn main() -> Result<()> {
     // ========================================
     // Receiver
     // ========================================
-    let src = Builder::new("")?
+    let src = Builder::from_device(dev)
         .frequency(args.rx_freq)
         .sample_rate(4e6)
         .gain(args.rx_gain)
@@ -84,6 +97,15 @@ fn main() -> Result<()> {
 
     connect!(fg, src.outputs[0] > avg > mm > decoder);
     connect!(fg, decoder | rx.mac);
+
+    // Tap frames over UDP exactly like the wlan examples: raw decoded frames on
+    // 55555, RFTAP-wrapped frames (for Wireshark) on 55556. In zigbee the RFTAP
+    // stream comes off the Mac (wlan exposes it on the decoder).
+    let udp1 = BlobToUdp::new("127.0.0.1:55555");
+    let udp2 = BlobToUdp::new("127.0.0.1:55556");
+    connect!(fg, decoder | udp1);
+    connect!(fg, mac.rftap | udp2);
+
     let mac = mac.into();
 
     let rt = Runtime::new();

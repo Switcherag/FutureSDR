@@ -47,6 +47,7 @@ members = [
     "examples/NIC_sim",
     "examples/halowv2",
     "examples/wlan_ah",
+    "examples/dual_phy_handshake",
     "plugins/*",
 ]
 

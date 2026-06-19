@@ -1,0 +1,77 @@
+RX consumption sweep: 32 configs × 10.0s = 320s total
+Device args: ""
+
+[2m2026-06-19T12:11:34.269883Z[0m [32m INFO[0m main [2mfuturesdr::runtime::runtime[0m[2m:[0m before init in runtime
+[2m2026-06-19T12:11:34.269903Z[0m [32m INFO[0m main [2mfuturesdr::runtime::runtime[0m[2m:[0m after init in runtime
+[2m2026-06-19T12:11:34.270801Z[0m [32m INFO[0m main [2mfuturesdr::runtime::runtime[0m[2m:[0m runtime constructed
+[ 0/32] f= 100MHz bw= 1MHz gain= 0dB  (t+0.00s)
+[ 1/32] f= 100MHz bw= 1MHz gain= 4dB  (t+10.01s)
+[ 2/32] f= 100MHz bw= 1MHz gain=16dB  (t+20.01s)
+[ 3/32] f= 100MHz bw= 1MHz gain=64dB  (t+30.01s)
+[ 4/32] f= 100MHz bw= 4MHz gain= 0dB  (t+40.01s)
+[ 5/32] f= 100MHz bw= 4MHz gain= 4dB  (t+50.01s)
+[ 6/32] f= 100MHz bw= 4MHz gain=16dB  (t+60.01s)
+[ 7/32] f= 100MHz bw= 4MHz gain=64dB  (t+70.01s)
+[ 8/32] f= 100MHz bw=16MHz gain= 0dB  (t+80.01s)
+[2m2026-06-19T12:12:57.145916Z[0m [33m WARN[0m blocking-9 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:12:57.145941Z[0m [33m WARN[0m blocking-9 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[ 9/32] f= 100MHz bw=16MHz gain= 4dB  (t+90.01s)
+[2m2026-06-19T12:13:07.123623Z[0m [33m WARN[0m blocking-10 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:13:07.123647Z[0m [33m WARN[0m blocking-10 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[10/32] f= 100MHz bw=16MHz gain=16dB  (t+100.01s)
+[2m2026-06-19T12:13:17.115861Z[0m [33m WARN[0m blocking-11 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:13:17.115882Z[0m [33m WARN[0m blocking-11 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[11/32] f= 100MHz bw=16MHz gain=64dB  (t+110.01s)
+[2m2026-06-19T12:13:27.120618Z[0m [33m WARN[0m blocking-12 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:13:27.120722Z[0m [33m WARN[0m blocking-12 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[12/32] f= 100MHz bw=32MHz gain= 0dB  (t+120.01s)
+[2m2026-06-19T12:13:36.644454Z[0m [33m WARN[0m blocking-13 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:13:36.644484Z[0m [33m WARN[0m blocking-13 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[13/32] f= 100MHz bw=32MHz gain= 4dB  (t+130.01s)
+[2m2026-06-19T12:13:46.634354Z[0m [33m WARN[0m blocking-14 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:13:46.634386Z[0m [33m WARN[0m blocking-14 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:13:47.403361Z[0m [33m WARN[0m blocking-14 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[14/32] f= 100MHz bw=32MHz gain=16dB  (t+140.01s)
+[2m2026-06-19T12:13:56.645103Z[0m [33m WARN[0m blocking-15 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:13:56.645135Z[0m [33m WARN[0m blocking-15 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:14:00.143303Z[0m [33m WARN[0m blocking-15 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[15/32] f= 100MHz bw=32MHz gain=64dB  (t+150.01s)
+[2m2026-06-19T12:14:06.637549Z[0m [33m WARN[0m blocking-16 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:14:06.637583Z[0m [33m WARN[0m blocking-16 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[16/32] f=1000MHz bw= 1MHz gain= 0dB  (t+160.01s)
+[17/32] f=1000MHz bw= 1MHz gain= 4dB  (t+170.01s)
+[18/32] f=1000MHz bw= 1MHz gain=16dB  (t+180.01s)
+[19/32] f=1000MHz bw= 1MHz gain=64dB  (t+190.01s)
+[20/32] f=1000MHz bw= 4MHz gain= 0dB  (t+200.01s)
+[21/32] f=1000MHz bw= 4MHz gain= 4dB  (t+210.01s)
+[22/32] f=1000MHz bw= 4MHz gain=16dB  (t+220.01s)
+[23/32] f=1000MHz bw= 4MHz gain=64dB  (t+230.01s)
+[24/32] f=1000MHz bw=16MHz gain= 0dB  (t+240.01s)
+[2m2026-06-19T12:15:37.111755Z[0m [33m WARN[0m blocking-25 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:15:37.111846Z[0m [33m WARN[0m blocking-25 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[25/32] f=1000MHz bw=16MHz gain= 4dB  (t+250.01s)
+[2m2026-06-19T12:15:47.111195Z[0m [33m WARN[0m blocking-26 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:15:47.111229Z[0m [33m WARN[0m blocking-26 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[26/32] f=1000MHz bw=16MHz gain=16dB  (t+260.01s)
+[2m2026-06-19T12:15:57.122471Z[0m [33m WARN[0m blocking-27 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:15:57.122502Z[0m [33m WARN[0m blocking-27 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[27/32] f=1000MHz bw=16MHz gain=64dB  (t+270.01s)
+[2m2026-06-19T12:16:07.115262Z[0m [33m WARN[0m blocking-28 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:07.115293Z[0m [33m WARN[0m blocking-28 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[28/32] f=1000MHz bw=32MHz gain= 0dB  (t+280.01s)
+[2m2026-06-19T12:16:16.671952Z[0m [33m WARN[0m blocking-29 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:16.671984Z[0m [33m WARN[0m blocking-29 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:17.242896Z[0m [33m WARN[0m blocking-29 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[29/32] f=1000MHz bw=32MHz gain= 4dB  (t+290.01s)
+[2m2026-06-19T12:16:26.636978Z[0m [33m WARN[0m blocking-30 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:26.637012Z[0m [33m WARN[0m blocking-30 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[30/32] f=1000MHz bw=32MHz gain=16dB  (t+300.01s)
+[2m2026-06-19T12:16:36.645317Z[0m [33m WARN[0m blocking-31 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:36.645351Z[0m [33m WARN[0m blocking-31 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:42.768302Z[0m [33m WARN[0m blocking-31 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[31/32] f=1000MHz bw=32MHz gain=64dB  (t+310.01s)
+[2m2026-06-19T12:16:46.640357Z[0m [33m WARN[0m blocking-32 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:46.640391Z[0m [33m WARN[0m blocking-32 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+[2m2026-06-19T12:16:49.778685Z[0m [33m WARN[0m blocking-32 [2mfuturesdr::blocks::seify::source[0m[2m:[0m Seify Source Overflow
+
+Schedule written to sdr_consumption_rx.csv

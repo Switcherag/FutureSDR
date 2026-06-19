@@ -1,0 +1,40 @@
+[head]
+name            = "rx1"
+direction       = "rx"
+capabilities    = ["retune", "gain", "resample"]
+sdr_block       = "sdr"
+resampler_block = "resampler"
+output_port     = "out"
+
+[[blocks]]
+id = "sdr"
+plugin = "seify_source_plugin"
+config = ["", 2.405e9, 4e6, 10.0] 
+config_type = "(String, f64, f64, f64)"
+
+[[blocks]]
+id = "resampler"
+plugin = "fir_resampler_plugin"
+config = [1, 1]                       # passthrough
+config_type = "(usize, usize)"
+
+[[connections]]
+src = "sdr.outputs[0]"
+dst = "resampler.input"
+
+[[ports]]
+id = "out"
+direction = "out"
+src = "resampler.output"
+type = "c32"
+
+# TX side of the radio head — same SDR/device as the RX `sdr` source above, so
+# the RX/TX LO is shared: one head retune moves both directions. The handshake
+# builds the transmit sink (BridgeSourceC32 → SeifySink) from this via
+# RadioController::new_sink and pushes precomputed ACK IQ into it. Center
+# frequency is NOT set here — it tracks the shared LO via the RX retune; only
+# the device, sample rate, and gain live here.
+[tx]
+device_args    = ""
+sample_rate_hz = 4e6
+gain_db        = 10.0

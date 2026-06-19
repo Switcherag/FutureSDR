@@ -1,0 +1,109 @@
+# 802.11ah (S1G) listen PHY for the dual-PHY handshake.
+#
+# Mirror of `zigbee_listen.toml` for the other band. Staged v2 pipeline at
+# 4 MSps direct (no local resampler — the head already delivers 4 MSps):
+#   head → StfDetector → CfoCorrector → StoCorrector → ChannelEstimator →
+#          SigDecoder → DataDemod → Decoder
+# Each decoded frame is surfaced on a controller tap; the handshake policy
+# loop (`ack` binary) treats every tap as the trigger to start a dual-PHY ACK.
+# There is no `to = "tail"` output — this flow only listens.
+
+[radio]
+frequency_hz   = 918.4e6   # 802.11ah S1G — EU upper-900 band 917.4–919.4 MHz (center)
+sample_rate_hz = 4e6       # satisfied by the head's resampler (passthrough @ 4 MSps)
+gain_db        = 10.0
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "stf.input"
+type = "c32"
+from = "head"          # auto-wired to the registered radio head's output
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+[[blocks]]
+id = "stf"
+plugin = "wlan_ah_v2_stf_detector_plugin"
+
+[[blocks]]
+id = "cfo"
+plugin = "wlan_ah_v2_cfo_corrector_plugin"
+
+[[blocks]]
+id = "sto"
+plugin = "wlan_ah_v2_sto_corrector_plugin"
+
+[[blocks]]
+id = "ch"
+plugin = "wlan_ah_v2_channel_estimator_plugin"
+config = false
+config_type = "bool"
+
+[[blocks]]
+id = "sig"
+plugin = "wlan_ah_v2_sig_decoder_plugin"
+config = false
+config_type = "bool"
+
+[[blocks]]
+id = "data"
+plugin = "wlan_ah_v2_data_demod_plugin"
+config = false
+config_type = "bool"
+
+[[blocks]]
+id = "decoder"
+plugin = "wlan_ah_decoder_plugin"
+
+# RFTAP egress: each decoded frame, RFTAP-wrapped, is sent over UDP so it can be
+# dissected live in Wireshark (capture lo, udp.port==55556).
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55556"
+config_type = "String"
+
+# ── Stream connections ──────────────────────────────────────────────
+
+[[connections]]
+src = "data.output"
+dst = "decoder.input"
+
+# ── Message connections ─────────────────────────────────────────────
+
+[[connections]]
+src = "stf.frame"
+dst = "cfo.frame"
+message = true
+
+[[connections]]
+src = "cfo.frame"
+dst = "sto.frame"
+message = true
+
+[[connections]]
+src = "sto.frame"
+dst = "ch.frame"
+message = true
+
+[[connections]]
+src = "ch.frame"
+dst = "sig.frame"
+message = true
+
+[[connections]]
+src = "sig.frame"
+dst = "data.frame"
+message = true
+
+[[connections]]
+src = "decoder.rftap"
+dst = "udp_rftap.in"
+message = true
+
+# ── Controller tap: every decoded frame triggers a handshake ─────────
+
+[[controller_taps]]
+src = "decoder.rx_frames"
+name = "halow_frame"

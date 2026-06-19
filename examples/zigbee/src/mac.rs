@@ -225,7 +225,7 @@ where
                     tags.add_tag(0, Tag::Id(self.current_len as u64));
                     debug!("sending frame, len {}", self.current_len);
                     self.n_sent += 1;
-                    debug!("{:?}", &self.current_frame[0..self.current_len]);
+                    // debug!("{:?}", &self.current_frame[0..self.current_len]);
                 } else {
                     break;
                 }

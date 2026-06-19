@@ -1,0 +1,5 @@
+{
+  "tx_pluto": {"offset": 2.0, "settle": 1.5, "window": 6.0, "dwell": 10.0},
+  "blade_tx": {"offset": 1.588, "settle": 3.098, "window": 4.978, "dwell": 10.0},
+  "blade_rx": {"offset": 2.243, "settle": 5.595, "window": 3.293, "dwell": 10.0}
+}

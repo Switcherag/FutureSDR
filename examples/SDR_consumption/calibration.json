@@ -1,0 +1,7 @@
+{
+  "csv": "csv/blade_rx.csv",
+  "dwell": 10.0,
+  "offset": 2.243,
+  "settle": 5.595,
+  "window": 3.293
+}

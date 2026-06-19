@@ -1,0 +1,36 @@
+# TX radio head — transmit-side mirror of sdr_head.toml.
+#
+# Chain (realized in code by RadioController::new_sink):
+#   [shared TX buffer] → BridgeSourceC32 → SeifySink
+# The handshake's ACK block pushes precomputed IQ into the shared TX buffer; the
+# bridge source drains it into the SeifySink, which transmits at the device rate.
+#
+# The runtime reads the `sink` block's `config` below as the single source of
+# truth for the TX device args, sample rate, and gain (plus the initial center
+# frequency). Per-band ACK frequencies are retuned at runtime via "freq"
+# messages — see FREQ[] in ack.rs, which must match the listen flows' [radio].
+#
+# There is no TX resampler: ACK waveforms are generated at the device sample
+# rate (gen_waveforms), so the sink transmits them directly.
+
+[head]
+name         = "tx2"
+direction    = "tx"
+capabilities = ["retune", "gain"]
+sdr_block    = "sink"     # responds to "freq" + "gain"
+input_port   = "in"       # IQ ingress, fed from the shared TX buffer
+
+[[blocks]]
+id = "sink"
+plugin = "seify_sink_plugin"
+config = ["", 2.425e9, 4e6, 50.0]   # device_args, frequency_hz, sample_rate_hz, gain_db
+config_type = "(String, f64, f64, f64)"
+
+# TX IQ ingress: the controller binds this to the shared TX buffer (the
+# code-built BridgeSourceC32 the ACK block feeds). Declared so the head exposes
+# a TX port (mirror of sdr_head.toml's `out`).
+[[ports]]
+id = "in"
+direction = "in"
+dst = "sink.inputs[0]"
+type = "c32"

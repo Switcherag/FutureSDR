@@ -1,0 +1,86 @@
+# 802.15.4 listen PHY for the dual-PHY handshake.
+#
+# Demod → ClockRecovery → Decoder → Mac. Each decoded MAC frame is surfaced
+# on a controller tap; the handshake policy loop treats every tap as the
+# trigger to start a dual-PHY ACK. There is no `to = "tail"` output — this
+# flow only listens.
+
+[radio]
+frequency_hz   = 2.425e9   # 802.15.4 ch 11
+sample_rate_hz = 4e6       # satisfied by the head's resampler (20→4 MSps)
+gain_db        = 10.0
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "demod.input"
+type = "c32"
+from = "head"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+[[blocks]]
+id = "demod"
+plugin = "zigbee_demod_plugin"
+config = 0.00016
+config_type = "f32"
+
+[[blocks]]
+id = "cr"
+plugin = "clock_recovery_mm_plugin"
+config = [2.0, 0.000225, 0.5, 0.03, 0.0002]
+config_type = "(f32, f32, f32, f32, f32)"
+
+[[blocks]]
+id = "decoder"
+plugin = "zigbee_decoder_plugin"
+config = 6
+config_type = "u32"
+
+[[blocks]]
+id = "mac"
+plugin = "zigbee_mac_plugin"
+
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"
+
+# RFTAP egress: each decoded frame, RFTAP-wrapped (DLT 195 = 802.15.4), is sent
+# over UDP so it can be dissected live in Wireshark (capture lo, udp.port==55556).
+[[blocks]]
+id = "udp_rftap"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55556"
+config_type = "String"
+
+# ── Stream connections ──────────────────────────────────────────────
+
+[[connections]]
+src = "demod.output"
+dst = "cr.input"
+
+[[connections]]
+src = "cr.output"
+dst = "decoder.input"
+
+[[connections]]
+src = "mac.output"
+dst = "snk.input"
+
+# ── Message connections ─────────────────────────────────────────────
+
+[[connections]]
+src = "decoder.out"
+dst = "mac.rx"
+message = true
+
+[[connections]]
+src = "mac.rftap"
+dst = "udp_rftap.in"
+message = true
+
+# ── Controller tap: every decoded frame triggers a handshake ─────────
+
+[[controller_taps]]
+src = "mac.rxed"
+name = "zigbee_frame"

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 DEFAULT_SAMPLE_RATE_HZ = 4e6
-DEFAULT_MAX_POINTS = 250_000
+DEFAULT_MAX_POINTS = 250_000000
 
 
 def load_meta(path: Path) -> dict:
