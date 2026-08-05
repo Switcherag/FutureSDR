@@ -17,6 +17,25 @@ path = "src/main.rs"
 name = "ack"
 path = "src/ack.rs"
 
+# Runtime variant: listen-only swap. Start on one PHY and, on each decoded
+# frame, swap the listener to the other PHY.
+[[bin]]
+name = "listen"
+path = "src/listen.rs"
+
+# Runtime variant: listen-only switch between the two 802.11ah flows A/B
+# (no UDP egress), logging each decoded frame's RFTAP blob + arrival time to CSV.
+[[bin]]
+name = "halow_switch"
+path = "src/halow_switch.rs"
+
+# Same A/B switch built like real_device_swap's `zigbee_swap`: second SDR
+# handle as the fast freq/gain setter, select! against an RX timeout, deeper
+# tap channel, swap_ms per row.
+[[bin]]
+name = "halow_switchv2"
+path = "src/halow_switchv2.rs"
+
 # Single-radio zigbee loopback: TX the precomputed ACK and decode it on the
 # same bladeRF's RX (full-duplex), to verify the ACK emits and decodes.
 [[bin]]

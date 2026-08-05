@@ -146,7 +146,7 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
                     <input
                         type="range"
                         min="100"
-                        max="1200"
+                        max="6000"
                         value="100"
                         class="align-middle"
                         on:change={
