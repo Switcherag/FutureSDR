@@ -14,8 +14,8 @@ fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
 
     let src = Builder::new("")?
-        .frequency(100e6)
-        .sample_rate(3.2e6)
+        .frequency(915e6)
+        .sample_rate(16e6)
         .gain(34.0)
         .build_source()?;
     let fft: Fft = Fft::with_options(FFT_SIZE, FftDirection::Forward, true, None);

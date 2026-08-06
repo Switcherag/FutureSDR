@@ -1,0 +1,33 @@
+# Null "tail" flowgraph — accepts the tail bridge and discards it.
+#
+# Drop-in replacement for `network_tail.toml` when you want the tail *wiring*
+# without its egress. The real tail attaches a TAP NIC (`sdrtap0`, needs
+# CAP_NET_ADMIN via `setup_sdrtap.sh`) and a file sink under `data/`; if either
+# is missing, both blocks fail on init, the whole tail FG terminates, and the
+# bridge feeding it backs up until the SeifySource overflows. This one has no
+# prerequisites, so a swappable flow can keep declaring `to = "tail"` and stay
+# structurally identical to the flows that do egress for real.
+#
+# Same contract as network_tail.toml: `[tail]` names the input port, and any
+# swappable flow with an output port marked `to = "tail"` is auto-wired to it
+# by the FlowgraphController. Wire format on the bridge is the same
+# length-prefixed byte stream (`[u32 LE len][len bytes payload]`) — it is simply
+# never framed back up, just consumed and dropped.
+
+[tail]
+name = "default_tail"
+input_port = "in"
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "snk.input"
+type = "u8"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+# null_sink_plugin with no config defaults to NullSink<u8>, which matches the
+# tail bridge's element type.
+[[blocks]]
+id = "snk"
+plugin = "null_sink_plugin"

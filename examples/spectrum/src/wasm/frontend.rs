@@ -145,9 +145,9 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
                 <div class="basis-1/3">
                     <input
                         type="range"
-                        min="100"
-                        max="6000"
-                        value="100"
+                        min="900"
+                        max="2500"
+                        value="900"
                         class="align-middle"
                         on:change={
                             let fg_handle = fg_handle.clone();

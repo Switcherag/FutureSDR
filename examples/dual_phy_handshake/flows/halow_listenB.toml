@@ -14,7 +14,7 @@
 # stay distinct from flow A's.
 
 [radio]
-frequency_hz   = 918.4e6   # 802.11ah S1G — EU upper-900 band 917.4–919.4 MHz (center)
+frequency_hz   = 919e6   # 802.11ah S1G — EU upper-900 band 917.4–919.4 MHz (center)
 sample_rate_hz = 4e6       # satisfied by the head's resampler (passthrough @ 4 MSps)
 gain_db        = 10.0
 

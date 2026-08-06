@@ -1,4 +1,13 @@
-# WLAN 802.11ah RX v2 — 4 MSps direct staged pipeline
+# 802.11ah RX "B" — 4 MSps direct staged pipeline (halow_swap A/B pair).
+#
+# Copy of wlan_ah_rx_v2.toml differing ONLY in the controller-tap name, the
+# mirror of the zigbee_rxA/rxB pair. Both sit on the same center frequency, so
+# a swap's retune is skipped ("params already current") and the swap never
+# waits on the hardware — change frequency_hz here to put the radio back in
+# the loop.
+#
+# The `to = "tail"` port below is wired to `null_tail.toml` by halow_swap, so
+# the tail exists structurally but discards.
 #
 # This mirrors examples/wlan_ah/src/bin/rx_debugv2.rs:
 #   head@4 Msps -> StfDetector -> CfoCorrector -> StoCorrector ->
@@ -118,4 +127,4 @@ message = true
 
 [[controller_taps]]
 src = "decoder.rx_frames"
-name = "wlan_ah_v2_frames"
+name = "halow_frames_b"

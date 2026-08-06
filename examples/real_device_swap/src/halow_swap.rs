@@ -1,21 +1,33 @@
-// zigbee_swap — at every received frame, swap between two Zigbee channels.
+// halow_swap — at every received frame, swap between two 802.11ah receivers.
 //
-// Sibling of `per_frame_swap` that swaps PHY at every received frame, but
-// instead of alternating Zigbee ↔ HaLow, it alternates between two Zigbee
-// receivers on different channels:
-//   A: flows/zigbee_rxA.toml  (2.425 GHz — channel 11)
-//   B: flows/zigbee_rxB.toml  (2.45  GHz)
+// Sibling of `zigbee_swap`, built to the same shape so the two are comparable
+// measurement for measurement. Instead of alternating between two Zigbee
+// channels it alternates between two HaLow receivers:
+//   A: flows/halow_rxA.toml
+//   B: flows/halow_rxB.toml
 //
-// Each MAC frame surfaced on a `[[controller_taps]]` port triggers an
-// immediate swap to the other channel. A "network" CSV sink in the
-// controller bridges both decoders and writes the per-frame TX control
-// data (step, run, tag, wait_ms, ts_us) plus local rx + swap latencies,
-// so the lowest inter-frame switch time the receiver can sustain can be
-// plotted offline.
+// Both flows sit on the same center frequency, so `apply_radio_demand` skips
+// the retune ("params already current") and the swap never waits on the
+// hardware — the sub-ms path. Give the two flows different `frequency_hz` to
+// put the radio back in the loop.
 //
-// Output: zigbee_swap.csv  with one row per received frame.
+// Each decoded frame surfaced on a `[[controller_taps]]` port triggers an
+// immediate swap to the other receiver. The same "network" CSV sink in the
+// controller records local rx + swap latencies, so the lowest inter-frame
+// switch time the receiver can sustain can be plotted offline.
+//
+// Where zigbee_swap parses the multizig firmware's 19-byte stamp, HaLow frames
+// carry no such payload, so each row records the 802.11 sequence number — it
+// is what tells you how many frames went by unheard between two receptions.
+//
+// One substitution against zigbee_swap: the permanent tail is `null_tail.toml`
+// rather than `network_tail.toml`. The A/B flows still declare `to = "tail"`
+// and are wired identically; the tail just discards instead of pushing to a
+// TAP NIC and a log file, neither of which this measurement needs.
+//
+// Output: halow_swap.csv  with one row per received frame.
 // Run from this directory so the relative TOML paths resolve:
-//   cd examples/real_device_swap && ../../target/release/zigbee_swap
+//   cd examples/real_device_swap && ../../target/release/halow_swap
 
 use std::fs::File;
 use std::io::Write;
@@ -32,82 +44,65 @@ use plugin_host::{FlowgraphController, default_plugin_dir};
 /// device; matches `sdr_head.toml`'s `[[blocks]] id = "sdr"` config.
 const SDR_DEVICE_ARGS: &str = "";
 
-const FLOW_ZIGBEE_A: &str = "flows/zigbee_rxA.toml";
-const FLOW_ZIGBEE_B: &str = "flows/zigbee_rxB.toml";
+const FLOW_HALOW_A: &str = "flows/halow_rxA.toml";
+const FLOW_HALOW_B: &str = "flows/halow_rxB.toml";
 const HEAD_FLOW: &str = "flows/sdr_head.toml";
+/// `null_tail.toml`, not zigbee_swap's `network_tail.toml`: the real tail's
+/// TapNic needs an `sdrtap0` iface (CAP_NET_ADMIN) and its file sink needs
+/// `data/`. With either missing both blocks fail on init, the whole tail FG
+/// terminates, and the bridge feeding it backs up until the SeifySource
+/// overflows. The null tail keeps the `to = "tail"` wiring and discards.
 const TAIL_FLOW: &str = "flows/null_tail.toml";
-const CSV_PATH: &str = "zigbee_swap.csv";
+const CSV_PATH: &str = "halow_swap.csv";
 
 /// If no tap frame arrives within this time after the last swap, swap anyway.
 /// Bounded so a missed channel does not stall the sweep forever.
 const RX_TIMEOUT: Duration = Duration::from_millis(800);
 
-/// Source EUI-64 used by the multizig firmware: `00 00 'E' 'E' 'B' 'G' 'I' 'Z'`.
-/// Sits at MHR offset 7-14, immediately before the 17-byte stamp payload, so
-/// anchoring on it gives a deterministic stamp offset without offset guessing.
-const ZIGBEE_EUI64_ANCHOR: [u8; 8] = [0x00, 0x00, b'E', b'E', b'B', b'G', b'I', b'Z'];
-
-/// Parse the 19-byte stamp emitted by the multizig firmware:
-/// `step:u32_le | run:u16_le | tag:u8 ('Z') | wait_us:u32_le | ts_us:u64_le`.
+/// Parse the 802.11 sequence number out of a decoded MAC frame.
 ///
-/// Locates the stamp by searching for the fixed EUI-64 source address
-/// (`ZIGBEE_EUI64_ANCHOR`) — the stamp is the 19 bytes immediately after it.
-fn parse_payload(blob: &[u8]) -> Option<(u32, u16, u8, u32, u64)> {
-    let needed = ZIGBEE_EUI64_ANCHOR.len() + 19;
-    if blob.len() < needed {
+/// The tap is on `decoder.rx_frames`, which carries the bare MAC frame (no
+/// RFtap header). Sequence control sits at offset 22; the sequence number is
+/// its top 12 bits, the fragment number the low 4. Control frames (type 1)
+/// have no sequence control and are skipped.
+fn parse_seq(frame: &[u8]) -> Option<(u16, u8)> {
+    if frame.len() < 24 {
         return None;
     }
-    let max = blob.len() - needed;
-    for i in 0..=max {
-        if blob[i..i + ZIGBEE_EUI64_ANCHOR.len()] != ZIGBEE_EUI64_ANCHOR {
-            continue;
-        }
-        let p = i + ZIGBEE_EUI64_ANCHOR.len();
-        let step = u32::from_le_bytes([blob[p], blob[p + 1], blob[p + 2], blob[p + 3]]);
-        let run = u16::from_le_bytes([blob[p + 4], blob[p + 5]]);
-        let tag = blob[p + 6];
-        let wait_us = u32::from_le_bytes([blob[p + 7], blob[p + 8], blob[p + 9], blob[p + 10]]);
-        let ts = u64::from_le_bytes([
-            blob[p + 11],
-            blob[p + 12],
-            blob[p + 13],
-            blob[p + 14],
-            blob[p + 15],
-            blob[p + 16],
-            blob[p + 17],
-            blob[p + 18],
-        ]);
-        return Some((step, run, tag, wait_us, ts));
+    if (frame[0] >> 2) & 0x3 == 1 {
+        return None;
     }
-    None
+    let seq_ctl = u16::from_le_bytes([frame[22], frame[23]]);
+    Some((seq_ctl >> 4, (seq_ctl & 0xF) as u8))
 }
 
 fn other(curr: &str) -> &'static str {
-    if curr == FLOW_ZIGBEE_A {
-        FLOW_ZIGBEE_B
+    if curr == FLOW_HALOW_A {
+        FLOW_HALOW_B
     } else {
-        FLOW_ZIGBEE_A
+        FLOW_HALOW_A
     }
 }
 
 fn phy_name(toml: &str) -> &'static str {
-    if toml == FLOW_ZIGBEE_A { "A" } else { "B" }
+    if toml == FLOW_HALOW_A { "A" } else { "B" }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     futuresdr::runtime::init();
 
-    println!("=== zigbee_swap — swap Zigbee channel on every received frame ===");
-    println!("Initial PHY: zigbee_rxA (2.425 GHz); alternating with zigbee_rxB (2.45 GHz)");
+    println!("=== halow_swap — swap 802.11ah receiver on every received frame ===");
+    println!("Initial PHY: halow_rxA; alternating with halow_rxB");
     println!("CSV → {CSV_PATH}\n");
 
-    // Open a second handle to the SDR for fast retunes. The SeifySource
-    // block (in the head FG) opens its own handle on the same hardware;
-    // for SoapySDR-backed drivers both handles share the underlying
-    // device, so set_frequency from either affects the radio. Calling
-    // set_frequency on this handle bypasses the flowgraph message system
-    // and the SeifySource's work-loop scheduling, dropping retune
-    // latency from ms-scale to the hardware floor (~50 µs).
+    // Open a second handle to the SDR for fast retunes. The SeifySource block
+    // (in the head FG) opens its own handle on the same hardware; for
+    // SoapySDR-backed drivers both handles share the underlying device, so
+    // set_frequency from either affects the radio. Calling set_frequency on
+    // this handle bypasses the flowgraph message system and the SeifySource's
+    // work-loop scheduling, dropping retune latency from ms-scale to the
+    // hardware floor (~50 µs). With A and B on the same frequency it is never
+    // called — the retune is skipped outright.
     let fast_retune_dev = match seify::Device::from_args(SDR_DEVICE_ARGS) {
         Ok(dev) => {
             println!("opened second SDR handle for fast retune");
@@ -124,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (builder, mut tap_rx) = FlowgraphController::builder(default_plugin_dir())
         .add_head(HEAD_FLOW)
         .add_permanent(TAIL_FLOW)
-        .add_swappable(FLOW_ZIGBEE_A)
+        .add_swappable(FLOW_HALOW_A)
         .tap_channel(256);
 
     builder.run_with(move |mut ctrl, rt_handle, entries| async move {
@@ -169,18 +164,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut csv = File::create(CSV_PATH)?;
         writeln!(
             csv,
-            "rx_idx,phy_active,frame_event,step,run,tag,wait_us,ts_us,rx_t_ms,swap_ms"
+            "rx_idx,phy_active,frame_event,seq,frag,len,rx_t_ms,swap_ms"
         )?;
         csv.flush().ok();
 
-        let mut current = FLOW_ZIGBEE_A;
+        let mut current = FLOW_HALOW_A;
         let mut rx_idx: u64 = 0;
         let mut swap_total_ms: f64 = 0.0;
         let mut swap_count: u64 = 0;
         let t0 = Instant::now();
 
         println!(
-            "\nReceiver running. Listening for frames. Frame event triggers immediate channel swap."
+            "\nReceiver running. Listening for frames. Frame event triggers immediate PHY swap."
         );
         println!("Press Ctrl-C to stop and finalize CSV.\n");
 
@@ -188,7 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Wait for one tap (a decoded frame on the current PHY) or time out.
             let mut deadline = FutureExt::fuse(Timer::after(RX_TIMEOUT));
             let frame_event;
-            let mut payload_row: Option<(i64, i64, char, i64, i128)> = None; // (step, run, tag, wait_us, ts)
+            let mut payload_row: Option<(i64, i64, i64)> = None; // (seq, frag, len)
 
             select! {
                 _ = deadline => {
@@ -210,30 +205,21 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 continue;
                             }
                         };
-                        match parse_payload(&blob) {
-                            Some((step, run, tag, wait_us, ts)) => {
+                        match parse_seq(&blob) {
+                            Some((seq, frag)) => {
                                 println!(
-                                    "[t={:.1}ms] [rx {} tap={tap_name} {}B] CSV,{},{},{},{},{}",
+                                    "[t={:.1}ms] [rx {} tap={tap_name} {}B] CSV,{},{}",
                                     t0.elapsed().as_secs_f64() * 1000.0,
                                     phy_name(current),
                                     blob.len(),
-                                    step,
-                                    run,
-                                    tag as char,
-                                    wait_us,
-                                    ts,
+                                    seq,
+                                    frag,
                                 );
-                                payload_row = Some((
-                                    step as i64,
-                                    run as i64,
-                                    tag as char,
-                                    wait_us as i64,
-                                    ts as i128,
-                                ));
+                                payload_row = Some((seq as i64, frag as i64, blob.len() as i64));
                             }
                             None => {
                                 // Dump hex on failure so we can see WHY parse failed
-                                // (anchor missing? short MAC frame? ACK / beacon?).
+                                // (short MAC frame? control frame? garbage decode?).
                                 let hex: String = blob
                                     .iter()
                                     .map(|b| format!("{b:02x}"))
@@ -254,7 +240,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             let rx_t_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-            // Swap to the other Zigbee channel immediately.
+            // Swap to the other HaLow receiver immediately.
             let next = other(current);
             let t_swap = Instant::now();
             if let Err(e) = ctrl.swap(swap_target, next, &rt_handle).await {
@@ -267,26 +253,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let phy_was = current;
             current = next;
 
-            let (step_s, run_s, tag_s, wait_s, ts_s) = match payload_row {
-                Some((s, r, t, w, ts)) => (
-                    s.to_string(),
-                    r.to_string(),
-                    t.to_string(),
-                    w.to_string(),
-                    ts.to_string(),
-                ),
-                None => (
-                    "-1".into(),
-                    "-1".into(),
-                    "?".into(),
-                    "-1".into(),
-                    "-1".into(),
-                ),
+            let (seq_s, frag_s, len_s) = match payload_row {
+                Some((s, f, l)) => (s.to_string(), f.to_string(), l.to_string()),
+                None => ("-1".into(), "-1".into(), "-1".into()),
             };
 
             writeln!(
                 csv,
-                "{rx_idx},{phy_was_str},{frame_event},{step_s},{run_s},{tag_s},{wait_s},{ts_s},{rx_t_ms:.3},{swap_ms:.3}",
+                "{rx_idx},{phy_was_str},{frame_event},{seq_s},{frag_s},{len_s},{rx_t_ms:.3},{swap_ms:.3}",
                 phy_was_str = phy_name(phy_was),
             )?;
             csv.flush().ok();

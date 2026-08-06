@@ -13,8 +13,15 @@ name = "per_frame_swap"
 path = "src/per_frame_swap.rs"
 
 [[bin]]
-name = "zigbee_swap"
+name = "zigbee_swap_offline"
 path = "src/zigbee_swap.rs"
+
+# Sibling of zigbee_swap on the 802.11ah receivers: alternates halow_rxA/rxB
+# on every decoded frame. Both flows share a center frequency, so the swap's
+# retune is skipped and the hardware is never in the loop.
+[[bin]]
+name = "halow_swap"
+path = "src/halow_swap.rs"
 
 [[bin]]
 name = "phy_per"

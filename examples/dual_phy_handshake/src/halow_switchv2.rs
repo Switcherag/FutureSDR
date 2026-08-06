@@ -52,7 +52,7 @@ const CSV_PATH: &str = "halow_switchv2.csv";
 
 /// If no tap frame arrives within this time after the last swap, swap anyway.
 /// Bounded so a dead channel does not stall the run forever.
-const RX_TIMEOUT: Duration = Duration::from_millis(800);
+const RX_TIMEOUT: Duration = Duration::from_millis(80000);
 
 /// Pull the 802.11 sequence number out of an RFTAP blob.
 ///
