@@ -11,7 +11,7 @@
 [radio]
 frequency_hz   = 919e6   # 802.11ah S1G — EU upper-900 band 917.4–919.4 MHz (center)
 sample_rate_hz = 2e6       # satisfied by the head's resampler (passthrough @ 4 MSps)
-gain_db        = 20.0
+gain_db        = 10.0
 
 [[ports]]
 id = "in"
@@ -25,6 +25,10 @@ from = "head"          # auto-wired to the registered radio head's output
 [[blocks]]
 id = "stf"
 plugin = "wlan_ah_v2_stf_detector_plugin"
+# 0 = the PHY maximum (1500 B PSDU). See halow_listenA.toml for why you might
+# lower it: it sets the detector's cold-start latency.
+config = 0
+config_type = "usize"
 
 [[blocks]]
 id = "cfo"

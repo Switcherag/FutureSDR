@@ -32,7 +32,11 @@ use futuresdr::runtime::Pmt;
 use plugin_host::{FlowgraphController, default_plugin_dir};
 
 const HEAD_FLOW: &str = "flows/sdr_head.toml";
-const TAIL_FLOW: &str = "flows/network_tail.toml";
+/// Null tail: accepts the `to = "tail"` bridge and discards it. `network_tail`
+/// needs an `sdrtap0` TAP iface (CAP_NET_ADMIN) and a writable `data/`; without
+/// either, both its sinks fail on init, the whole tail FG terminates, and the
+/// bridge feeding it backs up until the SeifySource overflows.
+const TAIL_FLOW: &str = "flows/null_tail.toml";
 
 #[derive(Parser, Debug, Clone)]
 #[command(about = "Single-PHY RX runner with live gain sweep")]

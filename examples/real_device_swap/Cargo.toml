@@ -16,6 +16,20 @@ path = "src/per_frame_swap.rs"
 name = "zigbee_swap_offline"
 path = "src/zigbee_swap.rs"
 
+# Same swap machinery as zigbee_swap, for the SHORT on-air format: a 21-byte
+# PSDU carrying a 1-byte sequence number and the IFS as a u32, instead of the
+# 19-byte multizig stamp.
+[[bin]]
+name = "zigbee_swap_short"
+path = "src/zigbee_swap_short.rs"
+
+# Dual-PHY sibling: swaps 802.15.4 @ 2.425 GHz <-> 802.11ah @ 919 MHz on every
+# frame, so each swap retunes across bands. Z frames carry the multizig stamp;
+# H frames are RPG random payload, where only length and timing are meaningful.
+[[bin]]
+name = "ziglow_swap"
+path = "src/ziglow_swap.rs"
+
 # Sibling of zigbee_swap on the 802.11ah receivers: alternates halow_rxA/rxB
 # on every decoded frame. Both flows share a center frequency, so the swap's
 # retune is skipped and the hardware is never in the loop.

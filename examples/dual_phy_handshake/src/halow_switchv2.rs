@@ -34,11 +34,32 @@ use std::fs::File;
 use std::io::Write;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use clap::Parser;
 use futuresdr::async_io::Timer;
 use futuresdr::futures::{FutureExt, StreamExt, select};
 use futuresdr::runtime::Pmt;
 use futuresdr::seify;
 use plugin_host::{FlowgraphController, default_plugin_dir};
+
+#[derive(Parser)]
+#[command(about = "Swap between two 802.11ah flows on every decoded frame, logging RFTAP to CSV.")]
+struct Args {
+    /// Stay on the starting flow instead of alternating A ↔ B. The control for
+    /// the swap's cost: same PHY, same radio, same logging, no `ctrl.swap()` —
+    /// so what a swap costs is the difference between the two runs. Rows still
+    /// land in the CSV, with `swap_ms` at 0 and `flow` never changing.
+    #[arg(long)]
+    no_swap: bool,
+    /// Discard the samples that arrive while the head is disconnected mid-swap,
+    /// instead of queuing them for the incoming flowgraph.
+    ///
+    /// Buffering is the default and measured better here — it moves ~9 points
+    /// of swaps from losing two frames to losing one, at ~0.25 ms of added
+    /// latency, because make-before-break keeps the disconnected window that
+    /// short. Discarding is the right choice only when that window is long.
+    #[arg(long)]
+    discard_swap_window: bool,
+}
 
 /// Args for the fast-retune `Device`. Empty string = first available device;
 /// matches `sdr_head_listen.toml`'s `[[blocks]] id = "sdr"` config, so both
@@ -88,9 +109,15 @@ fn phy_name(toml: &str) -> &'static str {
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     futuresdr::runtime::init();
+    let args = Args::parse();
+    let (no_swap, discard_swap_window) = (args.no_swap, args.discard_swap_window);
 
     println!("=== halow_switchv2 — swap 802.11ah flow on every received frame ===");
-    println!("Initial PHY: halow_listenA; alternating with halow_listenB");
+    if no_swap {
+        println!("--no-swap: staying on halow_listenA, no swaps (baseline)");
+    } else {
+        println!("Initial PHY: halow_listenA; alternating with halow_listenB");
+    }
     println!("CSV → {CSV_PATH}\n");
 
     // Second handle on the SDR for fast retunes. The SeifySource block (in the
@@ -117,6 +144,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .tap_channel(256);
 
     builder.run_with(move |mut ctrl, rt_handle, entries| async move {
+        // Must be set before anything is built: each bridge sink reads the
+        // flag when it is constructed, and the head's sink is built below.
+        ctrl.set_bridge_across_swap(!discard_swap_window);
+        if discard_swap_window {
+            println!("--discard-swap-window: swap window is dropped, not buffered");
+        }
+
         // Head first, then activate selectors, then the swappable listener.
         for &(idx, ref path, perm) in &entries {
             if perm {
@@ -167,7 +201,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut swap_count: u64 = 0;
         let t0 = Instant::now();
 
-        println!("\nReceiver running. Every decoded frame triggers an immediate flow swap.");
+        if no_swap {
+            println!("\nReceiver running. Logging every decoded frame; never swapping.");
+        } else {
+            println!("\nReceiver running. Every decoded frame triggers an immediate flow swap.");
+        }
         println!("Press Ctrl-C to stop and finalize CSV.\n");
 
         loop {
@@ -180,10 +218,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 _ = deadline => {
                     frame_event = "timeout";
                     println!(
-                        "[t={:.1}ms] [timeout {:?}] no frame on {} — swapping anyway",
+                        "[t={:.1}ms] [timeout {:?}] no frame on {} — {}",
                         t0.elapsed().as_secs_f64() * 1000.0,
                         RX_TIMEOUT,
                         phy_name(current),
+                        if no_swap { "still listening" } else { "swapping anyway" },
                     );
                 }
                 msg = tap_rx.next().fuse() => match msg {
@@ -231,19 +270,26 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default();
             let rx_t_s = t0.elapsed().as_secs_f64();
+            
 
-            // Swap to the other flow immediately.
-            let next = other(current);
-            let t_swap = Instant::now();
-            if let Err(e) = ctrl.swap(swap_target, next, &rt_handle).await {
-                eprintln!("[swap] failed: {e}");
-                continue;
-            }
-            let swap_ms = t_swap.elapsed().as_secs_f64() * 1000.0;
-            swap_total_ms += swap_ms;
-            swap_count += 1;
+            // Swap to the other flow immediately — unless --no-swap, where the
+            // run stays on the starting flow and swap_ms is logged as 0.
             let phy_was = current;
-            current = next;
+            let swap_ms = if no_swap {
+                0.0
+            } else {
+                let next = other(current);
+                let t_swap = Instant::now();
+                if let Err(e) = ctrl.swap(swap_target, next, &rt_handle).await {
+                    eprintln!("[swap] failed: {e}");
+                    continue;
+                }
+                let ms = t_swap.elapsed().as_secs_f64() * 1000.0;
+                swap_total_ms += ms;
+                swap_count += 1;
+                current = next;
+                ms
+            };
 
             let (seq_s, len_s, hex_s) = match &frame_row {
                 Some((seq, blob)) => (

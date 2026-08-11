@@ -19,6 +19,24 @@ pub const MAX_DATA_SYM: usize = crate::MAX_SYM;
 /// Worst-case frame length in samples: 6 preamble symbols + data.
 pub const MAX_FRAME_LEN: usize = (6 + MAX_DATA_SYM) * TS + TU;
 
+/// Frame length in samples for the largest PSDU a receiver expects to see.
+///
+/// The STF detector buffers this much signal *past* a detection candidate
+/// before it will emit, because the segment it hands downstream is a fixed
+/// worst-case slice — the true length is only known once SIG is decoded, three
+/// blocks later. So this number is also the detector's cold-start latency: a
+/// freshly built flowgraph decodes nothing until it has accumulated one of
+/// them. At 4 MSps the 1500-byte default is 76,448 samples ≈ 19 ms, which is
+/// what a per-frame flowgraph swap pays on every swap.
+///
+/// Sizing it to the frames actually on the air collapses that: a 34-byte PSDU
+/// needs 3,008 samples ≈ 0.75 ms. Symbol count mirrors `MAX_SYM` — MCS 0,
+/// 26 data bits per symbol, 8-bit service field plus 6 tail bits.
+pub const fn frame_len_for_psdu(psdu_bytes: usize) -> usize {
+    let n_sym = ((8 + 8 * psdu_bytes + 6) / 26) + 1;
+    (6 + n_sym) * TS + TU
+}
+
 /// 802.11ah STF frequency-domain sequence (fftshift, DC at index 32).
 /// Python cell 4: `stf_syms` / sqrt(2).
 pub fn stf_freq() -> [Complex32; FFT_SIZE] {

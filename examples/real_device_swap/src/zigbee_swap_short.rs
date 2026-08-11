@@ -1,8 +1,29 @@
-// zigbee_swap — at every received frame, swap between two Zigbee channels.
+// zigbee_swap_short — at every received frame, swap between two Zigbee channels.
 //
-// Sibling of `per_frame_swap` that swaps PHY at every received frame, but
-// instead of alternating Zigbee ↔ HaLow, it alternates between two Zigbee
-// receivers on different channels:
+// Sibling of `zigbee_swap` for the SHORT frame format. Identical machinery —
+// same head, same null tail, same swap-on-every-frame policy — the only
+// difference is the on-air payload, which carries a 1-byte sequence number and
+// the IFS instead of the 19-byte multizig stamp.
+//
+// PPDU on the air: SHR (4 B preamble + SFD 0xA7) → PHR (1 B length) → PSDU.
+// The decoder hands us the PSDU (length byte consumed by the PHR state), so
+// offsets below are PSDU-relative:
+//
+//   off  size  bytes                     field
+//   ---  ----  ------------------------  --------------------------------
+//     0     2  41 C8                     FCF (LE = 0xC841)
+//     2     1  SS                        sequence number, frame & 0xFF
+//     3     2  FF FF                     dst PAN = broadcast
+//     5     2  FF FF                     dst addr (short) = broadcast
+//     7     8  00 00 45 45 42 47 49 5A   src EUI-64 = 00 00 'E''E''B''G''I''Z'
+//    15     4  xx xx xx xx               payload = ifs_us (u32 LE)
+//    19     2  cc cc                     FCS (CRC-16, computed by the HW)
+//
+// PSDU length is 21 (0x15) including FCS. As in `zigbee_swap`, the fixed
+// EUI-64 is the anchor: the sequence number sits 5 bytes before it and the
+// IFS 8 bytes after, so neither offset has to be guessed.
+//
+// It alternates between two Zigbee receivers:
 //   A: flows/zigbee_rxA.toml  (2.425 GHz — channel 11)
 //   B: flows/zigbee_rxB.toml  (2.45  GHz)
 //
@@ -13,9 +34,9 @@
 // so the lowest inter-frame switch time the receiver can sustain can be
 // plotted offline.
 //
-// Output: zigbee_swap.csv  with one row per received frame.
+// Output: zigbee_swap_short.csv  with one row per received frame.
 // Run from this directory so the relative TOML paths resolve:
-//   cd examples/real_device_swap && ../../target/release/zigbee_swap
+//   cd examples/real_device_swap && ../../target/release/zigbee_swap_short
 
 use std::fs::File;
 use std::io::Write;
@@ -36,48 +57,37 @@ const FLOW_ZIGBEE_A: &str = "flows/zigbee_rxA.toml";
 const FLOW_ZIGBEE_B: &str = "flows/zigbee_rxB.toml";
 const HEAD_FLOW: &str = "flows/sdr_head.toml";
 const TAIL_FLOW: &str = "flows/null_tail.toml";
-const CSV_PATH: &str = "zigbee_swap.csv";
+const CSV_PATH: &str = "zigbee_swap_short.csv";
 
 /// If no tap frame arrives within this time after the last swap, swap anyway.
 /// Bounded so a missed channel does not stall the sweep forever.
 const RX_TIMEOUT: Duration = Duration::from_millis(80000);
 
 /// Source EUI-64 used by the multizig firmware: `00 00 'E' 'E' 'B' 'G' 'I' 'Z'`.
-/// Sits at MHR offset 7-14, immediately before the 17-byte stamp payload, so
-/// anchoring on it gives a deterministic stamp offset without offset guessing.
+/// Sits at PSDU offset 7-14, between the addressing fields and the payload, so
+/// anchoring on it locates both the sequence number and the IFS exactly.
 const ZIGBEE_EUI64_ANCHOR: [u8; 8] = [0x00, 0x00, b'E', b'E', b'B', b'G', b'I', b'Z'];
 
-/// Parse the 19-byte stamp emitted by the multizig firmware:
-/// `step:u32_le | run:u16_le | tag:u8 ('Z') | wait_us:u32_le | ts_us:u64_le`.
+/// Parse the short frame: `(seq, ifs_us)`.
 ///
-/// Locates the stamp by searching for the fixed EUI-64 source address
-/// (`ZIGBEE_EUI64_ANCHOR`) — the stamp is the 19 bytes immediately after it.
-fn parse_payload(blob: &[u8]) -> Option<(u32, u16, u8, u32, u64)> {
-    let needed = ZIGBEE_EUI64_ANCHOR.len() + 19;
-    if blob.len() < needed {
+/// Anchors on the fixed EUI-64 source address, which sits at PSDU offset 7.
+/// The sequence number is 5 bytes before it (offset 2) and the IFS is the
+/// 4-byte little-endian payload immediately after it (offset 15) — so both are
+/// located without assuming the decoder handed us the PSDU at offset 0.
+fn parse_payload(blob: &[u8]) -> Option<(u8, u32)> {
+    const A: usize = ZIGBEE_EUI64_ANCHOR.len();
+    const SEQ_BACK: usize = 5; // anchor at offset 7, sequence number at offset 2
+    if blob.len() < SEQ_BACK + A + 4 {
         return None;
     }
-    let max = blob.len() - needed;
-    for i in 0..=max {
-        if blob[i..i + ZIGBEE_EUI64_ANCHOR.len()] != ZIGBEE_EUI64_ANCHOR {
+    for i in SEQ_BACK..=(blob.len() - A - 4) {
+        if blob[i..i + A] != ZIGBEE_EUI64_ANCHOR {
             continue;
         }
-        let p = i + ZIGBEE_EUI64_ANCHOR.len();
-        let step = u32::from_le_bytes([blob[p], blob[p + 1], blob[p + 2], blob[p + 3]]);
-        let run = u16::from_le_bytes([blob[p + 4], blob[p + 5]]);
-        let tag = blob[p + 6];
-        let wait_us = u32::from_le_bytes([blob[p + 7], blob[p + 8], blob[p + 9], blob[p + 10]]);
-        let ts = u64::from_le_bytes([
-            blob[p + 11],
-            blob[p + 12],
-            blob[p + 13],
-            blob[p + 14],
-            blob[p + 15],
-            blob[p + 16],
-            blob[p + 17],
-            blob[p + 18],
-        ]);
-        return Some((step, run, tag, wait_us, ts));
+        let seq = blob[i - SEQ_BACK];
+        let p = i + A;
+        let ifs_us = u32::from_le_bytes([blob[p], blob[p + 1], blob[p + 2], blob[p + 3]]);
+        return Some((seq, ifs_us));
     }
     None
 }
@@ -97,7 +107,7 @@ fn phy_name(toml: &str) -> &'static str {
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     futuresdr::runtime::init();
 
-    println!("=== zigbee_swap — swap Zigbee channel on every received frame ===");
+    println!("=== zigbee_swap_short — swap Zigbee channel on every received frame ===");
     println!("Initial PHY: zigbee_rxA (2.425 GHz); alternating with zigbee_rxB (2.45 GHz)");
     println!("CSV → {CSV_PATH}\n");
 
@@ -169,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut csv = File::create(CSV_PATH)?;
         writeln!(
             csv,
-            "rx_idx,phy_active,frame_event,step,run,tag,wait_us,ts_us,rx_t_ms,swap_ms"
+            "rx_idx,phy_active,frame_event,seq,ifs_us,rx_t_ms,swap_ms"
         )?;
         csv.flush().ok();
 
@@ -188,7 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Wait for one tap (a decoded frame on the current PHY) or time out.
             let mut deadline = FutureExt::fuse(Timer::after(RX_TIMEOUT));
             let frame_event;
-            let mut payload_row: Option<(i64, i64, char, i64, i128)> = None; // (step, run, tag, wait_us, ts)
+            let mut payload_row: Option<(u8, u32)> = None; // (seq, ifs_us)
 
             select! {
                 _ = deadline => {
@@ -211,29 +221,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             }
                         };
                         match parse_payload(&blob) {
-                            Some((step, run, tag, wait_us, ts)) => {
+                            Some((seq, ifs_us)) => {
                                 println!(
-                                    "[t={:.1}ms] [rx {} tap={tap_name} {}B] CSV,{},{},{},{},{}",
+                                    "[t={:.1}ms] [rx {} tap={tap_name} {}B] seq={seq} ifs_us={ifs_us}",
                                     t0.elapsed().as_secs_f64() * 1000.0,
                                     phy_name(current),
                                     blob.len(),
-                                    step,
-                                    run,
-                                    tag as char,
-                                    wait_us,
-                                    ts,
                                 );
-                                payload_row = Some((
-                                    step as i64,
-                                    run as i64,
-                                    tag as char,
-                                    wait_us as i64,
-                                    ts as i128,
-                                ));
+                                payload_row = Some((seq, ifs_us));
                             }
                             None => {
                                 // Dump hex on failure so we can see WHY parse failed
-                                // (anchor missing? short MAC frame? ACK / beacon?).
+                                // (anchor missing? truncated PSDU? wrong format?).
                                 let hex: String = blob
                                     .iter()
                                     .map(|b| format!("{b:02x}"))
@@ -267,26 +266,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let phy_was = current;
             current = next;
 
-            let (step_s, run_s, tag_s, wait_s, ts_s) = match payload_row {
-                Some((s, r, t, w, ts)) => (
-                    s.to_string(),
-                    r.to_string(),
-                    t.to_string(),
-                    w.to_string(),
-                    ts.to_string(),
-                ),
-                None => (
-                    "-1".into(),
-                    "-1".into(),
-                    "?".into(),
-                    "-1".into(),
-                    "-1".into(),
-                ),
+            let (seq_s, ifs_s) = match payload_row {
+                Some((seq, ifs_us)) => (seq.to_string(), ifs_us.to_string()),
+                None => ("-1".into(), "-1".into()),
             };
 
             writeln!(
                 csv,
-                "{rx_idx},{phy_was_str},{frame_event},{step_s},{run_s},{tag_s},{wait_s},{ts_s},{rx_t_ms:.3},{swap_ms:.3}",
+                "{rx_idx},{phy_was_str},{frame_event},{seq_s},{ifs_s},{rx_t_ms:.3},{swap_ms:.3}",
                 phy_was_str = phy_name(phy_was),
             )?;
             csv.flush().ok();

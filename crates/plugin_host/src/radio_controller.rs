@@ -345,7 +345,14 @@ impl RadioController {
         // BridgeSinkC32: writes to the shared output buffer
         let bridge_id = fg.add_block_dyn({
             let buf = self.output_buf.clone();
-            |id| Box::new(WrappedKernel::new(bridge::BridgeSinkC32::new(buf), id))
+            // A RadioController's own bridge is never gated: it is not a
+            // swappable channel, so it stays connected for the radio's life.
+            |id| {
+                Box::new(WrappedKernel::new(
+                    bridge::BridgeSinkC32::new(buf, bridge::gate(true), true),
+                    id,
+                ))
+            }
         });
 
         // Wire: SDR → Resampler → BridgeSink
@@ -370,7 +377,12 @@ impl RadioController {
         // BridgeSourceC32: reads from the shared input buffer.
         let bridge_id = fg.add_block_dyn({
             let buf = self.output_buf.clone();
-            |id| Box::new(WrappedKernel::new(bridge::BridgeSourceC32::new(buf), id))
+            |id| {
+                Box::new(WrappedKernel::new(
+                    bridge::BridgeSourceC32::new(buf, bridge::gate(true)),
+                    id,
+                ))
+            }
         });
 
         // SeifySink: (device_args, frequency_hz, sample_rate_hz, gain_db)

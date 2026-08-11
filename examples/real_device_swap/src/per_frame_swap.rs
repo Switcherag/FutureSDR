@@ -31,7 +31,11 @@ use plugin_host::{FlowgraphController, default_plugin_dir};
 const FLOW_ZIGBEE: &str = "flows/zigbee_rx.toml";
 const FLOW_HALOW: &str = "flows/wlan_ah_rx_v2.toml";
 const HEAD_FLOW: &str = "flows/sdr_head.toml";
-const TAIL_FLOW: &str = "flows/network_tail.toml";
+/// Null tail: accepts the `to = "tail"` bridge and discards it. `network_tail`
+/// needs an `sdrtap0` TAP iface (CAP_NET_ADMIN) and a writable `data/`; without
+/// either, both its sinks fail on init, the whole tail FG terminates, and the
+/// bridge feeding it backs up until the SeifySource overflows.
+const TAIL_FLOW: &str = "flows/null_tail.toml";
 const CSV_PATH: &str = "per_frame_swap.csv";
 
 /// If no tap frame arrives within this time after the last swap, swap anyway.

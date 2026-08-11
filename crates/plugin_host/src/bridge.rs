@@ -12,6 +12,7 @@ use futuresdr::futures::SinkExt;
 use futuresdr::futures::channel::mpsc;
 use futuresdr::prelude::*;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 // ── NamedMessagePipe ─────────────────────────────────────────────────
@@ -48,6 +49,30 @@ const CAP_U8:  usize =   32_768; // 32 KiB × 1 byte
 const CAP_F32: usize =    8_192; // 32 KiB / 4 bytes
 const CAP_C32: usize = 4_194_304; // 32 MiB / 8 bytes, gives more headroom for swap-time stalls
 
+/// Idle backoff when a bridge block has nothing to do — long enough not to
+/// spin, short enough not to add meaningful latency at 4 MSps.
+const IDLE: std::time::Duration = std::time::Duration::from_micros(50);
+
+// ── Gates ────────────────────────────────────────────────────────────
+// Two independent switches let the controller take a flowgraph off the shared
+// deque without terminating it first (see FlowgraphController::swap):
+//
+//   * a Sink's `connected` gate is the *head* side. Cleared, the head stops
+//     feeding this channel. What happens to the samples arriving meanwhile is
+//     `buffer_when_disconnected`: false (default) discards them, true queues
+//     them exactly as a connected sink would.
+//   * a Source's `active` gate is the *protocol* side, one per built
+//     flowgraph. Cleared, that flowgraph stops draining the deque — so an
+//     outgoing flowgraph can be left running (and terminated later, off the
+//     critical path) without stealing samples from its replacement.
+
+/// Shared on/off switch held by a bridge block and by the controller.
+pub(crate) type Gate = Arc<AtomicBool>;
+
+pub(crate) fn gate(initial: bool) -> Gate {
+    Arc::new(AtomicBool::new(initial))
+}
+
 macro_rules! make_bridge {
     ($sink:ident, $source:ident, $t:ty, $cap:expr) => {
         // ── Sink ──────────────────────────────────────────────────────
@@ -56,12 +81,24 @@ macro_rules! make_bridge {
             #[input]
             input: DefaultCpuReader<$t>,
             buf: Arc<Mutex<VecDeque<$t>>>,
+            connected: Gate,
+            buffer_when_disconnected: bool,
             dropped_total: u64,
         }
 
         impl $sink {
-            pub fn new(buf: Arc<Mutex<VecDeque<$t>>>) -> Self {
-                Self { input: DefaultCpuReader::default(), buf, dropped_total: 0 }
+            pub fn new(
+                buf: Arc<Mutex<VecDeque<$t>>>,
+                connected: Gate,
+                buffer_when_disconnected: bool,
+            ) -> Self {
+                Self {
+                    input: DefaultCpuReader::default(),
+                    buf,
+                    connected,
+                    buffer_when_disconnected,
+                    dropped_total: 0,
+                }
             }
         }
 
@@ -74,6 +111,21 @@ macro_rules! make_bridge {
             ) -> Result<()> {
                 let i = self.input.slice();
                 let n = i.len();
+
+                // Disconnected and not asked to buffer: consume and discard, so
+                // the upstream head keeps running at rate and the deque does not
+                // grow while no flowgraph is reading it.
+                if n > 0
+                    && !self.connected.load(Ordering::Relaxed)
+                    && !self.buffer_when_disconnected
+                {
+                    self.input.consume(n);
+                    if self.input.finished() {
+                        io.finished = true;
+                    }
+                    return Ok(());
+                }
+
                 if n > 0 {
                     let mut buf = self.buf.lock().unwrap();
                     // Drop whole items to make room, never partial items.
@@ -107,11 +159,25 @@ macro_rules! make_bridge {
             #[output]
             output: DefaultCpuWriter<$t>,
             buf: Arc<Mutex<VecDeque<$t>>>,
+            active: Gate,
+            /// When this block was constructed, i.e. when its flowgraph was
+            /// built. Used once, to report how long the rebuilt flowgraph
+            /// waited before it saw its first sample — which separates
+            /// scheduler/startup latency from PHY re-acquisition in the
+            /// post-swap blind window. Set `PLUGIN_HOST_BRIDGE_DEBUG=1`.
+            created: std::time::Instant,
+            first_produce_logged: bool,
         }
 
         impl $source {
-            pub fn new(buf: Arc<Mutex<VecDeque<$t>>>) -> Self {
-                Self { output: DefaultCpuWriter::default(), buf }
+            pub fn new(buf: Arc<Mutex<VecDeque<$t>>>, active: Gate) -> Self {
+                Self {
+                    output: DefaultCpuWriter::default(),
+                    buf,
+                    active,
+                    created: std::time::Instant::now(),
+                    first_produce_logged: false,
+                }
             }
         }
 
@@ -122,6 +188,14 @@ macro_rules! make_bridge {
                 _mio: &mut MessageOutputs,
                 _meta: &mut BlockMeta,
             ) -> Result<()> {
+                // Detached from the deque: idle without consuming, so a
+                // replacement flowgraph gets the whole stream while this one
+                // waits to be terminated.
+                if !self.active.load(Ordering::Relaxed) {
+                    io.block_on(async { futuresdr::async_io::Timer::after(IDLE).await; });
+                    return Ok(());
+                }
+
                 let o = self.output.slice();
                 if o.is_empty() {
                     return Ok(());
@@ -149,16 +223,22 @@ macro_rules! make_bridge {
                     buf.drain(..to_produce);
                     drop(buf);
                     self.output.produce(to_produce);
+                    if !self.first_produce_logged {
+                        self.first_produce_logged = true;
+                        if std::env::var_os("PLUGIN_HOST_BRIDGE_DEBUG").is_some() {
+                            println!(
+                                "        [bridge {}] first {} samples {:.3} ms after build",
+                                stringify!($source),
+                                to_produce,
+                                self.created.elapsed().as_secs_f64() * 1000.0,
+                            );
+                        }
+                    }
                 } else {
                     drop(buf);
                     // Short sleep to yield the executor without busy-waiting.
                     // 50µs keeps latency low while avoiding a spin loop.
-                    io.block_on(async {
-                        futuresdr::async_io::Timer::after(
-                            std::time::Duration::from_micros(50),
-                        )
-                        .await;
-                    });
+                    io.block_on(async { futuresdr::async_io::Timer::after(IDLE).await; });
                 }
                 Ok(())
             }

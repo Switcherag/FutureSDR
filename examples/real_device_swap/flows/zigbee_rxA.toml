@@ -7,9 +7,9 @@
 # The head TOML (sdr_head.toml) declares which block fulfills which demand.
 
 [radio]
-frequency_hz   = 2.45e9   # Zigbee channel 11
+frequency_hz   = 2.425e9   # Zigbee channel 11
 sample_rate_hz = 4e6       # demand satisfied by head's resampler (20→4 MSps)
-gain_db        = 0.0
+gain_db        = 10.0
 
 [[ports]]
 id = "in"

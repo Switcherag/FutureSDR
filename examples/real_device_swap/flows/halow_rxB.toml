@@ -39,6 +39,13 @@ to = "tail"
 [[blocks]]
 id = "stf"
 plugin = "wlan_ah_v2_stf_detector_plugin"
+# Largest PSDU (bytes) this receiver expects. The detector buffers one whole
+# frame length before it can emit, so this is also its cold-start latency —
+# what a rebuilt flowgraph waits through on every swap. 128 B covers every
+# frame seen on this link (99 B max) at ~1.9 ms, versus ~19 ms for the
+# 1500 B PHY maximum. Frames longer than this are not captured.
+config = 128
+config_type = "usize"
 
 [[blocks]]
 id = "cfo"

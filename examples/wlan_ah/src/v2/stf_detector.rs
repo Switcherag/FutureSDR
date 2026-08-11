@@ -6,7 +6,7 @@ use futuresdr::prelude::*;
 use std::collections::VecDeque;
 
 use crate::v2::ctx::FrameCtx;
-use crate::v2::helpers::{MAX_FRAME_LEN, TS, TU};
+use crate::v2::helpers::{MAX_FRAME_LEN, TS, TU, frame_len_for_psdu};
 
 const LAG: usize = TU / 4;
 const BOXCAR_LEN: usize = 2 * TS - LAG;
@@ -32,23 +32,43 @@ where
     sample_total: usize,
     corr_base: usize,
     finished_sent: bool,
+    /// Samples of lookahead required past a detection candidate, and the
+    /// length of the segment emitted on detection. Also the detector's
+    /// cold-start latency — see [`with_max_psdu`](Self::with_max_psdu).
+    max_frame_len: usize,
 }
 
 impl<I> StfDetector<I>
 where
     I: CpuBufferReader<Item = Complex32>,
 {
+    /// Detector sized for the worst-case PSDU the PHY supports (1500 B).
     pub fn new() -> Self {
+        Self::with_frame_len(MAX_FRAME_LEN)
+    }
+
+    /// Detector sized for the largest PSDU this receiver expects, in bytes.
+    ///
+    /// Smaller means a shorter cold start: the detector must buffer one whole
+    /// frame length before its first detection can be emitted, so this is what
+    /// a rebuilt flowgraph waits through before it decodes anything. Frames
+    /// longer than `psdu_bytes` will not be captured — size it to the traffic.
+    pub fn with_max_psdu(psdu_bytes: usize) -> Self {
+        Self::with_frame_len(frame_len_for_psdu(psdu_bytes))
+    }
+
+    fn with_frame_len(max_frame_len: usize) -> Self {
         Self {
             input: I::default(),
             ac_sum: Complex32::new(0.0, 0.0),
             ac_ring: VecDeque::with_capacity(BOXCAR_LEN),
-            sample_ring: VecDeque::with_capacity(MAX_FRAME_LEN + NEED + BOXCAR_LEN + TS),
+            sample_ring: VecDeque::with_capacity(max_frame_len + NEED + BOXCAR_LEN + TS),
             corr_ring: VecDeque::with_capacity(NEED + DETECT_WIN),
             sample_base: 0,
             sample_total: 0,
             corr_base: 0,
             finished_sent: false,
+            max_frame_len,
         }
     }
 
@@ -154,7 +174,7 @@ where
             while self.corr_ring.len() >= NEED {
                 let candidate_latest_corr = self.corr_base + LOCAL_MAX_R + DETECT_WIN - 1;
                 let candidate_latest_start = candidate_latest_corr.saturating_sub(BOXCAR_LEN - 1);
-                if self.sample_latest_exclusive() < candidate_latest_start + MAX_FRAME_LEN {
+                if self.sample_latest_exclusive() < candidate_latest_start + self.max_frame_len {
                     break;
                 }
 
@@ -191,7 +211,7 @@ where
                 };
 
                 if is_local_max && max_value_norm.is_finite() && max_value_norm >= 10f32.powf(30.0 / 10.0) {
-                    if let Some(frame) = self.sample_range_to_vec(start_idx, start_idx + MAX_FRAME_LEN) {
+                    if let Some(frame) = self.sample_range_to_vec(start_idx, start_idx + self.max_frame_len) {
                         let block_corr: Vec<f32> = self
                             .corr_ring
                             .iter()

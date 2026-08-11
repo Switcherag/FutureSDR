@@ -30,6 +30,10 @@ to = "tail"
 [[blocks]]
 id = "stf"
 plugin = "wlan_ah_v2_stf_detector_plugin"
+# 0 = the PHY maximum (1500 B PSDU). See halow_listenA.toml for why you might
+# lower it: it sets the detector's cold-start latency.
+config = 0
+config_type = "usize"
 
 [[blocks]]
 id = "cfo"

@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (builder, mut tap_rx) = FlowgraphController::builder(default_plugin_dir())
         .add_head(HEAD_FLOW)
         .add_swappable(LISTEN[0])
-        .tap_channel(64);
+        .tap_channel(128);
 
     builder.run_with(move |mut ctrl, rt_handle, entries| async move {
         // Start the permanent head first, then activate selectors, then start

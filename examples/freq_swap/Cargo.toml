@@ -29,6 +29,11 @@ name = "bw_recorder"
 [[bin]]
 name = "retune_timing"
 
+# Times every Zigbee <-> 802.11ah US channel-to-channel retune into a square
+# matrix, with and without a concurrent RX stream.
+[[bin]]
+name = "retune_matrix"
+
 [[bin]]
 name = "vulkan"
 required-features = ["vulkan"]
