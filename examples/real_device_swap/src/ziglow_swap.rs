@@ -57,7 +57,7 @@ const TAP_Z: &str = "zigbee_frames";
 
 /// If no tap frame arrives within this time after the last swap, swap anyway.
 /// Bounded so a silent band does not stall the sweep forever.
-const RX_TIMEOUT: Duration = Duration::from_millis(800);
+const RX_TIMEOUT: Duration = Duration::from_millis(80000);
 
 /// Source EUI-64 used by the multizig firmware: `00 00 'E' 'E' 'B' 'G' 'I' 'Z'`.
 /// Sits at MHR offset 7-14, immediately before the 19-byte stamp, so anchoring

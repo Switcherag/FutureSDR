@@ -349,7 +349,7 @@ impl RadioController {
             // swappable channel, so it stays connected for the radio's life.
             |id| {
                 Box::new(WrappedKernel::new(
-                    bridge::BridgeSinkC32::new(buf, bridge::gate(true), true),
+                    bridge::BridgeSinkC32::new(buf, bridge::gate(true)),
                     id,
                 ))
             }

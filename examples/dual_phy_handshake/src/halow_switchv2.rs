@@ -50,15 +50,6 @@ struct Args {
     /// land in the CSV, with `swap_ms` at 0 and `flow` never changing.
     #[arg(long)]
     no_swap: bool,
-    /// Discard the samples that arrive while the head is disconnected mid-swap,
-    /// instead of queuing them for the incoming flowgraph.
-    ///
-    /// Buffering is the default and measured better here — it moves ~9 points
-    /// of swaps from losing two frames to losing one, at ~0.25 ms of added
-    /// latency, because make-before-break keeps the disconnected window that
-    /// short. Discarding is the right choice only when that window is long.
-    #[arg(long)]
-    discard_swap_window: bool,
 }
 
 /// Args for the fast-retune `Device`. Empty string = first available device;
@@ -110,7 +101,7 @@ fn phy_name(toml: &str) -> &'static str {
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     futuresdr::runtime::init();
     let args = Args::parse();
-    let (no_swap, discard_swap_window) = (args.no_swap, args.discard_swap_window);
+    let no_swap = args.no_swap;
 
     println!("=== halow_switchv2 — swap 802.11ah flow on every received frame ===");
     if no_swap {
@@ -144,13 +135,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .tap_channel(256);
 
     builder.run_with(move |mut ctrl, rt_handle, entries| async move {
-        // Must be set before anything is built: each bridge sink reads the
-        // flag when it is constructed, and the head's sink is built below.
-        ctrl.set_bridge_across_swap(!discard_swap_window);
-        if discard_swap_window {
-            println!("--discard-swap-window: swap window is dropped, not buffered");
-        }
-
         // Head first, then activate selectors, then the swappable listener.
         for &(idx, ref path, perm) in &entries {
             if perm {

@@ -831,15 +831,9 @@ pub struct FlowgraphController {
     selector_infos: Vec<SelectorInfo>,
     swap_states: HashMap<usize, SwappableState>,
     /// `connected` gate per channel key, shared with the bridge sink writing
-    /// that channel. Cleared to disconnect the head from a channel mid-swap.
+    /// that channel. Cleared to disconnect the head from a channel mid-swap,
+    /// which turns that sink into a null sink for the duration.
     channel_gates: HashMap<String, bridge::Gate>,
-    /// Whether the shared deque keeps buffering while the head is disconnected
-    /// during a swap. **On by default.** Under make-before-break the head is
-    /// disconnected only for the rebuild (~0.25 ms), so buffering that sliver
-    /// costs almost no added latency and recovers frames that straddle it —
-    /// measured at ~9 points more swaps losing one frame instead of two.
-    /// See [`set_bridge_across_swap`](Self::set_bridge_across_swap).
-    bridge_across_swap: bool,
     /// Optional RadioController — auto-retuned on swap when the target TOML
     /// declares a `[radio]` section. Used when `add_head` was *not* called
     /// (back-compat with `attach_radio` / `connect_radio`).
@@ -919,7 +913,6 @@ impl FlowgraphController {
             selector_infos: Vec::new(),
             swap_states: HashMap::new(),
             channel_gates: HashMap::new(),
-            bridge_across_swap: true,
             radios: HashMap::new(),
             primary_radio_name: None,
             tap_sender: None,
@@ -961,26 +954,6 @@ impl FlowgraphController {
         F: Fn(f64) + Send + Sync + 'static,
     {
         self.fast_gain_setter = Some(Arc::new(f));
-    }
-
-    /// Keep buffering across a swap (default: **on**).
-    ///
-    /// While [`swap`](Self::swap) has the head disconnected, the arriving
-    /// samples are queued and handed to the incoming flowgraph, so a frame
-    /// straddling the gap can still be decoded. Under make-before-break that
-    /// gap is only the rebuild (~0.25 ms), so the latency it adds is
-    /// negligible and it measurably recovers frames.
-    ///
-    /// Turn it **off** to clear the deque and discard the window instead, so
-    /// the incoming flowgraph always starts on live IQ. Worth doing if the
-    /// disconnected window is long — if terminate ever moves back onto the
-    /// critical path, the queued backlog becomes milliseconds of permanent
-    /// added latency, since a PHY at capacity never drains what it inherits.
-    ///
-    /// Set before the flowgraphs are built: each bridge sink reads the flag
-    /// when it is constructed.
-    pub fn set_bridge_across_swap(&mut self, enabled: bool) {
-        self.bridge_across_swap = enabled;
     }
 
     /// Access the primary (swap-auto-retuned) radio — the one registered via
@@ -1377,33 +1350,56 @@ impl FlowgraphController {
         let def: FlowgraphDef = toml::from_str(&content)
             .map_err(|e| format!("invalid TOML '{new_toml}': {e}"))?;
 
-        // Make-before-break. The old flowgraph is never terminated on the
-        // critical path — it is detached from the deque and torn down in the
-        // background, so the gap the radio is unheard spans only the rebuild:
+        // Make-before-break, with nothing kept from the swap window. The old
+        // flowgraph is never terminated on the critical path — it is detached
+        // from the deque and torn down in the background — and the head's IQ
+        // is thrown away until the replacement is running:
         //
-        //   0. retune the SDR
-        //   1. park selectors
-        //   2. disconnect: head stops feeding the channel and the outgoing
-        //      flowgraph stops draining it. Unless `bridge_across_swap`, the
-        //      deque is cleared and arriving samples are discarded, so the
-        //      incoming flowgraph starts on live IQ instead of a backlog.
+        //   0. disconnect: the head's bridge sink becomes a null sink and the
+        //      outgoing flowgraph stops draining the deque
+        //   1. retune the SDR — dispatched, never awaited
+        //   2. park selectors
         //   3. load plugins
         //   4. build + start the new flowgraph — while the old one is still
         //      alive but detached, hence "make before break"
-        //   5. reconnect the head to the channel
+        //   5. clear the deque and reconnect the head
         //   6. terminate the old flowgraph on a background thread
         //   7. unpark selectors
         //
-        // Steps 2 and 5 are what make 6 safe to defer: with both gates closed
-        // the two flowgraphs cannot race for the same samples, so the outgoing
-        // one can take as long as it likes to die.
+        // Disconnecting *before* the retune is what makes the async retune
+        // safe. The `freq` message returns immediately and the hardware call
+        // runs on a detached thread, so the head keeps streaming throughout —
+        // on the old frequency until the PLL lands. Those samples must not
+        // reach the incoming flowgraph: buffered they become a backlog of
+        // wrong-band IQ that a PHY at capacity never drains, so the receiver
+        // stays permanently behind. Dropped, the worst case is that the new
+        // flowgraph sees noise until the radio settles, and then recovers.
+        //
+        // Steps 0 and 5 are also what make 6 safe to defer: with both gates
+        // closed the two flowgraphs cannot race for the same samples, so the
+        // outgoing one can take as long as it likes to die.
+        let t_step = Instant::now();
+        let feed_keys: Vec<String> = self.connections.iter()
+            .filter(|c| c.to_fg == fg_idx)
+            .map(|c| format!("{}:{}", c.to_fg, c.to_port))
+            .collect();
+        for key in &feed_keys {
+            if let Some(g) = self.channel_gates.get(key) {
+                g.store(false, Ordering::Relaxed);
+            }
+        }
+        for g in &self.swap_states.get(&fg_idx).unwrap().source_gates {
+            g.store(false, Ordering::Relaxed);
+        }
+        println!("    [swap] 0-disconnect:      {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+
         if let Some(rsec) = def.radio.as_ref() {
             let t_step = Instant::now();
             self.apply_radio_demand(rsec).await?;
-            println!("    [swap] 0-retune_radio:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+            println!("    [swap] 1-retune_radio:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
         }
 
-        // 1. Park selectors connected to this FG (if any)
+        // 2. Park selectors connected to this FG (if any)
         let t_step = Instant::now();
         let connected_sels: Vec<usize> = self.selector_infos.iter()
             .enumerate()
@@ -1422,30 +1418,7 @@ impl FlowgraphController {
             handle.callback(sel.block_id, "output_index", Pmt::U32(0)).await
                 .map_err(|e| format!("park selector: {e}"))?;
         }
-        println!("    [swap] 1-park_selectors:  {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
-
-        // 2. Disconnect: close both gates on every channel feeding this FG.
-        //    The head keeps running at rate but stops writing; the outgoing
-        //    flowgraph keeps running but stops reading.
-        let t_step = Instant::now();
-        let feed_keys: Vec<String> = self.connections.iter()
-            .filter(|c| c.to_fg == fg_idx)
-            .map(|c| format!("{}:{}", c.to_fg, c.to_port))
-            .collect();
-        for key in &feed_keys {
-            if let Some(g) = self.channel_gates.get(key) {
-                g.store(false, Ordering::Relaxed);
-            }
-            if !self.bridge_across_swap {
-                if let Some(buf) = self.channels.get(key) {
-                    buf.clear();
-                }
-            }
-        }
-        for g in &self.swap_states.get(&fg_idx).unwrap().source_gates {
-            g.store(false, Ordering::Relaxed);
-        }
-        println!("    [swap] 2-disconnect:      {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        println!("    [swap] 2-park_selectors:  {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
 
         // 3. Load new plugins if needed
         let t_step = Instant::now();
@@ -1481,9 +1454,17 @@ impl FlowgraphController {
         }
         println!("    [swap] 4-build_and_start: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
 
-        // 5. Reconnect the head. From here the new FG owns the stream.
+        // 5. Clear whatever slipped in, then reconnect the head. From here the
+        //    new FG owns the stream, and it starts on live IQ. The clear is
+        //    done here rather than at step 0 because the sink may have been
+        //    mid-`work()` when the gate closed, so a last chunk can land in
+        //    the deque after the disconnect; by now the sink has been in
+        //    discard mode for the whole rebuild and cannot be writing.
         let t_step = Instant::now();
         for key in &feed_keys {
+            if let Some(buf) = self.channels.get(key) {
+                buf.clear();
+            }
             if let Some(g) = self.channel_gates.get(key) {
                 g.store(true, Ordering::Relaxed);
             }
@@ -1675,8 +1656,7 @@ impl FlowgraphController {
                     let connected = self.channel_gates.get(&channel_key)
                         .cloned()
                         .unwrap_or_else(|| bridge::gate(true));
-                    let bridge_id =
-                        add_bridge_sink(&mut fg, buf, connected, self.bridge_across_swap);
+                    let bridge_id = add_bridge_sink(&mut fg, buf, connected);
                     fg.connect_dyn(src_id, src_port, bridge_id, "input")
                         .map_err(|e| format!("connect {src_spec} -> bridge_sink: {e}"))?;
                 }
@@ -1729,23 +1709,17 @@ impl FlowgraphController {
 // ── Bridge block factories ─────────────────────────────────────────
 // The element type is encoded in SharedBuf — no separate stream_type arg.
 
-fn add_bridge_sink(
-    fg: &mut Flowgraph,
-    buf: SharedBuf,
-    connected: bridge::Gate,
-    buffer_when_disconnected: bool,
-) -> BlockId {
+fn add_bridge_sink(fg: &mut Flowgraph, buf: SharedBuf, connected: bridge::Gate) -> BlockId {
     let g = connected;
-    let q = buffer_when_disconnected;
     match buf {
         SharedBuf::U8(b) => fg.add_block_dyn(move |id| {
-            Box::new(WrappedKernel::new(bridge::BridgeSinkU8::new(b, g, q), id))
+            Box::new(WrappedKernel::new(bridge::BridgeSinkU8::new(b, g), id))
         }),
         SharedBuf::F32(b) => fg.add_block_dyn(move |id| {
-            Box::new(WrappedKernel::new(bridge::BridgeSinkF32::new(b, g, q), id))
+            Box::new(WrappedKernel::new(bridge::BridgeSinkF32::new(b, g), id))
         }),
         SharedBuf::C32(b) => fg.add_block_dyn(move |id| {
-            Box::new(WrappedKernel::new(bridge::BridgeSinkC32::new(b, g, q), id))
+            Box::new(WrappedKernel::new(bridge::BridgeSinkC32::new(b, g), id))
         }),
     }
 }

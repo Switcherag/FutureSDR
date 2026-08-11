@@ -57,10 +57,12 @@ const IDLE: std::time::Duration = std::time::Duration::from_micros(50);
 // Two independent switches let the controller take a flowgraph off the shared
 // deque without terminating it first (see FlowgraphController::swap):
 //
-//   * a Sink's `connected` gate is the *head* side. Cleared, the head stops
-//     feeding this channel. What happens to the samples arriving meanwhile is
-//     `buffer_when_disconnected`: false (default) discards them, true queues
-//     them exactly as a connected sink would.
+//   * a Sink's `connected` gate is the *head* side. Cleared, the sink becomes
+//     a null sink: it consumes its input at rate and discards it, so the head
+//     never stalls and the deque never grows while no flowgraph is reading it.
+//     Nothing arriving during a swap is kept — a swap that retunes would
+//     otherwise hand the incoming flowgraph a backlog of wrong-band IQ, and a
+//     swap that doesn't still hands it samples the old PHY already saw.
 //   * a Source's `active` gate is the *protocol* side, one per built
 //     flowgraph. Cleared, that flowgraph stops draining the deque — so an
 //     outgoing flowgraph can be left running (and terminated later, off the
@@ -82,21 +84,15 @@ macro_rules! make_bridge {
             input: DefaultCpuReader<$t>,
             buf: Arc<Mutex<VecDeque<$t>>>,
             connected: Gate,
-            buffer_when_disconnected: bool,
             dropped_total: u64,
         }
 
         impl $sink {
-            pub fn new(
-                buf: Arc<Mutex<VecDeque<$t>>>,
-                connected: Gate,
-                buffer_when_disconnected: bool,
-            ) -> Self {
+            pub fn new(buf: Arc<Mutex<VecDeque<$t>>>, connected: Gate) -> Self {
                 Self {
                     input: DefaultCpuReader::default(),
                     buf,
                     connected,
-                    buffer_when_disconnected,
                     dropped_total: 0,
                 }
             }
@@ -112,13 +108,10 @@ macro_rules! make_bridge {
                 let i = self.input.slice();
                 let n = i.len();
 
-                // Disconnected and not asked to buffer: consume and discard, so
-                // the upstream head keeps running at rate and the deque does not
+                // Disconnected: act as a null sink. Consume and discard, so the
+                // upstream head keeps running at rate and the deque does not
                 // grow while no flowgraph is reading it.
-                if n > 0
-                    && !self.connected.load(Ordering::Relaxed)
-                    && !self.buffer_when_disconnected
-                {
+                if n > 0 && !self.connected.load(Ordering::Relaxed) {
                     self.input.consume(n);
                     if self.input.finished() {
                         io.finished = true;
