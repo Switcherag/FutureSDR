@@ -15,12 +15,12 @@ def main():
             f"missing {SUMMARY} — run run_per_sweep.py first"
         )
 
-    series = {}  # phy → list of (gain, per, received, expected)
+    series = {}  # phy → list of (gain, per_pct, received, expected)
     with SUMMARY.open() as f:
         for row in csv.DictReader(f):
             series.setdefault(row["phy"], []).append((
                 float(row["gain_db"]),
-                float(row["per"]),
+                100.0 * float(row["per"]),  # the CSV stores a fraction
                 int(row["received"]),
                 int(row["expected"]),
             ))
@@ -37,9 +37,9 @@ def main():
                         fontsize=7)
 
     ax.set_xlabel("RX gain (dB)")
-    ax.set_ylabel("PER (1 − received / expected)")
+    ax.set_ylabel("PER (%) — 100 × (1 − received / expected)")
     ax.set_title("Per-PHY PER vs RX gain")
-    ax.set_ylim(-0.02, 1.02)
+    ax.set_ylim(-2, 102)
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()

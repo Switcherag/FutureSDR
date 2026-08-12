@@ -50,6 +50,11 @@ members = [
     "examples/dual_phy_handshake",
     "plugins/*",
 ]
+# The vendored bladeRF NBFM demo is a standalone crate nothing here depends on.
+# (seify-bladerf itself is a path dependency, so it joins as a member.)
+exclude = [
+    "examples/freq_swap/bladerfbindings/BladeRF-NBFM-Tranciever-Rust-Example",
+]
 
 # ── Plugin ABI contract ──────────────────────────────────────────
 # Single source of truth for how every plugin (and every plugin-host

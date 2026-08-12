@@ -37,6 +37,14 @@ path = "src/ziglow_swap.rs"
 name = "halow_swap"
 path = "src/halow_swap.rs"
 
+# Per-frame swap driven by libbladeRF quick tune instead of SoapySDR. Owns the
+# radio directly (SoapySDR's USB claim blocks a second libbladeRF handle) and
+# feeds the flowgraph through connect_radio.
+[[bin]]
+name = "zigbee_swap_quicktune"
+path = "src/zigbee_swap_quicktune.rs"
+required-features = ["quicktune"]
+
 [[bin]]
 name = "phy_per"
 path = "src/phy_per.rs"
@@ -50,3 +58,21 @@ futuresdr = { workspace = true }
 plugin_host = { path = "../../crates/plugin_host" }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
+# Direct libbladeRF bindings, for quick tune. Optional so an ordinary workspace
+# build never compiles bindgen or needs libbladeRF present; enable with
+# `--features quicktune`.
+bladerf = { path = "../freq_swap/bladerfbindings/seify-bladerf", optional = true }
+
+[features]
+# On by default, deliberately. The plugin ABI depends on the *shape of the
+# resolve*, not just on feature flags, so a feature that is sometimes on and
+# sometimes off yields two incompatible libfuturesdr.so builds and silently
+# invalidates every plugin whenever you switch. One configuration, one ABI:
+# `build.sh` then builds the whole ecosystem in a single invocation as before.
+#
+# The cost is that libbladeRF must be installed to build this example. Turn it
+# off with `--no-default-features` on a machine without it — but then rebuild
+# the plugins in the same invocation.
+default = ["quicktune"]
+# Pulls in libbladeRF for the quick-tune binary.
+quicktune = ["dep:bladerf"]

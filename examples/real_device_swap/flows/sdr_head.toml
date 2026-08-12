@@ -31,15 +31,14 @@ output_port     = "out"            # feeds protocol flowgraphs
 [[blocks]]
 id = "sdr"
 plugin = "seify_source_plugin"
-config = ["", 2.405e9, 4e6, 0.0]
+config = ["", 2.405e9, 20e6, 10.0]
 config_type = "(String, f64, f64, f64)"
 
 [[blocks]]
 id = "resampler"
 plugin = "fir_resampler_plugin"
-config = [1, 1]                    # passthrough — the device already runs at
-                                   # the 4 MSps every protocol here demands, so
-                                   # no decimating FIR sits in front of the PHY
+config = [1, 5]                    # 20 MSps off the wire, decimated 1:5 to the
+                                   # 4 MSps every protocol here demands
 config_type = "(usize, usize)"
 
 [[connections]]

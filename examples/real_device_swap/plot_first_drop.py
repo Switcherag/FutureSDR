@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """100%-stacked histogram of per_frame_swap reception, per wait_ms bin.
 
+Every rate on these plots is a percentage, never a 0-1 fraction.
+
 Reads `per_frame_swap.csv`, which carries the explicit `run` counter from the
 swap controller output. That lets the script classify each `wait_ms` bin
 exactly once for every run in the observed range, including runs with zero
@@ -209,9 +211,9 @@ def plot_aggregate_view(fracs, counts, total_runs):
         bottom += fracs[category]
 
     ax.set_xlim(-0.5, N_MS - 0.5)
-    ax.set_ylim(0, 1.0)
+    ax.set_ylim(0, 100.0)
     ax.set_xlabel("wait_ms (TX inter-frame delay; sweep counts down 500 → 0)")
-    ax.set_ylabel("fraction of runs")
+    ax.set_ylabel("% of runs")
     ax.set_title(f"per_frame_swap reception by streak length — {total_runs} run(s)")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, fontsize=8)
     ax.grid(True, axis="y", alpha=0.3)
@@ -285,9 +287,9 @@ def plot_phy_share_view(phy_share_rows: np.ndarray, run_ids: list[int], mode: st
         ax.set_xticklabels([str(run_ids[idx]) for idx in tick_positions])
 
     ax.set_xlim(-0.5, len(run_ids) - 0.5)
-    ax.set_ylim(0.0, 1.0)
+    ax.set_ylim(0.0, 100.0)
     ax.set_xlabel("run" if mode == "exact" else "sweep")
-    ax.set_ylabel("fraction of received packets")
+    ax.set_ylabel("% of received packets")
     ax.set_title("per_frame_swap receive mix by run — Zigbee vs HaLow")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=2)
     ax.grid(True, axis="y", alpha=0.3)
@@ -336,7 +338,7 @@ def build_phy_share_rows(phy_counts_by_run: dict[int, dict[str, int]], run_ids: 
         if total == 0:
             rows.append((0.0, 0.0))
         else:
-            rows.append((counts["Z"] / total, counts["H"] / total))
+            rows.append((100.0 * counts["Z"] / total, 100.0 * counts["H"] / total))
     return np.asarray(rows, dtype=float)
 
 
@@ -448,10 +450,11 @@ def main():
     if mode == "exact":
         if not np.all(totals == total_runs):
             sys.exit("internal error: exact run accounting did not classify every wait_ms bin")
-        fracs = {c: counts[c] / total_runs for c in STACK_ORDER}
+        # Percent, not a 0-1 fraction: every rate on these plots reads in %.
+        fracs = {c: 100.0 * counts[c] / total_runs for c in STACK_ORDER}
     else:
         safe_totals = np.where(totals == 0, 1, totals)
-        fracs = {c: counts[c] / safe_totals for c in STACK_ORDER}
+        fracs = {c: 100.0 * counts[c] / safe_totals for c in STACK_ORDER}
 
     classified_runs = np.vstack(classified_runs)
     plot_aggregate_view(fracs, counts, total_runs)

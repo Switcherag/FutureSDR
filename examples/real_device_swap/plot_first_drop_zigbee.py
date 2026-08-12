@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """100%-stacked histogram of zigbee_swap reception, per wait_ms bin.
 
+Every rate on these plots is a percentage, never a 0-1 fraction.
+
 Counterpart of `plot_first_drop.py` for the multizig firmware: the TX side
 alternates between two Zigbee channels (A: 2.425 GHz, B: 2.45 GHz). Each
 frame carries a `step` counter and a `wait_us` field giving the inter-frame
@@ -220,7 +222,7 @@ def _wire_cursor(ax, schedule_us, run_ids=None):
             if 0 <= row < len(run_ids):
                 return f"{x_str}, run={run_ids[row]}"
             return f"{x_str}, y={y:.2f}"
-        return f"{x_str}, frac={y:.3f}"
+        return f"{x_str}, {y:.1f}%"
     ax.format_coord = fmt
 
 
@@ -242,11 +244,11 @@ def plot_aggregate_view(fracs, counts, total_runs, schedule_us):
         bottom += fracs[category]
 
     ax.set_xlim(-0.5, n - 0.5)
-    ax.set_ylim(0, 1.0)
+    ax.set_ylim(0, 100.0)
     _apply_wait_ms_ticks(ax, schedule_us)
     _wire_cursor(ax, schedule_us)
     ax.set_xlabel("wait (TX inter-frame delay, ms) — 0 ms left → max right")
-    ax.set_ylabel("fraction of runs")
+    ax.set_ylabel("% of runs")
     ax.set_title(f"zigbee_swap reception by streak length — {total_runs} run(s)")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, fontsize=8)
     ax.grid(True, axis="y", alpha=0.3)
@@ -323,17 +325,17 @@ def plot_phy_share_view(phy_share_rows, run_ids):
         ax.set_xticklabels([str(run_ids[idx]) for idx in tick_positions])
 
     ax.set_xlim(-0.5, len(run_ids) - 0.5)
-    ax.set_ylim(0.0, 1.0)
+    ax.set_ylim(0.0, 100.0)
 
     def fmt(x, y):
         idx = int(round(x))
         if 0 <= idx < len(run_ids):
-            return f"run={run_ids[idx]}, share={y:.3f}"
-        return f"x={x:.2f}, y={y:.3f}"
+            return f"run={run_ids[idx]}, share={y:.1f}%"
+        return f"x={x:.2f}, y={y:.1f}%"
     ax.format_coord = fmt
 
     ax.set_xlabel("run")
-    ax.set_ylabel("fraction of received packets")
+    ax.set_ylabel("% of received packets")
     ax.set_title("zigbee_swap receive mix by run — channel A vs B")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=2)
     ax.grid(True, axis="y", alpha=0.3)
@@ -350,7 +352,7 @@ def build_phy_share_rows(phy_counts_by_run, run_ids):
         if total == 0:
             rows.append((0.0, 0.0))
         else:
-            rows.append((counts["A"] / total, counts["B"] / total))
+            rows.append((100.0 * counts["A"] / total, 100.0 * counts["B"] / total))
     return np.asarray(rows, dtype=float)
 
 
@@ -385,7 +387,8 @@ def main():
         for category in STACK_ORDER:
             counts[category] += (bucket_classes == CATEGORY_INDEX[category]).astype(int)
 
-    fracs = {c: counts[c] / total_runs for c in STACK_ORDER}
+    # Percent of runs, not a 0-1 fraction: every rate on these plots reads in %.
+    fracs = {c: 100.0 * counts[c] / total_runs for c in STACK_ORDER}
     classified_runs = np.vstack(classified_runs)
     run_ids = [bucket["run"] for bucket in runs]
 

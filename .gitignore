@@ -72,4 +72,3 @@ examples/wlan_ah/plotv2/*.f32
 # ── Generated images ──────────────────────────────────────────────
 *.png
 *.cf32
-*.csv
