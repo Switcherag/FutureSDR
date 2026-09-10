@@ -1,0 +1,23 @@
+{
+  "sample_rate_hz": 4000000,
+  "carrier_offset_hz": 1000000,
+  "tx_offset_hz": 1000000,
+  "tone_hz": 0,
+  "rx_freq_a_hz": 919000000,
+  "rx_freq_b_hz": 2425000000,
+  "format": "interleaved int16, I first",
+  "rx_ts0": 3067642,
+  "rx_tx_offset_samples": 69,
+  "calibration_spike_rx_ts": 3287642,
+  "clock_tie": "spike",
+  "spike_samples": 256,
+  "gap_samples": 1024,
+  "detector_window": 32,
+  "rx_overruns": 0,
+  "rx_read_errors": 0,
+  "rx_gap_samples": 0,
+  "events": [
+    {"from_hz": 919000000, "to_hz": 2425000000, "spike_rx_ts": 3887642, "spike_rx_ts_predicted": 3887642, "retune_rx_ts": 3888666, "recovery_rx_ts": 3889330, "outage_rx_ts": 3888858, "level_before": 28.88, "level_after": 5.84, "latency_us": 166.000},
+    {"from_hz": 2425000000, "to_hz": 919000000, "spike_rx_ts": 3927642, "spike_rx_ts_predicted": 3927642, "retune_rx_ts": 3928666, "recovery_rx_ts": 3929338, "outage_rx_ts": 3928874, "level_before": 5.83, "level_after": 28.94, "latency_us": 168.000}
+  ]
+}

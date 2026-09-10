@@ -817,9 +817,100 @@ struct BuiltFlowgraph {
     block_ids: HashMap<String, BlockId>,
     ports: Vec<PortDef>,
     source_gates: Vec<bridge::Gate>,
+    timings: BuildTimings,
+}
+
+/// What each phase of `build_flowgraph_full` cost, in milliseconds.
+///
+/// Construction is the dominant term in a swap, so it is worth knowing which
+/// part of it: re-reading the TOML, asking each plugin for a block, wiring the
+/// declared connections, or injecting the bridge blocks that join this
+/// flowgraph to its neighbours. Starting is separate — it belongs to the
+/// runtime, not to construction — and is timed by the caller.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BuildTimings {
+    pub read_toml: f64,
+    pub create_blocks: f64,
+    pub connect: f64,
+    pub bridge_ports: f64,
 }
 
 /// Controls multiple flowgraphs connected through auto-injected bridge blocks.
+/// Wall-clock cost of each step of a [`swap`](FlowgraphController::swap), in
+/// milliseconds.
+///
+/// The steps are the ones documented on `swap` itself and they are measured
+/// where they run, so they sum to `total` up to the bookkeeping between them.
+/// `retune_radio` is `None` when the incoming flowgraph declares no `[radio]`
+/// section, or when the head has no SDR block to dispatch to — which is how a
+/// null head isolates the software cost of a swap from the hardware's.
+///
+/// Returned by [`swap_timed`](FlowgraphController::swap_timed); `swap` keeps
+/// its original signature and discards them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SwapTimings {
+    /// Reading and parsing the incoming TOML for its `[radio]` section, before
+    /// any of the steps below. Note that `build_read_toml` reads the same file
+    /// a second time — the two are reported apart so the duplication is
+    /// visible rather than hidden inside one figure.
+    pub read_toml: f64,
+    pub disconnect: f64,
+    pub retune_radio: Option<f64>,
+    pub park_selectors: f64,
+    /// `dlopen` of any plugin `.so` this flow needs that is not already
+    /// resident. Near-free once a flow has been built once, which is why the
+    /// benchmark discards warmup swaps.
+    pub load_plugins: f64,
+    pub build_read_toml: f64,
+    pub build_create_blocks: f64,
+    pub build_connect: f64,
+    pub build_bridge_ports: f64,
+    /// Handing the constructed flowgraph to the runtime: spawning it and
+    /// waiting for every block to initialise.
+    pub start_runtime: f64,
+    pub reconnect: f64,
+    pub terminate_spawn: f64,
+    pub unpark_selectors: f64,
+    /// Rollup of the four `build_*` steps and `start_runtime`, measured around
+    /// the whole phase — so it also carries the bookkeeping between them.
+    /// Reported for continuity with the coarser breakdown; it is a sum, not a
+    /// step, and must not be charted alongside its own parts.
+    pub build_and_start: f64,
+    pub total: f64,
+}
+
+impl SwapTimings {
+    /// Leaf step names in the order they run, for a CSV header. Disjoint: no
+    /// step here contains another, so they can be charted on one axis. The
+    /// rollups `build_and_start` and `total` are deliberately not among them.
+    pub const STEPS: [&'static str; 13] = [
+        "read_toml", "disconnect", "retune_radio", "park_selectors",
+        "load_plugins", "build_read_toml", "build_create_blocks",
+        "build_connect", "build_bridge_ports", "start_runtime", "reconnect",
+        "terminate_spawn", "unpark_selectors",
+    ];
+
+    /// The per-step figures in `STEPS` order. A step that did not run is -1,
+    /// which keeps the row rectangular without pretending it took no time.
+    pub fn as_row(&self) -> [f64; 13] {
+        [
+            self.read_toml,
+            self.disconnect,
+            self.retune_radio.unwrap_or(-1.0),
+            self.park_selectors,
+            self.load_plugins,
+            self.build_read_toml,
+            self.build_create_blocks,
+            self.build_connect,
+            self.build_bridge_ports,
+            self.start_runtime,
+            self.reconnect,
+            self.terminate_spawn,
+            self.unpark_selectors,
+        ]
+    }
+}
+
 pub struct FlowgraphController {
     registry: PluginRegistry,
     channels: HashMap<String, SharedBuf>,
@@ -875,6 +966,12 @@ pub struct FlowgraphController {
     /// so the retune happens at hardware speed (10–50 µs) instead of
     /// waiting for the SeifySource block to service its message queue
     /// (which can be milliseconds when `streamer.read` is blocking).
+    /// Whether `swap` narrates its steps on stdout. On by default, so every
+    /// existing binary keeps the running commentary it was written against. A
+    /// benchmark that swaps thousands of times turns it off: the printing is
+    /// slower than several of the steps it reports and would be measuring
+    /// stdout rather than the swap.
+    swap_verbose: bool,
     fast_freq_setter: Option<Arc<dyn Fn(f64) + Send + Sync>>,
     /// Same as `fast_freq_setter` but for gain. Independent of freq: either
     /// can be set without the other.
@@ -921,9 +1018,18 @@ impl FlowgraphController {
             last_applied_freq_hz: None,
             last_applied_gain_db: None,
             last_applied_bandwidth_hz: None,
+            swap_verbose: true,
             fast_freq_setter: None,
             fast_gain_setter: None,
         }
+    }
+
+    /// Silence (or restore) `swap`'s per-step commentary on stdout.
+    ///
+    /// The step timings are still measured and still returned by
+    /// [`swap_timed`](Self::swap_timed) — only the printing stops.
+    pub fn set_swap_verbose(&mut self, verbose: bool) {
+        self.swap_verbose = verbose;
     }
 
     /// Register a fast-path frequency setter. When set, retunes bypass the
@@ -1335,20 +1441,43 @@ impl FlowgraphController {
         new_toml: &str,
         rt_handle: &RuntimeHandle,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.swap_timed(fg_idx, new_toml, rt_handle).await.map(|_| ())
+    }
+
+    /// [`swap`](Self::swap), returning what each step cost.
+    ///
+    /// Same work, same order, same failure handling — the only difference is
+    /// that the figures it would otherwise only print come back as a
+    /// [`SwapTimings`], so a caller can log or aggregate them.
+    pub async fn swap_timed(
+        &mut self,
+        fg_idx: usize,
+        new_toml: &str,
+        rt_handle: &RuntimeHandle,
+    ) -> Result<SwapTimings, Box<dyn std::error::Error + Send + Sync>> {
         use std::time::Instant;
 
         let t_swap = Instant::now();
+        let mut timings = SwapTimings::default();
+        let verbose = self.swap_verbose;
 
         let state = self.swap_states.get(&fg_idx)
             .ok_or_else(|| format!("unknown swappable fg/{fg_idx}/"))?;
         let prev_toml = state.current_toml.clone();
 
         // Parse new TOML once at the top so we have [radio] for the early
-        // retune and [[blocks]] for plugin loading.
+        // retune and [[blocks]] for plugin loading. `build_flowgraph_full`
+        // reads it again in step 4 — both reads are timed separately so the
+        // duplication shows up as a number rather than staying invisible.
+        let t_step = Instant::now();
         let content = std::fs::read_to_string(new_toml)
             .map_err(|e| format!("cannot read '{new_toml}': {e}"))?;
         let def: FlowgraphDef = toml::from_str(&content)
             .map_err(|e| format!("invalid TOML '{new_toml}': {e}"))?;
+        timings.read_toml = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] -read_toml:        {:.3} ms", timings.read_toml);
+        }
 
         // Make-before-break, with nothing kept from the swap window. The old
         // flowgraph is never terminated on the critical path — it is detached
@@ -1391,12 +1520,19 @@ impl FlowgraphController {
         for g in &self.swap_states.get(&fg_idx).unwrap().source_gates {
             g.store(false, Ordering::Relaxed);
         }
-        println!("    [swap] 0-disconnect:      {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        timings.disconnect = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] 0-disconnect:      {:.3} ms", timings.disconnect);
+        }
 
         if let Some(rsec) = def.radio.as_ref() {
             let t_step = Instant::now();
             self.apply_radio_demand(rsec).await?;
-            println!("    [swap] 1-retune_radio:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+            let ms = t_step.elapsed().as_secs_f64() * 1000.0;
+            timings.retune_radio = Some(ms);
+            if verbose {
+                println!("    [swap] 1-retune_radio:    {ms:.3} ms");
+            }
         }
 
         // 2. Park selectors connected to this FG (if any)
@@ -1418,7 +1554,10 @@ impl FlowgraphController {
             handle.callback(sel.block_id, "output_index", Pmt::U32(0)).await
                 .map_err(|e| format!("park selector: {e}"))?;
         }
-        println!("    [swap] 2-park_selectors:  {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        timings.park_selectors = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] 2-park_selectors:  {:.3} ms", timings.park_selectors);
+        }
 
         // 3. Load new plugins if needed
         let t_step = Instant::now();
@@ -1426,16 +1565,25 @@ impl FlowgraphController {
             self.registry.ensure_loaded(&block.plugin)
                 .map_err(|e| format!("swap fg/{fg_idx}/: {e}"))?;
         }
-        println!("    [swap] 3-load_plugins:    {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        timings.load_plugins = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] 3-load_plugins:    {:.3} ms", timings.load_plugins);
+        }
 
         // 4. Build & start the new FG (the old one is still alive, detached).
         let t_step = Instant::now();
         let old_handle;
         match self.build_flowgraph_full(fg_idx, new_toml) {
             Ok(built) => {
+                timings.build_read_toml = built.timings.read_toml;
+                timings.build_create_blocks = built.timings.create_blocks;
+                timings.build_connect = built.timings.connect;
+                timings.build_bridge_ports = built.timings.bridge_ports;
                 let source_gates = built.source_gates;
+                let t_start = Instant::now();
                 match rt_handle.start(built.fg).await {
                     Ok(handle) => {
+                        timings.start_runtime = t_start.elapsed().as_secs_f64() * 1000.0;
                         let state = self.swap_states.get_mut(&fg_idx).unwrap();
                         old_handle = std::mem::replace(&mut state.handle, handle);
                         state.current_toml = new_toml.to_string();
@@ -1452,7 +1600,19 @@ impl FlowgraphController {
                 return Err(format!("build fg/{fg_idx}/ failed ({e}), restored '{prev_toml}'").into());
             }
         }
-        println!("    [swap] 4-build_and_start: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        timings.build_and_start = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!(
+                "    [swap] 4-build_and_start: {:.3} ms  (toml {:.3} | blocks {:.3} | \
+                 connect {:.3} | bridges {:.3} | start {:.3})",
+                timings.build_and_start,
+                timings.build_read_toml,
+                timings.build_create_blocks,
+                timings.build_connect,
+                timings.build_bridge_ports,
+                timings.start_runtime,
+            );
+        }
 
         // 5. Clear whatever slipped in, then reconnect the head. From here the
         //    new FG owns the stream, and it starts on live IQ. The clear is
@@ -1469,7 +1629,10 @@ impl FlowgraphController {
                 g.store(true, Ordering::Relaxed);
             }
         }
-        println!("    [swap] 5-reconnect:       {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        timings.reconnect = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] 5-reconnect:       {:.3} ms", timings.reconnect);
+        }
 
         // 6. Terminate the old FG off the critical path. Its sources are
         //    detached, so however long this takes it cannot touch the stream.
@@ -1486,7 +1649,10 @@ impl FlowgraphController {
                 );
             }
         });
-        println!("    [swap] 6-terminate_spawn: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        timings.terminate_spawn = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] 6-terminate_spawn: {:.3} ms", timings.terminate_spawn);
+        }
 
         // 7. Unpark selectors
         let t_step = Instant::now();
@@ -1496,11 +1662,17 @@ impl FlowgraphController {
             handle.callback(sel.block_id, "output_index", Pmt::U32(1)).await
                 .map_err(|e| format!("unpark selector: {e}"))?;
         }
-        println!("    [swap] 7-unpark_selectors: {:.3} ms", t_step.elapsed().as_secs_f64() * 1000.0);
+        timings.unpark_selectors = t_step.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] 7-unpark_selectors: {:.3} ms", timings.unpark_selectors);
+        }
 
-        println!("    [swap] total:             {:.3} ms", t_swap.elapsed().as_secs_f64() * 1000.0);
+        timings.total = t_swap.elapsed().as_secs_f64() * 1000.0;
+        if verbose {
+            println!("    [swap] total:             {:.3} ms", timings.total);
+        }
 
-        Ok(())
+        Ok(timings)
     }
 
     async fn restore_and_unpark(
@@ -1566,10 +1738,15 @@ impl FlowgraphController {
         fg_idx: usize,
         toml_path: &str,
     ) -> Result<BuiltFlowgraph, Box<dyn std::error::Error + Send + Sync>> {
+        use std::time::Instant;
+        let mut timings = BuildTimings::default();
+
+        let t_step = Instant::now();
         let content = std::fs::read_to_string(toml_path)
             .map_err(|e| format!("cannot read '{toml_path}': {e}"))?;
         let def: FlowgraphDef = toml::from_str(&content)
             .map_err(|e| format!("invalid TOML in '{toml_path}': {e}"))?;
+        timings.read_toml = t_step.elapsed().as_secs_f64() * 1000.0;
 
         let mut fg = Flowgraph::new();
         let mut block_ids: HashMap<String, BlockId> = HashMap::new();
@@ -1578,6 +1755,7 @@ impl FlowgraphController {
         let mut source_gates: Vec<bridge::Gate> = Vec::new();
 
         // 1. Build all user-declared blocks
+        let t_step = Instant::now();
         for block in &def.blocks {
             let config = self.parse_block_config(block)?;
             let plugin = self.registry.get(&block.plugin);
@@ -1585,7 +1763,10 @@ impl FlowgraphController {
             block_ids.insert(block.id.clone(), id);
         }
 
+        timings.create_blocks = t_step.elapsed().as_secs_f64() * 1000.0;
+
         // 2. Make all user-declared connections
+        let t_step = Instant::now();
         for conn in &def.connections {
             let (src_block, src_port) = conn.src.split_once('.')
                 .ok_or_else(|| format!("invalid src '{}', expected 'block.port'", conn.src))?;
@@ -1632,7 +1813,10 @@ impl FlowgraphController {
             }
         }
 
+        timings.connect = t_step.elapsed().as_secs_f64() * 1000.0;
+
         // 3. Auto-inject bridge blocks for each port.
+        let t_step = Instant::now();
         //    The SharedBuf already carries the correct element type — no need
         //    to re-read stream_type from the port definition here.
         for port in &def.ports {
@@ -1678,7 +1862,9 @@ impl FlowgraphController {
             }
         }
 
-        Ok(BuiltFlowgraph { fg, block_ids, ports: def.ports, source_gates })
+        timings.bridge_ports = t_step.elapsed().as_secs_f64() * 1000.0;
+
+        Ok(BuiltFlowgraph { fg, block_ids, ports: def.ports, source_gates, timings })
     }
 
     fn parse_block_config(

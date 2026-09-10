@@ -44,6 +44,12 @@ name = "retune_matrix"
 [[bin]]
 name = "retune_matrix_brf"
 
+# Measures what quick tune costs *on the air* rather than what the call costs:
+# transmits a tone on TX2, records it on RX1, and swaps both ends at a scheduled
+# sample timestamp so the outage can be read straight out of the IQ.
+[[bin]]
+name = "quicktune_swap_iq"
+
 # Answers "can this board do quick tune, and how fast": times set_frequency
 # vs schedule_retune vs a recalled quick-tune profile, side by side.
 [[bin]]

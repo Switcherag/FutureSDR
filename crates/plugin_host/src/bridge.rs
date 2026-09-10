@@ -47,11 +47,27 @@ impl NamedMessagePipe {
 // Item-count capacity for each type.
 const CAP_U8:  usize =   32_768; // 32 KiB × 1 byte
 const CAP_F32: usize =    8_192; // 32 KiB / 4 bytes
-const CAP_C32: usize = 4_194_304; // 32 MiB / 8 bytes, gives more headroom for swap-time stalls
+// 256 KiB / 8 bytes = 8.2 ms of IQ at 4 MSps.
+//
+// Was 4_194_304 (32 MiB, 1.05 s at 4 MSps), sized for "headroom for swap-time
+// stalls" — but the sink's `connected` gate already discards everything
+// arriving during a swap, so that headroom was never needed for swapping. What
+// a capacity this large does buy is drift: the decoder can fall a second behind
+// real time and stay there, because nothing forces it back.
+//
+// Overflow drops the OLDEST samples, so a smaller cap is a latency clamp: it
+// bounds how stale the stream reaching the PHY can be. 8.2 ms still holds
+// roughly five to eight frames (a 39-byte HaLow frame is ~0.8 ms, a 46-byte
+// Zigbee frame ~1.5 ms), so a single frame can never be split by an overflow.
+//
+// Lower it further to clamp harder — 16_384 is 4.1 ms — but watch for
+// "bridge BridgeSinkC32: dropped N items" in the log: once that appears the
+// clamp is cutting into live signal, not just stale backlog.
+const CAP_C32: usize = 32_768;
 
 /// Idle backoff when a bridge block has nothing to do — long enough not to
 /// spin, short enough not to add meaningful latency at 4 MSps.
-const IDLE: std::time::Duration = std::time::Duration::from_micros(50);
+const IDLE: std::time::Duration = std::time::Duration::from_micros(10);
 
 // ── Gates ────────────────────────────────────────────────────────────
 // Two independent switches let the controller take a flowgraph off the shared

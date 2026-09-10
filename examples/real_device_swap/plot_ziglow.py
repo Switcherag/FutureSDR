@@ -20,8 +20,16 @@ The two PHYs are bucketed differently because they carry different stamps:
     one before it. That holds exactly as long as the capture alternates, which
     the script checks and reports.
 
+Several captures can be given and are overlaid: hue carries the PHY, line style
+carries the capture, so a SoapySDR run and a quick-tune run of the same sweep
+can be read against each other directly.
+
+The sweep is recovered from the data, not from flags — the Zigbee stamp names
+its own step and IFS — so a capture with 16 steps of 10 ms and one with 149
+steps of 1 ms both plot correctly with no arguments.
+
 Usage:
-    python3 plot_ziglow.py [csv] [--out plot.png] [--frames-per-step 100]
+    python3 plot_ziglow.py [csv ...] [--out plot.png] [--frames-per-step 100]
 
 Defaults to ./ziglow_swap.csv and an interactive window.
 """
@@ -38,6 +46,9 @@ import matplotlib.pyplot as plt
 # distinguishing the two curves.
 COLORS = {"Z": "#d13b30", "H": "#1f6fd0"}
 NAMES = {"Z": "Zigbee 2.4 GHz", "H": "HaLow 919 MHz"}
+# Line style carries the capture; hue stays with the PHY so the same radio
+# reads the same colour in every overlay.
+STYLES = ["-", (0, (5, 2)), (0, (1, 1.6))]
 CRITICAL = "#d03b3b"
 MUTED = "#898781"
 GRID = "#e1e0d9"
@@ -93,37 +104,62 @@ def summarise(received, ifs_ms, per_phy):
     return out
 
 
-def plot(data, per_phy, title, out):
-    fig, ax = plt.subplots(figsize=(10.5, 6.4), layout="constrained")
+def plot(captures, per_phy, title, out):
+    """`captures` is `[(label, {phy: [(ifs, per, rx, sent), ...]}), ...]`."""
+    fig, ax = plt.subplots(figsize=(11, 6.6), layout="constrained")
     fig.patch.set_facecolor("#fcfcfb")
     ax.set_facecolor("#fcfcfb")
 
-    for phy in sorted(data):
-        series = data[phy]
-        ax.plot(
-            [d[0] for d in series],
-            [d[1] for d in series],
-            color=COLORS.get(phy, MUTED),
-            linewidth=2,
-            marker="o",
-            markersize=5,
-            markeredgecolor="#fcfcfb",
-            markeredgewidth=0.6,
-            label=NAMES.get(phy, phy),
-        )
+    all_ifs = [d[0] for _, data in captures for s_ in data.values() for d in s_]
+    coincident = []
+    for slot, (label, data) in enumerate(captures):
+        style = STYLES[slot % len(STYLES)]
+        # Strict alternation forces both PHYs to the same count at every step:
+        # a HaLow frame can only be received after a Zigbee one and vice versa.
+        # When that happens the curves are identical and one hides the other,
+        # so draw the first as a wide halo and say so rather than shipping a
+        # plot that looks like a single PHY was measured.
+        vals = [tuple(d[1] for d in series) for series in data.values()]
+        same = len(vals) > 1 and len(set(vals)) == 1
+        if same:
+            coincident.append(label)
+        for k, phy in enumerate(sorted(data)):
+            series = data[phy]
+            halo = same and k == 0
+            ax.plot(
+                [d[0] for d in series],
+                [d[1] for d in series],
+                color=COLORS.get(phy, MUTED),
+                linewidth=6 if halo else 2,
+                alpha=0.4 if halo else 1.0,
+                linestyle="-" if halo else style,
+                marker=None if halo or len(series) >= 40 else "o",
+                markersize=5,
+                markeredgecolor="#fcfcfb",
+                markeredgewidth=0.6,
+                label=f"{NAMES.get(phy, phy)} — {label}" if len(captures) > 1
+                      else NAMES.get(phy, phy),
+            )
 
     floor = 100.0 / per_phy  # one frame in per_phy — the measurement resolution
     ax.axhline(floor, color=CRITICAL, linewidth=1, linestyle="--", alpha=0.7)
     ax.annotate(
         f"measurement floor — 1 frame in {per_phy}",
-        xy=(max(d[0] for s in data.values() for d in s), floor),
-        xytext=(4, 4), textcoords="offset points", color=CRITICAL, fontsize=9,
+        xy=(max(all_ifs), floor), xytext=(4, 4),
+        textcoords="offset points", color=CRITICAL, fontsize=9,
     )
+
+    # A sweep spanning more than a decade crams everything interesting into the
+    # left edge on a linear axis, so switch to log when it does.
+    if max(all_ifs) / max(min(all_ifs), 1e-9) > 10:
+        ax.set_xscale("log")
+        ax.set_xticks([2, 5, 10, 20, 50, 100, 150])
+        ax.get_xaxis().set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
 
     ax.set_xlabel("transmit IFS (ms) — sweep runs right to left", color=MUTED)
     ax.set_ylabel("packet error rate (%)", color=MUTED)
     ax.set_title(title, color=INK, loc="left", fontsize=13)
-    ax.grid(True, color=GRID, linewidth=0.8)
+    ax.grid(True, which="both", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.tick_params(colors=MUTED)
     ax.set_ylim(-2, 102)
@@ -132,6 +168,14 @@ def plot(data, per_phy, title, out):
         spine.set_color("#c3c2b7")
     ax.invert_xaxis()  # sweep order: slowest first
     ax.legend(frameon=False, labelcolor=MUTED, loc="upper left")
+    if coincident:
+        ax.annotate(
+            "the two PHY curves coincide exactly: strict alternation means a frame "
+            "on one\nPHY can only follow a frame on the other, so their counts are "
+            "locked together",
+            xy=(0.5, -0.135), xycoords="axes fraction", ha="center", va="top",
+            color=MUTED, fontsize=9,
+        )
 
     if out:
         fig.savefig(out, dpi=150)
@@ -142,34 +186,47 @@ def plot(data, per_phy, title, out):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("csv", nargs="?", type=Path, default=Path("ziglow_swap.csv"))
+    p.add_argument("csv", nargs="*", type=Path,
+                   help="one or more ziglow captures; several are overlaid")
+    p.add_argument("--labels", help="comma-separated legend labels, one per CSV")
     p.add_argument("--out", type=Path, help="save instead of opening a window")
     p.add_argument("--frames-per-step", type=int, default=100,
                    help="frames sent at each IFS step, both PHYs together (default 100)")
     args = p.parse_args()
 
-    if not args.csv.exists():
-        sys.exit(f"missing {args.csv} — run `ziglow_swap` first")
+    paths = args.csv or [Path("ziglow_swap.csv")]
+    for path in paths:
+        if not path.exists():
+            sys.exit(f"missing {path} — run `ziglow_swap` first")
+    labels = args.labels.split(",") if args.labels else [p.stem for p in paths]
+    if len(labels) != len(paths):
+        sys.exit(f"{len(labels)} labels for {len(paths)} files")
 
-    received, ifs_ms, note = load(args.csv)
     per_phy = args.frames_per_step // 2  # the sweep alternates, so half each
-    data = summarise(received, ifs_ms, per_phy)
+    captures = []
+    for path, label in zip(paths, labels):
+        received, ifs_ms, note = load(path)
+        data = summarise(received, ifs_ms, per_phy)
+        captures.append((label, data))
 
-    print(f"== {args.csv.name}: {note}")
-    print(f"   {len(ifs_ms)} IFS steps, {per_phy} frames per PHY per step")
-    print(f"\n{'IFS ms':>7}" + "".join(f"{NAMES[p].split()[0]:>16}" for p in sorted(data)))
-    for i, ifs in enumerate(sorted(ifs_ms.values(), reverse=True)):
-        cells = "".join(
-            f"{data[p][i][2]:>6}/{data[p][i][3]:<3} {data[p][i][1]:5.1f}%"
-            for p in sorted(data)
-        )
-        print(f"{ifs:7.0f}{cells}")
-    for phy in sorted(data):
-        rx = sum(d[2] for d in data[phy])
-        sent = sum(d[3] for d in data[phy])
-        print(f"   {NAMES[phy]}: {rx}/{sent} → overall PER {100 * (1 - rx / sent):.1f}%")
+        vals = [tuple(d[1] for d in series) for series in data.values()]
+        print(f"== {path.name}: {note}"
+              + ("  [PHY curves identical — locked by alternation]"
+                 if len(vals) > 1 and len(set(vals)) == 1 else ""))
+        print(f"   {len(ifs_ms)} IFS steps, {per_phy} frames per PHY per step")
+        for phy in sorted(data):
+            rx = sum(d[2] for d in data[phy])
+            sent = sum(d[3] for d in data[phy])
+            # First step whose PER clears the floor, i.e. where it breaks down.
+            knee = next((d[0] for d in data[phy] if d[1] > 100.0 / per_phy), None)
+            print(f"   {NAMES[phy]}: {rx}/{sent} → overall PER "
+                  f"{100 * (1 - rx / sent):.1f}%"
+                  + (f", first loss at {knee:.0f} ms" if knee else ", no loss at any step"))
 
-    plot(data, per_phy, f"{args.csv.stem} — packet error rate vs transmit IFS", args.out)
+    title = (f"{paths[0].stem} — packet error rate vs transmit IFS"
+             if len(paths) == 1
+             else "packet error rate vs transmit IFS")
+    plot(captures, per_phy, title, args.out)
 
 
 if __name__ == "__main__":

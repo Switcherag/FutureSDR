@@ -781,6 +781,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut rx_idx: u64 = 0;
         let mut swap_total_ms: f64 = 0.0;
         let mut swap_count: u64 = 0;
+        /// Messages on the tap port that were not frames — see the guard below.
+        let mut non_frame: u64 = 0;
         let t0 = Instant::now();
 
         // Silence is otherwise ambiguous — no signal, no samples and a dead
@@ -839,10 +841,34 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
                 tap = tap_rx.next() => {
                     let Some((_name, pmt)) = tap else { break };
+                    // Only a Blob is a frame. The MAC posts `rftap` solely when
+                    // the CRC checks out and the payload exceeds two bytes, so
+                    // every real frame is at least 15 bytes; anything else on
+                    // this port is flowgraph bookkeeping, not a reception.
+                    // Recording it produced a row of -1s roughly 0.39 ms after
+                    // each swap — 40% of all rows in one capture — which looked
+                    // like a decoder fault and was not one.
+                    if !matches!(pmt, Pmt::Blob(_)) {
+                        non_frame += 1;
+                        if non_frame <= 3 {
+                            println!("[tap] ignoring non-blob pmt: {pmt:?}");
+                        }
+                        continue;
+                    }
                     frame_event = "rx";
                     if let Pmt::Blob(blob) = &pmt {
                         if let Some(d) = parse_dsn(blob) {
                             dsn = d as i64;
+                        }
+                        if non_frame < 6 && parse_payload(blob).is_none() {
+                            non_frame += 1;
+                            let f = strip_rftap(blob);
+                            let hex: String = blob.iter().take(24)
+                                .map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+                            println!(
+                                "[tap] unparsed blob: {} B (stripped {} B) | {hex}",
+                                blob.len(), f.len(),
+                            );
                         }
                         if let Some((step, run, tag, wait_us, ts)) = parse_payload(blob) {
                             payload_row = Some((
@@ -885,7 +911,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             if rx_idx % 100 == 0 {
                 println!(
-                    "  {rx_idx} frames, mean swap {:.3} ms, {} quick-tune misses, {} overruns",
+                    "  {rx_idx} frames, mean swap {:.3} ms, {} quick-tune misses, \
+                     {} overruns, {non_frame} non-frame tap messages",
                     swap_total_ms / swap_count as f64,
                     registry.misses.load(Ordering::Relaxed),
                     overruns.load(Ordering::Relaxed),

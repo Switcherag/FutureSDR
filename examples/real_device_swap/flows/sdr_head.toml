@@ -1,4 +1,16 @@
-# Radio head — RX-only frontend: SeifySource → FirResampler → bridge.
+# Radio head — RX-only frontend: SeifySource → bridge.
+#
+# The SDR is tuned natively to 4 MSps rather than taking 20 MSps off the wire
+# and decimating 1:5. Every flow that uses this head asks for 4 MSps, so the
+# resampler was only ever undoing an oversample nobody wanted.
+#
+# It also matters for detection. Sampling at 20 MSps opens the analog filter to
+# 20 MHz of 902-928, and wlan_ah's v6 SyncShort scores
+# |MA96(x.conj(x_delayed))| / MA128(|x|^2) — which is 0.75 for a real STF and
+# *also* 0.75 for any continuous carrier, since a CW tone self-correlates
+# perfectly at every lag. No threshold separates the two, so every strong
+# in-band carrier is a false preamble. Tuning natively at 4 MSps lets the
+# device's analog filter reject them before they reach the correlator.
 #
 # Declares the SDR-side flowgraph (the "head") so a frontend can introspect
 # what it can do, and so the runtime knows *which block* services each demand
@@ -18,9 +30,11 @@
 [head]
 name            = "default"
 direction       = "rx"
-capabilities    = ["retune", "gain", "resample"]
+capabilities    = ["retune", "gain"]
 sdr_block       = "sdr"            # responds to "freq" + "gain"
-resampler_block = "resampler"      # absorbs sample_rate_hz demands
+# No resampler_block: with none declared, sample_rate_hz demands resolve
+# against sdr_block. The rate is fixed when the head starts (it is not applied
+# at swap time), so every flow sharing this head must want 4 MSps.
 output_port     = "out"            # feeds protocol flowgraphs
 
 # Concrete hardware specs (device_args, sample-rate, gain) live inside
@@ -31,22 +45,11 @@ output_port     = "out"            # feeds protocol flowgraphs
 [[blocks]]
 id = "sdr"
 plugin = "seify_source_plugin"
-config = ["", 2.405e9, 20e6, 10.0]
+config = ["", 919.0e6, 4e6, 0.0]  # native 4 MSps — no decimation stage
 config_type = "(String, f64, f64, f64)"
-
-[[blocks]]
-id = "resampler"
-plugin = "fir_resampler_plugin"
-config = [1, 5]                    # 20 MSps off the wire, decimated 1:5 to the
-                                   # 4 MSps every protocol here demands
-config_type = "(usize, usize)"
-
-[[connections]]
-src = "sdr.outputs[0]"
-dst = "resampler.input"
 
 [[ports]]
 id = "out"
 direction = "out"
-src = "resampler.output"
+src = "sdr.outputs[0]"
 type = "c32"

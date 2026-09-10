@@ -1,0 +1,40 @@
+% Requires \usepackage{booktabs}
+\begin{table}[!t]
+  \renewcommand{\arraystretch}{1.2}
+  \caption{Retune Latency by Method and Hop Type}
+  \label{tab:retune-latency}
+  \centering
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    & \multicolumn{2}{c}{In-band} & & \\
+    \cmidrule(lr){2-3}
+    Method & 802.11ah & 802.15.4 & Cross-band & Ratio \\
+    \midrule
+    Host tuning            & 10.11 (0.13) & 10.08 (0.18) & 111.63 (0.73) & 11.1$\times$ \\
+    FPGA tuning            &  5.95 (0.14) &  5.91 (0.13) &  26.88 (0.16) &  4.5$\times$ \\
+    Quick tune, 8 profiles &  0.30 (0.03) &  0.30 (0.04) &   0.29 (0.03) &  1.0$\times$ \\
+    Quick tune, 16 profiles &  1.18 (0.04) &  1.18 (0.03) &   1.13 (0.20) &  1.0$\times$ \\
+    \bottomrule
+  \end{tabular}
+  \par\vspace{2pt}
+  \parbox{\linewidth}{\footnotesize Mean (standard deviation) in ms. Ratio is
+  cross-band over in-band, i.e.\ the price of changing band. Hops to the
+  already-tuned channel are excluded: they are not retunes and cost about a
+  third of one. Measurements per cell: 650 / 240 / 832 for the tuning rows and
+  36 / 36 / 96 and 168 / 168 / 384 for the quick-tune rows, the latter pooled
+  over three independent runs.
+
+  Host and FPGA tuning differ only in where the tuning algorithm executes; the
+  FPGA path removes host round-trips and is selected with the
+  \texttt{BLADERF\_DEFAULT\_TUNING\_MODE} environment variable, requiring no
+  change to the application. Quick tune instead recalls a stored RF front-end
+  profile, performing no tuning computation at all, which is why its cost is
+  independent of hop type: changing band becomes as cheap as staying in one.
+  The two quick-tune rows differ only in how many profiles are registered.
+  Latency is flat up to 8 profiles and flat again from 16 onward, with 64
+  profiles costing no more than 16; the mechanism behind the threshold was not
+  identified. Profiles are allocated once per channel and are never recycled,
+  roughly 250 allocations exhausting the device, so they must be captured at
+  setup rather than per retune.}
+\end{table}

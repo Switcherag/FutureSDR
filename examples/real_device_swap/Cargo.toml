@@ -45,6 +45,36 @@ name = "zigbee_swap_quicktune"
 path = "src/zigbee_swap_quicktune.rs"
 required-features = ["quicktune"]
 
+# Swap-latency benchmark on a null head: the same zigbee_rxA <-> halow_rxA swap
+# the dual-PHY binaries perform, but fed by a NullSource and with no sdr_block
+# to retune, so what it times is the software cost of the swap alone.
+[[bin]]
+name = "softswap_latency"
+path = "src/softswap_latency.rs"
+
+# ziglow_swap driven by libbladeRF quick tune: every swap is cross-band, which
+# is the case quick tune exists for (111.6 ms host / 26.9 ms FPGA / 0.3 ms).
+[[bin]]
+name = "ziglow_swap_quicktune"
+path = "src/ziglow_swap_quicktune.rs"
+required-features = ["quicktune"]
+
+# Step 1 of the replay pipeline: a bare SeifySource -> Head -> FileSink capture
+# of one standard at a time, at the 4 MSps every flow in `flows/` demands. No
+# plugins and no controller in the path — the output is an unmodified cf32
+# baseband recording that a single frame gets cut out of by hand.
+[[bin]]
+name = "record_iq"
+path = "src/record_iq.rs"
+
+# Replays a recorded alternating-PHY IQ file through the same per-frame swap
+# as `ziglow_swap`, with no radio at all: samples are fed from a cf32 file on
+# the wall clock and the controller's freq/gain setters are no-ops, so what is
+# measured is the software swap alone. Stimulus is byte-identical run to run.
+[[bin]]
+name = "ziglow_replay"
+path = "src/ziglow_replay.rs"
+
 [[bin]]
 name = "phy_per"
 path = "src/phy_per.rs"

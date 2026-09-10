@@ -1,0 +1,2 @@
+cargo::rustc-check-cfg=cfg(RUSTC_IS_NIGHTLY)
+cargo:rustc-cfg=RUSTC_IS_NIGHTLY

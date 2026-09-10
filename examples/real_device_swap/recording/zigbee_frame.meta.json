@@ -1,0 +1,17 @@
+{
+  "phy": "zigbee",
+  "format": "cf32",
+  "sample_rate_hz": 4000000.0,
+  "center_freq_hz": 2425000000,
+  "samples": 5640,
+  "duration_us": 1410.0,
+  "cut_from": "zigbee_raw.cf32",
+  "cut_range": [
+    193480,
+    199120
+  ],
+  "cut_time_s": [
+    0.04837,
+    0.04978
+  ]
+}

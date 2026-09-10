@@ -1,0 +1,51 @@
+%% Requires \usepackage{booktabs}
+%%
+%% Same-PHY swap cost, null head (no radio), measured on this machine with
+%% softswap_latency --flow-z <A> --flow-h <B>, 1000 swaps per pair.
+%%
+%%   softswap_latency --swaps 1000 \
+%%       --flow-z flows/zigbee_rxA.toml --flow-h flows/zigbee_rxB.toml
+%%   softswap_latency --swaps 1000 \
+%%       --flow-z flows/halowv6A.toml   --flow-h flows/halowv6B.toml
+%%
+%% WHERE THE EXISTING ROWS COME FROM. The 0.797/0.398 pair is not a null-head
+%% measurement at all -- it is the `swap_ms` column of the recorded real-radio
+%% same-PHY captures:
+%%
+%%   zigbee_swapfinal.csv    (zigbee_rxA <-> rxB)  0.390 (0.078)   n=93741
+%%   halow_swapv6mcs0.csv    (halowv6A <-> B)      0.744 (0.180)   n=93842
+%%   halow_swapv6mcs6.csv    (halowv6A <-> B)      0.750 (0.170)   n=93864
+%%   halow_swapv6mcs6try2.csv                      0.767 (0.185)   n=93600
+%%
+%% The standard deviations pin it down: 0.176 against 0.170-0.185, and 0.079
+%% against 0.078.
+%%
+%% THE TWO SETS ARE NOT COMPARABLE. Building the same flows on this machine
+%% today costs about 2.1-2.6x what those captures recorded:
+%%
+%%                        recorded      today (null head)   ratio
+%%   zigbee A <-> B         0.390            0.826          2.12x
+%%   halow  A <-> B         0.744-0.767      1.936          2.53x
+%%
+%% and that gap reproduces across runs (0.826 then 0.821 for zigbee), so it is
+%% not transient load. Machine state (i7-13850HX, powersave governor, load
+%% average ~3-4) or a change in the swap path since the captures were taken
+%% would both produce this; it has not been isolated. Quote one set or the
+%% other, not a mixture.
+\captionof{table}{Measured PHY swap time in ms using CPU timestamp
+    (mean ($\sigma$)). Same-PHY swaps, 1000 consecutive samples per pair,
+    measured from line 1 to line 12 of Algorithm~\ref{alg:swap} on a null head
+    with no radio in the loop.}
+  \label{tab:softswap-samephy}
+  \footnotesize
+  \setlength{\tabcolsep}{6pt}
+  \begin{tabular}{lrr}
+    \toprule
+    Swap & Mean & $\sigma$ \\
+    \midrule
+    802.15.4 $\rightarrow$ 802.15.4 & 0.826 & 0.102 \\
+    802.11ah $\rightarrow$ 802.11ah & 1.936 & 0.281 \\
+    \midrule
+    802.15.4 $\leftrightarrow$ 802.11ah (cross-PHY) & 1.378 & 0.541 \\
+    \bottomrule
+  \end{tabular}

@@ -19,7 +19,7 @@ use libloading::{Library, Symbol};
 
 pub use plugin_api::{AbiFingerPrintFn, BlockFactory, CreateBlockFactoryFn};
 pub use config_value::{ConfigValue, FromConfigValue, parse_typed_config};
-pub use flowgraph_controller::{FlowgraphController, PluginRegistry};
+pub use flowgraph_controller::{BuildTimings, FlowgraphController, PluginRegistry, SwapTimings};
 pub use radio_controller::{RadioController, RadioOutputBuf};
 
 /// Returns the default directory where plugin `.so` files are located.

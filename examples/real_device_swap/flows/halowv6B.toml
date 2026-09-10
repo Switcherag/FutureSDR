@@ -1,0 +1,220 @@
+# WLAN 802.11ah RX v6 — 4 MSps streaming chain, 11a-derived blocks
+#
+#   head@4 MSps -> SyncShort -> SyncLong -> Fft(128) -> FrameEqualizer -> Decoder
+#
+# v6 is `examples/wlan`'s 11a receiver moved onto the S1G standard: the
+# threshold-and-plateau STF detector, the LTF matched-filter correlator with
+# its two-peak CFO estimate, and the Sync1/Sync2/Signal/Copy equalizer state
+# machine, all retimed for a 128-point FFT at 4 MSps with 52 data subcarriers
+# and a two-symbol SIG-A validated by CRC-4.
+#
+# Unlike wlan_ah_rx.toml there is no local 2:1 resampler — the head stays at
+# 4 MSps and every block runs at that rate.
+#
+# SIZING MATTERS. The STF autocorrelation windows below are v6's, not the
+# top-level wlan_ah ones:
+#
+#   delay        = Tu/4 = 32     (wlan_ah_rx.toml uses 16, a 2 MSps value)
+#   complex_avg  = 3*Tu/4 = 96
+#   float_avg    = Tu = 128
+#
+# Both windows scale together, so the correlation plateau keeps 11a's height
+# and SyncShort's internal 0.56 threshold carries over unchanged. Feeding it
+# the wlan_ah_rx.toml windows (16/48/64) will not lock.
+
+[radio]
+frequency_hz   = 919.0e6   # S1G channel 34, 2 MHz
+sample_rate_hz = 4e6       # 2 MHz RF at 2x oversampling
+gain_db        = 0.0
+
+[[ports]]
+id = "in"
+direction = "in"
+dst = "passthrough.input"
+type = "c32"
+from = "head"
+
+# Output to the network tail FG (length-prefixed u8 stream).
+[[ports]]
+id = "frames"
+direction = "out"
+src = "to_tail.output"
+type = "u8"
+to = "tail"
+
+# ── Blocks ──────────────────────────────────────────────────────────
+
+# Fan-out point for the three receive paths. A flow cannot branch from a
+# block's *input*, so the head feeds this and everything else hangs off
+# its output. Pure pass-through, so the chain matches the one measured by
+# rx_csv exactly.
+#
+# Delay(0) is State::Skip(0) -- a true identity, and Delay<Complex32> is
+# already instantiated in libfuturesdr.so (a Copy<Complex32> plugin will
+# not load; the dylib only carries the Copy<u8> monomorphisation).
+#
+# Deliberately NOT wlan_dc_offset_plugin. Its estimator is a one-pole IIR
+# with ratio 1e-5, i.e. a 100,000-sample (25 ms at 4 MSps) time constant,
+# and it resets on every flowgraph rebuild. Under per-frame swapping it
+# is rebuilt every few ms and never converges, so it removes nothing --
+# it only adds a block to the path. The head now tunes natively at
+# 4 MSps, so the analog filter rejects the out-of-band carriers this was
+# meant to catch.
+#
+# NOTE: there is no DC-offset correction in this flow. SyncShort's metric
+# is |MA_96(x.conj(x_delayed))| / MA_128(|x|^2); a pure DC term gives
+# 96/128 = 0.75, above the 0.56 threshold, so a large enough DC spike can
+# self-trigger the detector. Measured fine on the bladeRF at gain 10.
+[[blocks]]
+id = "passthrough"
+plugin = "delay_complex_plugin"
+config = 0
+config_type = "isize"
+
+[[blocks]]
+id = "delay"
+plugin = "delay_complex_plugin"
+config = 32
+config_type = "isize"
+
+[[blocks]]
+id = "c2m"
+plugin = "complex_to_mag2_plugin"
+
+[[blocks]]
+id = "float_avg"
+plugin = "moving_average_f32_plugin"
+config = 128
+config_type = "usize"
+
+[[blocks]]
+id = "mc"
+plugin = "mult_conj_plugin"
+
+[[blocks]]
+id = "complex_avg"
+plugin = "moving_average_complex_plugin"
+config = 96
+config_type = "usize"
+
+[[blocks]]
+id = "div_mag"
+plugin = "divide_mag_plugin"
+
+[[blocks]]
+id = "sync_short"
+plugin = "wlan_ah_v6_sync_short_plugin"
+
+[[blocks]]
+id = "sync_long"
+plugin = "wlan_ah_v6_sync_long_plugin"
+
+[[blocks]]
+id = "fft"
+plugin = "fft_complex_plugin"
+config = [128, false, false, 1.0]
+config_type = "(usize, bool, bool, Option<f32>)"
+
+[[blocks]]
+id = "frame_eq"
+plugin = "wlan_ah_v6_frame_equalizer_plugin"
+
+[[blocks]]
+id = "decoder"
+plugin = "wlan_ah_decoder_plugin"
+
+[[blocks]]
+id = "udp_rx"
+plugin = "blob_to_udp_plugin"
+config = "127.0.0.1:55555"
+
+# Forward each RFtap-encapsulated frame to the network tail FG as a
+# length-prefixed byte stream, so every PHY shares one network egress.
+[[blocks]]
+id = "to_tail"
+plugin = "blob_to_lp_stream_plugin"
+
+# ── Stream connections ──────────────────────────────────────────────
+
+# passthrough fans out to the delay, the power path and the correlation path.
+[[connections]]
+src = "passthrough.output"
+dst = "delay.input"
+
+[[connections]]
+src = "passthrough.output"
+dst = "c2m.input"
+
+[[connections]]
+src = "passthrough.output"
+dst = "mc.in0"
+
+[[connections]]
+src = "delay.output"
+dst = "sync_short.in_sig"
+
+[[connections]]
+src = "delay.output"
+dst = "mc.in1"
+
+# Power path: |x|^2 -> MA(128) -> divide_mag.in1
+[[connections]]
+src = "c2m.output"
+dst = "float_avg.input"
+
+[[connections]]
+src = "float_avg.output"
+dst = "div_mag.in1"
+
+# Correlation path: x * conj(x delayed) -> MA(96)
+[[connections]]
+src = "mc.output"
+dst = "complex_avg.input"
+
+[[connections]]
+src = "complex_avg.output"
+dst = "sync_short.in_abs"
+
+[[connections]]
+src = "complex_avg.output"
+dst = "div_mag.in0"
+
+[[connections]]
+src = "div_mag.output"
+dst = "sync_short.in_cor"
+
+# Sync -> FFT -> FrameEqualizer -> Decoder
+[[connections]]
+src = "sync_short.output"
+dst = "sync_long.input"
+
+[[connections]]
+src = "sync_long.output"
+dst = "fft.input"
+
+[[connections]]
+src = "fft.output"
+dst = "frame_eq.input"
+
+[[connections]]
+src = "frame_eq.output"
+dst = "decoder.input"
+
+# ── Message connections ─────────────────────────────────────────────
+
+[[connections]]
+src = "decoder.rx_frames"
+dst = "udp_rx.in"
+message = true
+
+# RFtap-encapsulated frames -> network tail (via length-prefixed u8 bridge).
+[[connections]]
+src = "decoder.rftap"
+dst = "to_tail.rx"
+message = true
+
+# ── Controller taps ─────────────────────────────────────────────────
+
+[[controller_taps]]
+src = "decoder.rx_frames"
+name = "wlan_ah_v6_frames"

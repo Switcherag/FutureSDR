@@ -36,6 +36,10 @@ Two conclusions:
 
 | file | capture |
 | --- | --- |
+| `quicktune_vs_profiles.png` | **recall latency vs. how many profiles are registered** — six retune maps (2, 4, 8, 16, 32, 64) on one colour scale, plus the medians. |
+| `libbladerf_quicktune_streaming.png` | **quick tune**, full 42x42, streaming. Flat 1.26 ms everywhere — the band structure is gone. |
+| `compare_fpga_vs_quicktune.png` | FPGA `set_frequency` vs quick tune, one colour scale. |
+| `compare_all_three.png` | host tuning, FPGA tuning and quick tune together (log scale — they span three decades). |
 | `compare_soapy_host_vs_fpga.png` | the headline — same binary, same driver, one env var. Full 42x42. |
 | `compare_soapy_vs_libbladerf.png` | Soapy vs direct libbladeRF at equal tuning mode: they agree. |
 | `compare_libbladerf_all.png` | all four libbladeRF captures on one colour scale. |
@@ -65,7 +69,85 @@ The streaming runs reported zero read failures in both modes. That is not proof
 no samples were dropped: without the `SC16_Q11_META` format libbladeRF cannot
 report overruns, and these bindings have the meta formats disabled.
 
-## Quick tune — measured, not predicted
+## Quick tune across the whole matrix
+
+`retune_matrix_brf --quick-tune` captures one profile per channel, then times
+every ordered pair as a recall. Full 42x42, streaming, FPGA tuning:
+
+| quadrant | median |
+| --- | --- |
+| Z->Z (in-band 2.4 GHz) | 1.248 ms |
+| H->H (in-band 900 MHz) | 1.248 ms |
+| Z->H (cross-band) | 1.260 ms |
+| H->Z (cross-band) | 1.268 ms |
+
+**The quadrants vanish.** Cross-band costs the same as in-band, and the cost is
+independent of how far the hop is — binned by channel-index distance, every
+bin lands at 1.24-1.26 ms. Compare that with `set_frequency`, where cross-band
+is 4x in-band in FPGA mode and 11x in host mode. Recalling a stored profile
+does no tuning arithmetic, so "how far" stops being a question.
+
+A no-op recall (from == to) costs 0.373 ms, which is the floor: one USB round
+trip to tell the RFIC to reload a profile it already has.
+
+### Two hard limits, both discovered the hard way
+
+**Profiles are finite and never recycled.** `bladerf_get_quick_tune` allocates
+a NIOS profile slot on every call. Capturing one per *pair* — the obvious way
+to write this sweep — dies partway through with
+
+    [ERROR] Reached maximum number of RX quick tune profiles.
+
+after roughly 250 captures. Capture once per channel and reuse; `n` captures,
+not `n^2`. As a bonus the sweep drops from 370 s for six rows to 21 s for all
+42, because parking no longer costs a `set_frequency`.
+
+**Recall slows sharply once too many profiles are registered**, and the reason
+is not established. Sweeping the count with synthesised frequencies
+(`--n-freqs`, constant band mix so only the count varies):
+
+| profiles | 2 | 4 | 8 | 16 | 32 | 64 |
+| --- | --- | --- | --- | --- | --- | --- |
+| recall (ms) | 0.31 | 0.42 | 0.38 | **1.26** | 1.26 | 1.26 |
+
+It is a step, not a slope: flat to 8, one jump, then flat again — 64 profiles
+cost no more than 16. `quicktune_vs_profiles.png` shows it as six maps; the
+maps beyond the step are uniformly slow **except for a white diagonal**, since
+recalling the channel already tuned stays fast (0.37 ms) no matter how many
+profiles exist. That is the clearest evidence for the residency story: cost
+tracks whether the target is loaded, not how many profiles are stored.
+
+An earlier bisection on truncated channel plans (`--max-channels`) put the step
+between 10 and 11:
+
+| live profiles | 2 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 16 | 42 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| recall (ms) | 0.27 | 0.34 | 0.38 | 0.38 | 0.37 | 0.37 | 0.41 | **1.19** | 1.22 | 1.27 | 1.26 |
+
+The step is between 10 and 11. An earlier draft of this file attributed it to
+the AD9361's 8 RFFE fastlock slots — `get_quick_tune` does return an
+`rffe_profile` that visibly cycles 0-7 and wraps while `nios_profile` keeps
+counting — but that wrap is at 8 and the latency step is at 11, so the two do
+not line up and that explanation is wrong. What is solid is the shape:
+
+| live profiles | recall |
+| --- | --- |
+| 2 (`quick_tune_probe`) | 0.273 ms |
+| 6 (`--stride 8`) | 0.388 ms |
+| 11 (`--stride 4`) | 1.203 ms |
+| 42 (full matrix) | 1.257 ms |
+
+A performance cliff, not a correctness one — recalls past the step still work,
+and even the slow side is 20x faster than FPGA `set_frequency`. But it is why
+`zigbee_swap_quicktune` registers only the four channels it uses instead of all
+29: a small working set stays on the 0.3 ms side.
+
+Caveat on the bisection: `--max-channels` truncates the list, so runs of 16 or
+fewer are all 802.15.4 channels, whereas the `--stride` runs mix both bands.
+Same-band and mixed-band runs agree either side of the step, so the step is not
+a band effect, but the two are not identical experiments.
+
+## Quick tune — first measurement
 
 `quick_tune_probe` captures one profile per band with `bladerf_get_quick_tune`,
 then recalls them with `bladerf_schedule_retune(RETUNE_NOW, freq, &profile)`.

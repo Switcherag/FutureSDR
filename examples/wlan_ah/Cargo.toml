@@ -36,6 +36,18 @@ path = "src/bin/rxv2.rs"
 name = "rx_v3"
 path = "src/bin/rx_v3.rs"
 
+[[bin]]
+name = "rxv4"
+path = "src/bin/rxv4.rs"
+
+[[bin]]
+name = "rxv5"
+path = "src/bin/rxv5.rs"
+
+[[bin]]
+name = "rx_csv"
+path = "src/bin/rx_csv.rs"
+
 [features]
 default = ["soapy"]
 aaronia_http = ["futuresdr/aaronia_http"]

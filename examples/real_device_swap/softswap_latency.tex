@@ -1,0 +1,32 @@
+% Requires \usepackage{booktabs}
+\begin{table}[t]
+  \centering
+  \small
+  \caption{Cost of each step of a PHY swap, measured on a null head so no radio retune is in the loop. All figures in ms, as mean and standard deviation over the swaps of that direction. Rows marked $\dagger$ are rollups of the rows above them and are not additional steps. Switching to 802.15.4 $n=150$, Switching to 802.11ah $n=150$.}
+  \label{tab:softswap-latency}
+  \begin{tabular}{lrrrr}
+    \toprule
+    & \multicolumn{2}{c}{Switching to 802.15.4} & \multicolumn{2}{c}{Switching to 802.11ah} \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-5}
+    Step & {Mean} & {$\sigma$} & {Mean} & {$\sigma$} \\
+    \midrule
+    Parse TOML (for \texttt{[radio]}) & 0.071 & 0.013 & 0.077 & 0.015 \\
+    Disconnect head & 0.002 & 0.001 & 0.002 & $<$0.001 \\
+    Retune radio & $<$0.001 & $<$0.001 & $<$0.001 & $<$0.001 \\
+    Park selectors & $<$0.001 & $<$0.001 & $<$0.001 & $<$0.001 \\
+    Load plugins (\texttt{dlopen}) & 0.001 & 0.001 & 0.001 & 0.001 \\
+    Re-parse TOML (to build from) & 0.046 & 0.009 & 0.052 & 0.009 \\
+    Create blocks & 0.020 & 0.003 & 0.074 & 0.025 \\
+    Wire connections & 0.051 & 0.013 & 0.036 & 0.007 \\
+    Inject bridge blocks & 0.027 & 0.009 & 0.024 & 0.007 \\
+    Start on runtime & 0.022 & 0.003 & 0.040 & 0.007 \\
+    Reconnect head & 0.003 & 0.003 & 0.003 & 0.003 \\
+    Detach old flowgraph & 0.027 & 0.008 & 0.028 & 0.006 \\
+    Unpark selectors & $<$0.001 & $<$0.001 & $<$0.001 & $<$0.001 \\
+    \midrule
+    Build and start$^\dagger$ & 0.169 & 0.032 & 0.229 & 0.042 \\
+    \midrule
+    Total$^\dagger$ & 0.274 & 0.047 & 0.342 & 0.056 \\
+    \bottomrule
+  \end{tabular}
+\end{table}

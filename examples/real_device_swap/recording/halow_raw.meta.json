@@ -1,0 +1,9 @@
+{
+  "phy": "halow",
+  "format": "cf32",
+  "center_freq_hz": 919000000,
+  "sample_rate_hz": 4000000,
+  "gain_db": 0,
+  "samples": 4000000,
+  "duration_s": 1
+}

@@ -1,0 +1,9 @@
+# The snapshot's binary payload is a local measurement artefact, not source.
+# Only MANIFEST.txt (sizes + sha256), sizes.tex and measure.sh are tracked;
+# re-create plugins/, runtime/ and bin/ by copying from target/release,
+# shared_libs/release and the rustup sysroot per the provenance block in
+# MANIFEST.txt, then run ./measure.sh.
+plugins/
+runtime/
+bin/
+mono/

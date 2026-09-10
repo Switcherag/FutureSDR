@@ -1,0 +1,25 @@
+[head]
+name         = "null"
+direction    = "rx"
+capabilities = []
+output_port  = "out"
+
+[[blocks]]
+id = "src"
+plugin = "null_source_c32_plugin"
+
+[[blocks]]
+id = "throttle"
+plugin = "throttle_c32_plugin"
+config = 4e6
+config_type = "f64"
+
+[[connections]]
+src = "src.output"
+dst = "throttle.input"
+
+[[ports]]
+id = "out"
+direction = "out"
+src = "throttle.output"
+type = "c32"

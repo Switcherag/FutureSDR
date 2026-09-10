@@ -41,6 +41,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use bladerf::sys::{bladerf_channel, bladerf_get_quick_tune, bladerf_quick_tune,
+                   bladerf_schedule_retune};
 use bladerf::{
     BladeRF, BladeRfAny, Channel, ChannelLayoutRx, ComplexI16, RxChannel, StreamConfig, TuningMode,
 };
@@ -78,15 +80,66 @@ struct Args {
     /// 4 gives a ~11x11 preview in a fraction of the time.
     #[arg(long, default_value_t = 1)]
     stride: usize,
+    /// Time a quick-tune profile recall instead of `set_frequency`.
+    ///
+    /// Every channel's profile is captured once up front, then every pair is
+    /// timed as a recall:
+    ///
+    ///   recall(from) -> settle              [untimed, parks the radio]
+    ///   recall(to)                          [TIMED]
+    ///
+    /// Capturing per pair instead is a trap: `bladerf_get_quick_tune`
+    /// allocates a NIOS profile slot on every call and never recycles them, so
+    /// it dies with "Reached maximum number of RX quick tune profiles" after
+    /// roughly 250 captures — a fraction of the 1764 pairs here. One capture
+    /// per channel keeps the count at `n`, and makes the sweep far faster
+    /// besides, since parking no longer costs a full `set_frequency`.
+    #[arg(long)]
+    quick_tune: bool,
+    /// Ignore the channel plans and sweep exactly N synthesised frequencies,
+    /// alternating between the two bands.
+    ///
+    /// The channel plans top out at 42, and the residency question is about the
+    /// *number* of live profiles rather than which channels they are. This
+    /// keeps the cross-band mix constant while N varies, so the only thing
+    /// changing between runs is the profile count.
+    #[arg(long)]
+    n_freqs: Option<usize>,
+    /// Keep only the first N channels, after `--stride`.
+    ///
+    /// Exists to locate the quick-tune residency cliff exactly: the AD9361
+    /// holds a fixed number of RFFE fastlock slots, and recalls beyond that
+    /// have to re-stage from NIOS memory first. Sweeping N across the boundary
+    /// measures where it is instead of assuming it.
+    #[arg(long)]
+    max_channels: Option<usize>,
     /// Output CSV path.
     #[arg(long, default_value = "retune_matrix_brf.csv")]
     csv: String,
 }
 
+/// `BLADERF_RETUNE_NOW` — a C macro, so bindgen does not emit it.
+const RETUNE_NOW: u64 = 0;
+
 /// A channel: plan label and centre frequency in Hz.
 struct Chan {
     label: String,
     hz: u64,
+}
+
+/// N frequencies alternating between the 900 MHz and 2.4 GHz bands, so every
+/// run has the same band mix regardless of how many profiles are live.
+fn synth_channels(n: usize) -> Vec<Chan> {
+    (0..n)
+        .map(|i| {
+            let k = (i / 2) as f64;
+            if i % 2 == 0 {
+                Chan { label: format!("H{i}"), hz: ((902.5 + 0.5 * k) * 1e6) as u64 }
+            } else {
+                Chan { label: format!("Z{i}"), hz: ((2405.0 + 2.0 * k) * 1e6) as u64 }
+            }
+        })
+        .collect()
 }
 
 /// Same two plans as `retune_matrix`, so the matrices line up cell for cell.
@@ -109,7 +162,13 @@ fn channels(stride: usize) -> Vec<Chan> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let chans = channels(args.stride);
+    let mut chans = match args.n_freqs {
+        Some(n) => synth_channels(n.max(2)),
+        None => channels(args.stride),
+    };
+    if let Some(k) = args.max_channels {
+        chans.truncate(k.max(2));
+    }
     let n = chans.len();
 
     let dev = Arc::new(BladeRfAny::open_first().context("cannot open bladeRF")?);
@@ -129,11 +188,12 @@ fn main() -> Result<()> {
     let mode = dev.get_tuning_mode().context("get_tuning_mode")?;
 
     println!(
-        "{} channels ({} pairs), sample rate {:.3} MSps, tuning {mode:?}, stream={}",
+        "{} channels ({} pairs), sample rate {:.3} MSps, tuning {mode:?}, stream={}, retune via {}",
         n,
         n * n,
         actual as f64 / 1e6,
-        args.stream
+        args.stream,
+        if args.quick_tune { "quick tune" } else { "set_frequency" }
     );
 
     // Optional RX stream, so retunes contend with reads exactly as they do in
@@ -173,19 +233,68 @@ fn main() -> Result<()> {
     writeln!(csv, "from_label,to_label,from_mhz,to_mhz,ms")?;
 
     let settle = Duration::from_millis(args.settle_ms);
+    let ptr = dev.get_device_ptr();
+    let ch_raw = Channel::Rx0 as bladerf_channel;
+
+    // One profile per channel, captured once. `get_quick_tune` requires the
+    // radio to already be on the frequency being captured.
+    let mut profiles: Vec<bladerf_quick_tune> = Vec::new();
+    if args.quick_tune {
+        let t_cap = Instant::now();
+        for c in &chans {
+            dev.set_frequency(Channel::Rx0, c.hz)?;
+            thread::sleep(settle);
+            // SAFETY: live device; `qt` is the full union type, so libbladeRF
+            // cannot write past it whichever arm it fills in.
+            let mut qt: bladerf_quick_tune = unsafe { std::mem::zeroed() };
+            let res = unsafe { bladerf_get_quick_tune(ptr, ch_raw, &mut qt) };
+            if res != 0 {
+                anyhow::bail!("get_quick_tune({}) failed: {res}", c.label);
+            }
+            profiles.push(qt);
+        }
+        println!(
+            "  captured {} quick-tune profiles in {:.1} s",
+            profiles.len(),
+            t_cap.elapsed().as_secs_f64()
+        );
+    }
+
     let t_start = Instant::now();
     for (i, from) in chans.iter().enumerate() {
-        for to in chans.iter() {
+        for (j, to) in chans.iter().enumerate() {
             let mut samples = Vec::with_capacity(args.repeat);
             for _ in 0..args.repeat {
-                // Park on `from` and let it settle, so the timed call always
-                // starts from the same known state.
-                dev.set_frequency(Channel::Rx0, from.hz)?;
-                thread::sleep(settle);
+                if args.quick_tune {
+                    // Park on `from` by recall, so the timed call always starts
+                    // from the same known state — and costs no extra profile.
+                    // SAFETY: live device, profiles captured from it above.
+                    unsafe {
+                        bladerf_schedule_retune(
+                            ptr, ch_raw, RETUNE_NOW, from.hz, &mut profiles[i],
+                        );
+                    }
+                    thread::sleep(settle);
 
-                let t = Instant::now();
-                dev.set_frequency(Channel::Rx0, to.hz)?;
-                samples.push(t.elapsed().as_secs_f64() * 1000.0);
+                    let t = Instant::now();
+                    // SAFETY: as above.
+                    let res = unsafe {
+                        bladerf_schedule_retune(ptr, ch_raw, RETUNE_NOW, to.hz, &mut profiles[j])
+                    };
+                    samples.push(t.elapsed().as_secs_f64() * 1000.0);
+                    if res != 0 {
+                        anyhow::bail!("quick tune {} -> {} failed: {res}", from.label, to.label);
+                    }
+                } else {
+                    // Park on `from` and let it settle, so the timed call always
+                    // starts from the same known state.
+                    dev.set_frequency(Channel::Rx0, from.hz)?;
+                    thread::sleep(settle);
+
+                    let t = Instant::now();
+                    dev.set_frequency(Channel::Rx0, to.hz)?;
+                    samples.push(t.elapsed().as_secs_f64() * 1000.0);
+                }
             }
             samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let ms = samples[samples.len() / 2];

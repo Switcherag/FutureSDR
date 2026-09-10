@@ -44,8 +44,8 @@ use plugin_host::{FlowgraphController, default_plugin_dir};
 /// device; matches `sdr_head.toml`'s `[[blocks]] id = "sdr"` config.
 const SDR_DEVICE_ARGS: &str = "";
 
-const FLOW_HALOW_A: &str = "flows/halow_rxA.toml";
-const FLOW_HALOW_B: &str = "flows/halow_rxB.toml";
+const FLOW_HALOW_A: &str = "flows/halowv6A.toml";
+const FLOW_HALOW_B: &str = "flows/halowv6B.toml";
 const HEAD_FLOW: &str = "flows/sdr_head.toml";
 /// `null_tail.toml`, not zigbee_swap's `network_tail.toml`: the real tail's
 /// TapNic needs an `sdrtap0` iface (CAP_NET_ADMIN) and its file sink needs
@@ -53,7 +53,7 @@ const HEAD_FLOW: &str = "flows/sdr_head.toml";
 /// terminates, and the bridge feeding it backs up until the SeifySource
 /// overflows. The null tail keeps the `to = "tail"` wiring and discards.
 const TAIL_FLOW: &str = "flows/null_tail.toml";
-const CSV_PATH: &str = "halow_swap.csv";
+const CSV_PATH: &str = "halow_swapv6.csv";
 
 /// If no tap frame arrives within this time after the last swap, swap anyway.
 /// Bounded so a missed channel does not stall the sweep forever.
@@ -239,7 +239,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
 
             let rx_t_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
+            
             // Swap to the other HaLow receiver immediately.
             let next = other(current);
             let t_swap = Instant::now();

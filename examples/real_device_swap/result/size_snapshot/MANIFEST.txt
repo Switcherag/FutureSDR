@@ -1,0 +1,74 @@
+size_snapshot — immutable copy of the .so / binaries measured for the
+plugin-footprint tables. Originals are NOT modified by measure.sh.
+generated: 2026-09-09T15:46:24+02:00
+
+PROVENANCE — all 31 plugins, libfuturesdr.so and the 4 host binaries come
+from one single target/release build (examples/real_device_swap/build.sh,
+2026-09-09), so every figure shares one feature unification and one ABI.
+libstd-cc476dd173638de7.so is the rustup nightly-2025-11-18 sysroot copy
+named in each plugin's NEEDED. libfuturesdr_macros.so is a proc-macro:
+compile-time only, never dlopen'd, excluded from every total.
+
+BUILD: cargo build --release — opt-level 3, codegen-units 1, lto off,
+debug = false, panic = unwind, -C prefer-dynamic. No DWARF is emitted, so
+strip -s reclaims only .symtab/.strtab.
+
+mono/  3 non-plugin control binaries <- target/mono/ (cargo build --profile
+       mono, i.e. release + lto = "fat", with RUSTFLAGS="-C prefer-dynamic=no").
+       Source: examples/monolithic_baseline. Same block chains as
+       flows/zigbee_rxA.toml and flows/halowv6A.toml, linked in statically:
+       no plugin_api, no dlopen, no libfuturesdr.so (checked with objdump -p).
+
+ALL SIZES ARE DEPLOYED SIZES: strip -s + objcopy --remove-section=.rustc.
+Neither step touches .dynsym, .gnu.hash or the rust_metadata_* fingerprint
+(all SHF_ALLOC), so the deployed tree dlopens and hot-swaps unchanged —
+checked against build.sh's ABI guard (49/49) and a 40-swap run.
+
+NOTE — libseify_sink_plugin.so was a 61.5 kB stub before this build.
+plugins/seify_sink_plugin/Cargo.toml declared default = [] (no device
+backend, so seify::Builder had no driver to monomorphise) and pinned
+futuresdr = { path = "../../", features = ["plugin","seify"] } instead of
+{ workspace = true }, bypassing the root ABI contract. Both were corrected.
+
+    deployed      PT_LOAD     as-built  file                                           sha256
+       97616        98301       194272  plugins/libblob_to_lp_stream_plugin.so         af5bfb64218e949e
+       97336        98301       147584  plugins/libblob_to_udp_plugin.so               3c4d51488aa5d7fa
+      100992       102397       202704  plugins/libclock_recovery_mm_plugin.so         9834f18cafc09017
+       99136        98309       194896  plugins/libcomplex_to_mag2_plugin.so           94abd5c40ae861b6
+      107824       106501       162008  plugins/libdelay_complex_plugin.so             3c0f55cf71260c16
+      102888       102405       209112  plugins/libdivide_mag_plugin.so                474a2a60369a5b9d
+     1091928      1089541      1280200  plugins/libfft_complex_plugin.so               75fdebc439f65283
+       95384        94213       192296  plugins/liblp_stream_to_blob_plugin.so         594b033ebfb8f491
+       82216        81925       164720  plugins/libmessage_file_sink_plugin.so         51ff956afe468a8f
+       99328        98309       198872  plugins/libmoving_average_complex_plugin.so    9130c84d5a2ff204
+       99216        98301       197912  plugins/libmoving_average_f32_plugin.so        d0dc6815ae463530
+       99376        98301       204744  plugins/libmult_conj_plugin.so                 3dc4f36d7b70834d
+       96472        94205       191208  plugins/libnetwork_extractor_plugin.so         c4ea0e48d67fd965
+      121488       122885       172640  plugins/libnull_sink_plugin.so                 d1f353b0e8c7c7de
+      162024       159741       245136  plugins/libseify_sink_plugin.so                ae345a927a59c49a
+      176472       176125       265976  plugins/libseify_source_plugin.so              3ac7f24ff8240177
+      113384       114877       286280  plugins/libtap_nic_plugin.so                   de8652349006d4b4
+       85200        86013       164440  plugins/libuniversal_mac_plugin.so             fc9206904f6b3b31
+      296296       295997       395832  plugins/libwlan_ah_decoder_plugin.so           c581a44812f0ecb8
+      308232       308285       411152  plugins/libwlan_ah_v6_frame_equalizer_plugin.so eaaa63b34cc53202
+      291920       291893       389800  plugins/libwlan_ah_v6_sync_long_plugin.so      724c9021e13eb0ef
+      294344       291893       393320  plugins/libwlan_ah_v6_sync_short_plugin.so     e5d999841658ea48
+      115104       114805       337776  plugins/libwlan_encoder_plugin.so              4f84ef3e4785362b
+      118088       118909       305144  plugins/libwlan_mac_plugin.so                  220ca66efa6c5603
+      106072       106501       287488  plugins/libwlan_mapper_plugin.so               602bce96567d103d
+      104920       106501       256040  plugins/libwlan_prefix_plugin.so               3d26a0473ec0bc3c
+       97184        98301       207136  plugins/libzigbee_decoder_plugin.so            49e54215df0af842
+       99560        98309       196008  plugins/libzigbee_demod_plugin.so              38737ee26d8ea9e1
+      102008       102397       215392  plugins/libzigbee_iq_delay_plugin.so           267b8980a97c6004
+      124168       123101       409976  plugins/libzigbee_mac_plugin.so                61e3193f7653050a
+      109184       110597       203712  plugins/libzigbee_modulator_plugin.so          6d7719120fc45065
+     2302000      2300416      3220288  runtime/libfuturesdr_macros.so                 c81dda9e171d7099
+     7042208      7051344     14290280  runtime/libfuturesdr.so                        4cc22630c7cbbd6e
+     1210160      1211244     13480592  runtime/libstd-cc476dd173638de7.so             a515df70bfce00ec
+     1282544      1282053      1570368  bin/halow_swap                                 567821524bb0ddda
+     1258752      1257477      1529000  bin/per_frame_swap                             3acbace1343a1e2b
+     1611200      1609808      1942552  bin/receiver                                   ae294ac43d5a82e9
+     1756816      1757396      2119120  bin/ziglow_swap_quicktune                      e627dac8d07fe365
+     5286536      5286524      6168176  mono/mono_both                                 1b7958e54920c0de
+     5170424      5171644      6031784  mono/mono_halow                                617a1f0f26b6781f
+     4006184      4004324      4721320  mono/mono_zigbee                               72771c52ec5ab637

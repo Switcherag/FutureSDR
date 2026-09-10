@@ -17,6 +17,12 @@ ECOSYSTEM=(
   real-device-swap-example
   seify_source_plugin fir_resampler_plugin
   zigbee_demod_plugin clock_recovery_mm_plugin zigbee_decoder_plugin zigbee_mac_plugin null_sink_plugin
+  # Head for softswap_latency: a c32 source of zeros, standing in for the SDR.
+  null_source_c32_plugin throttle_c32_plugin
+  # Head for ziglow_replay (flows/samples_head.toml): a recorded IQ file
+  # standing in for the SDR, throttled to its true rate by throttle_c32_plugin
+  # above. FileSource<Complex32>, which the u8 file_source_plugin cannot serve.
+  file_source_c32_plugin
   blob_to_udp_plugin
   wlan_ah_v2_stf_detector_plugin wlan_ah_v2_cfo_corrector_plugin wlan_ah_v2_sto_corrector_plugin
   wlan_ah_v2_channel_estimator_plugin wlan_ah_v2_sig_decoder_plugin wlan_ah_v2_data_demod_plugin
@@ -24,6 +30,25 @@ ECOSYSTEM=(
   network_extractor_plugin message_file_sink_plugin
   blob_to_lp_stream_plugin lp_stream_to_blob_plugin
   universal_mac_plugin tap_nic_plugin
+  # 802.11ah v6 receiver (flows/halowv6A|B.toml): the 11a-derived
+  # streaming chain plus the STF autocorrelation front end it needs.
+  complex_to_mag2_plugin
+  delay_complex_plugin
+  divide_mag_plugin
+  fft_complex_plugin
+  moving_average_complex_plugin
+  moving_average_f32_plugin
+  mult_conj_plugin
+  wlan_ah_v6_frame_equalizer_plugin
+  wlan_ah_v6_sync_long_plugin
+  wlan_ah_v6_sync_short_plugin
+  # TX chain — not used by any flow in flows/, but measured alongside the RX
+  # chains for the footprint table (result/size_snapshot/). Kept in ECOSYSTEM
+  # rather than built separately so they share this build's feature
+  # unification and ABI, per the rule below.
+  seify_sink_plugin
+  zigbee_modulator_plugin zigbee_iq_delay_plugin
+  wlan_mac_plugin wlan_encoder_plugin wlan_mapper_plugin wlan_prefix_plugin
 )
 
 PKG_ARGS=()

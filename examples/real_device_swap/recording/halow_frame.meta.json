@@ -1,0 +1,17 @@
+{
+  "phy": "halow",
+  "format": "cf32",
+  "sample_rate_hz": 4000000.0,
+  "center_freq_hz": 919000000,
+  "samples": 2920,
+  "duration_us": 730.0,
+  "cut_from": "halow_raw.cf32",
+  "cut_range": [
+    627920,
+    630840
+  ],
+  "cut_time_s": [
+    0.15698,
+    0.15771
+  ]
+}

@@ -8,10 +8,18 @@ crate-type = ["dylib"]
 
 [dependencies]
 plugin_api = { path = "../../crates/plugin_api" }
-futuresdr = { path = "../../", features = ["plugin", "seify"] }
+# `workspace = true` and NOT an inline feature list: the root
+# [workspace.dependencies] entry is the single ABI contract (plugin + seify +
+# soapy). Declaring features here re-resolves futuresdr with a different
+# feature set, which changes cargo's metadata hash and silently produces a
+# plugin that cannot interoperate with the deployed libfuturesdr.so.
+futuresdr = { workspace = true }
 
 [features]
-default = []
+# Mirrors seify_source_plugin: without a device backend the seify Builder has
+# no driver to monomorphise and the .so links to a ~12 kB stub.
+default = ["soapy"]
 soapy = ["futuresdr/soapy"]
 hackrf = ["futuresdr/hackrf"]
+rtlsdr = ["futuresdr/rtlsdr"]
 aaronia_http = ["futuresdr/aaronia_http"]

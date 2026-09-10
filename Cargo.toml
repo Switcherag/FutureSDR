@@ -47,6 +47,7 @@ members = [
     "examples/NIC_sim",
     "examples/halowv2",
     "examples/wlan_ah",
+    "examples/monolithic_baseline",
     "examples/dual_phy_handshake",
     "plugins/*",
 ]
@@ -60,9 +61,33 @@ exclude = [
 # Single source of truth for how every plugin (and every plugin-host
 # example) depends on futuresdr. The exact feature set here is baked
 # into futuresdr's StableCrateId, which is part of every exported
-# Rust-ABI symbol name. Keeping it identical across all members means
-# any plugin can be rebuilt in isolation and still resolve symbols
-# against an already-deployed libfuturesdr.so.
+# Rust-ABI symbol name.
+#
+# This does NOT make a plugin rebuildable on its own. `cargo build -p
+# <one_plugin>` re-resolves the dependency graph, which changes
+# futuresdr's metadata hash AND overwrites target/release/libfuturesdr.so
+# with the re-resolved build — invalidating every other plugin at once.
+# Measured: an isolated -p build moved the metadata from
+# ...fddb50cd2ffcfaf5 to ...8f91a432dc2ccf25.
+#
+# The cause is cargo's `-C metadata` for futuresdr, which depends on the
+# shape of the SELECTED PACKAGE SET, not on features. Measured, with
+# byte-identical `--cfg feature=` flags in all three:
+#
+#   full ecosystem (build.sh set)  -C metadata=db069c05e771ec5a
+#   -p <one_plugin>                -C metadata=d9d02faa90a3f2b5
+#   --workspace                    -C metadata=c04096d82f301e71
+#
+# So `--workspace` is no safer than `-p`. Two ways to rebuild one plugin
+# without disturbing the deployed libfuturesdr.so:
+#
+#   1. re-run examples/real_device_swap/build.sh  (canonical; 8.8 s,
+#      libfuturesdr.so md5 unchanged, ABI guard passing)
+#   2. cargo build --release -p <plugin> -p real-device-swap-example
+#      Including the example reproduces the ecosystem resolve exactly:
+#      futuresdr stays cached, libfuturesdr.so is not rewritten, and the
+#      fresh plugin has 0 unresolved futuresdr symbols. This is empirical
+#      — if the ECOSYSTEM list changes, re-verify or fall back to (1).
 #
 # RULES:
 #   * Members in the dlopen ecosystem MUST use `futuresdr.workspace = true`
@@ -233,6 +258,18 @@ criterion = { version = "0.7", features = ["html_reports"] }
 float-cmp = "0.10"
 rand = "0.9"
 vulkano-shaders = "0.35"
+
+[profile.mono]
+# Non-plugin control group only (examples/monolithic_baseline). Fat LTO across
+# the whole static graph, which the plugin build cannot do: there, futuresdr is
+# a dylib whose symbols are resolved by name at dlopen time, so nothing can be
+# inlined across that boundary or dropped as unreachable.
+inherits = "release"
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+debug = false
+panic = "unwind"
 
 [profile.release]
 codegen-units = 1

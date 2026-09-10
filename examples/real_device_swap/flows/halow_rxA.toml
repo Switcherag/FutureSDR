@@ -120,7 +120,7 @@ src = "data.output"
 dst = "decoder.input"
 
 [[connections]]
-src = "decoder.rx_frames"
+src = "decoder.rftap"
 dst = "udp_rx.in"
 message = true
 

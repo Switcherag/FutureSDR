@@ -1,0 +1,33 @@
+[package]
+name = "monolithic_baseline"
+version = "0.1.0"
+edition = "2021"
+
+# Non-plugin control group for the footprint table in
+# examples/real_device_swap/result/size_snapshot/.
+#
+# Each binary is the same receive chain as the corresponding flows/*.toml, but
+# built the way a plain FutureSDR application is: blocks linked straight in, no
+# plugin_api, no dlopen, no libfuturesdr.so. Built under [profile.mono] with
+# fat LTO and RUSTFLAGS="-C prefer-dynamic=no", which the plugin build cannot
+# use — cross-crate inlining into a dylib boundary that dlopen resolves by name
+# is exactly what the plugin system gives up.
+
+[dependencies]
+anyhow = "1.0"
+futuresdr = { path = "../..", features = ["seify", "soapy"] }
+num-complex = "0.4"
+wlan_ah = { path = "../wlan_ah" }
+zigbee = { path = "../zigbee" }
+
+[[bin]]
+name = "mono_zigbee"
+path = "src/bin/mono_zigbee.rs"
+
+[[bin]]
+name = "mono_halow"
+path = "src/bin/mono_halow.rs"
+
+[[bin]]
+name = "mono_both"
+path = "src/bin/mono_both.rs"
