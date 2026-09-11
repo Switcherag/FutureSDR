@@ -97,6 +97,11 @@ def main():
                          "before the swappable PHY flow. Not part of any IFS gap.")
     ap.add_argument("--noise-dbfs", type=float, default=None,
                     help="gap noise floor; passed through to gen_iq.py")
+    ap.add_argument("--noise-from", default=None, metavar="CF32",
+                    help="fill gaps with real recorded noise from this capture; "
+                         "passed through to gen_iq.py. Preferred over synthetic "
+                         "noise: at 1.0 ms IFS it measures 9 pct PER against 17 "
+                         "for digital silence and 31.7 for white gaussian.")
     ap.add_argument("--start-phy", choices=["H", "Z"], default="H")
     ap.add_argument("--pattern", default=None,
                     help="transmit pattern, passed to gen_iq.py. 'Z' or 'H' "
@@ -157,6 +162,8 @@ def main():
                "-o", iq, "--quiet"]
         if args.noise_dbfs is not None:
             gen += ["--noise-dbfs", str(args.noise_dbfs)]
+        if args.noise_from:
+            gen += ["--noise-from", os.path.abspath(args.noise_from)]
         if args.pattern:
             gen += ["--pattern", args.pattern]
         subprocess.run(gen, check=True)

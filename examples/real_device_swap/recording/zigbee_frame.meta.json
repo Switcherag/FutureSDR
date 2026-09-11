@@ -13,5 +13,7 @@
   "cut_time_s": [
     0.04837,
     0.04978
-  ]
+  ],
+  "theoretical_ppdu_us": 1344.0,
+  "ifs_residual_us": 66.0
 }

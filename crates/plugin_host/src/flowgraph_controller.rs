@@ -1512,11 +1512,27 @@ impl FlowgraphController {
             .filter(|c| c.to_fg == fg_idx)
             .map(|c| format!("{}:{}", c.to_fg, c.to_port))
             .collect();
-        for key in &feed_keys {
-            if let Some(g) = self.channel_gates.get(key) {
-                g.store(false, Ordering::Relaxed);
+        // PLUGIN_HOST_SWAP_BUFFER=1 keeps the head's sink writing into the
+        // deque across the swap and skips the clear at step 5, so nothing is
+        // thrown away: the samples that arrive mid-swap are simply delivered
+        // late, and the rebuilt flowgraph drains them faster than real time.
+        //
+        // The default (discard) is what a radio does to a receiver that has
+        // stopped listening, and it bounds latency. Buffering trades that for
+        // loss: at an IFS shorter than the swap it is the difference between
+        // eating the next frame's leading edge and merely delaying it. The
+        // deque holds 32768 items, ~8.2 ms at 4 MSps, against a worst-case
+        // swap of ~0.72 ms, so it cannot overflow here.
+        let buffer_across_swap = std::env::var("PLUGIN_HOST_SWAP_BUFFER").is_ok();
+        if !buffer_across_swap {
+            for key in &feed_keys {
+                if let Some(g) = self.channel_gates.get(key) {
+                    g.store(false, Ordering::Relaxed);
+                }
             }
         }
+        // The outgoing flowgraph's sources are detached either way -- a dying
+        // flowgraph must not race the incoming one for the same samples.
         for g in &self.swap_states.get(&fg_idx).unwrap().source_gates {
             g.store(false, Ordering::Relaxed);
         }
@@ -1621,12 +1637,14 @@ impl FlowgraphController {
         //    the deque after the disconnect; by now the sink has been in
         //    discard mode for the whole rebuild and cannot be writing.
         let t_step = Instant::now();
-        for key in &feed_keys {
-            if let Some(buf) = self.channels.get(key) {
-                buf.clear();
-            }
-            if let Some(g) = self.channel_gates.get(key) {
-                g.store(true, Ordering::Relaxed);
+        if !buffer_across_swap {
+            for key in &feed_keys {
+                if let Some(buf) = self.channels.get(key) {
+                    buf.clear();
+                }
+                if let Some(g) = self.channel_gates.get(key) {
+                    g.store(true, Ordering::Relaxed);
+                }
             }
         }
         timings.reconnect = t_step.elapsed().as_secs_f64() * 1000.0;
@@ -1642,7 +1660,7 @@ impl FlowgraphController {
             let t = Instant::now();
             if let Err(e) = futuresdr::async_io::block_on(doomed.terminate_and_wait()) {
                 eprintln!("[async terminate] fg failed to terminate: {e}");
-            } else if t.elapsed().as_millis() > 50 {
+            } else if t.elapsed().as_millis() > 50 || std::env::var("PLUGIN_HOST_TERM_DEBUG").is_ok() {
                 println!(
                     "        [async terminate] old fg gone after {:.3} ms (off critical path)",
                     t.elapsed().as_secs_f64() * 1000.0

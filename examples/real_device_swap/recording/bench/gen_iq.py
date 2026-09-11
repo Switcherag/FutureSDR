@@ -91,6 +91,15 @@ def main():
     ap.add_argument("--noise-dbfs", type=float, default=None,
                     help="fill gaps with complex noise at this level instead of "
                          "exact zeros; see the warning this prints when unset")
+    ap.add_argument("--noise-from", default=None, metavar="CF32",
+                    help="fill the gaps with REAL recorded noise sampled from the "
+                         "quiet parts of this capture, instead of zeros or "
+                         "synthetic Gaussian. This is the faithful option: white "
+                         "Gaussian has none of the receiver's filter roll-off, DC "
+                         "offset or spurs, and it is exactly the front-end shape "
+                         "that halowv6A's normalised |MA96|/MA128 detector sees "
+                         "between bursts. Measured floor of the raw captures is "
+                         "about -54 dBFS.")
     ap.add_argument("--seed", type=int, default=0, help="noise RNG seed")
     ap.add_argument("-o", "--out", required=True, help="output cf32 path")
     ap.add_argument("--quiet", action="store_true")
@@ -123,7 +132,27 @@ def main():
     # Total length: pads, every frame, and a gap after every frame but the last.
     total = n_lead + 2 * n_pad + sum(f.size for f in frames) + n_ifs * max(0, args.frames - 1)
 
-    if args.noise_dbfs is None:
+    if args.noise_from:
+        src = np.fromfile(args.noise_from, dtype=np.complex64)
+        if src.size == 0:
+            sys.exit(f"--noise-from {args.noise_from}: empty or not cf32")
+        # Quiet samples only: anything at or below the 40th percentile of power
+        # is between bursts. Taking the whole file would splice fragments of
+        # real frames into the gaps, which the receiver would then try to decode.
+        pw = np.abs(src) ** 2
+        quiet = src[pw <= np.percentile(pw, 40)]
+        if quiet.size < 1000:
+            sys.exit(f"--noise-from {args.noise_from}: too little quiet signal")
+        rng = np.random.default_rng(args.seed)
+        # Draw a random contiguous run per fill so the splice keeps the noise's
+        # own correlation structure rather than shuffling it into whiteness.
+        start = rng.integers(0, max(1, quiet.size - total % quiet.size))
+        out = np.resize(np.roll(quiet, -int(start)), total).astype(np.complex64)
+        if not args.quiet:
+            floor = 10 * np.log10(float((np.abs(quiet) ** 2).mean()) + 1e-30)
+            print(f"gaps filled with real noise from {os.path.basename(args.noise_from)} "
+                  f"({quiet.size} quiet samples, {floor:.1f} dBFS)", file=sys.stderr)
+    elif args.noise_dbfs is None:
         out = np.zeros(total, dtype=np.complex64)
         if not args.quiet:
             print("WARNING: gaps are exact zeros. halowv6A.toml's `div_mag` computes "

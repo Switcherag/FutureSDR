@@ -1,0 +1,61 @@
+# Replay head — a recorded IQ file standing in for the radio.
+#
+#   FileSourceC32(path) → Throttle(4 MSps) → out
+#
+# The file-fed sibling of `sdr_head.toml`, and structurally the same thing as
+# `null_head.toml`: a source, a throttle to put it on the wall clock, and one
+# c32 output port. Swapped in wherever a binary would otherwise `add_head`
+# the SDR, so a replay run uses the *same* four-flowgraph topology as
+# `ziglow_swap` / `halow_swap` —
+#
+#     head → <PHY flow, swapped per frame> → tail
+#
+# — rather than feeding the swappable directly through `connect_radio`. That
+# matters for what the numbers mean: the head's bridge, its `connected` gate
+# and the controller's handling of it across a swap are all part of what is
+# being measured, and a capture taken without them is not comparable with
+# `halow_swapv6*.csv`.
+#
+# THROTTLE IS LOAD-BEARING. It is what makes the file advance at 4 MSps, so
+# the gaps between frames take the wall-clock time the generator intended and
+# a swap either finishes inside one or does not. Without it the file is
+# consumed as fast as it can be read, every swap appears free, and every PER
+# comes out zero.
+#
+# `[head]` declares no `capabilities`, so the controller has nothing to retune
+# or set gain on: a `[radio]` frequency demand from a PHY flow resolves against
+# nothing and is a no-op. That is deliberate — this head is for measuring the
+# software swap with the radio taken out of the loop.
+#
+# The `config` path below is rewritten per IFS step by
+# `recording/bench/run_sweep.py`, which writes one of these next to each
+# generated IQ file.
+
+[head]
+name         = "samples"
+direction    = "rx"
+capabilities = []
+output_port  = "out"
+
+[[blocks]]
+id = "src"
+plugin = "file_source_c32_plugin"
+# (path, repeat). repeat = false so the file ends and the run terminates.
+config = ["/home/alakhdar/Projet 2/dyn/examples/real_device_swap/recording/bench/iq/ifs_003.900.cf32", false]
+config_type = "(String, bool)"
+
+[[blocks]]
+id = "throttle"
+plugin = "throttle_c32_plugin"
+config = 4e6
+config_type = "f64"
+
+[[connections]]
+src = "src.output"
+dst = "throttle.input"
+
+[[ports]]
+id = "out"
+direction = "out"
+src = "throttle.output"
+type = "c32"

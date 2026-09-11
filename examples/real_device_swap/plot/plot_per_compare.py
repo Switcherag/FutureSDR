@@ -128,10 +128,39 @@ OVERLAY_PHY = {"H": "802.11ah", "Z": "802.15.4"}
 # are identical and one would be drawn entirely on top of the other.
 OVERLAY_SPLIT = False
 
+# Set by --overlay-shift: `{name: milliseconds}` added to an overlay's IFS.
+#
+# The replayed reference frames are cropped recordings, so each file carries a
+# little noise either side of the PPDU. That padding sits INSIDE the frame, so
+# the real gap between two PPDUs is the labelled IFS plus the trailing residual
+# of one frame and the leading residual of the next — the x axis understates
+# the true spacing by a fixed amount. Measured against the theoretical PPDU
+# durations (802.15.4 PSDU 36 B = 1344 us; 802.11ah MCS0 PSDU 30 B = 680 us),
+# the residuals are 66 us for 802.15.4 and 50 us for 802.11ah.
+#
+# Shifting here rather than re-cutting the IQ keeps the stimulus byte-identical
+# to every sweep already run.
+OVERLAY_SHIFT = {}
+
+# Set by --overlay-halve: overlay names whose PER is divided by two.
+#
+# For a cross-PHY alternating sweep the receiver only swaps *after* a
+# successful decode, so a miss leaves it parked on the PHY that just spoke and
+# the next frame -- which belongs to the other PHY -- is lost as well. One
+# failure therefore costs two frames, and the raw rate is twice the failure
+# rate. Halving makes it comparable with a same-PHY sweep, where both flows
+# decode the same traffic and a miss costs exactly one frame.
+#
+# EXACT ONLY WHILE FAILURES ARE ISOLATED. Once losses run together -- the cross
+# curves saturate around 66% -- consecutive failures overlap, each costs fewer
+# than two frames, and halving over-corrects. Trustworthy above about 0.8 ms,
+# not below. The stored CSVs keep the raw counts; this is applied at plot time.
+OVERLAY_HALVE = set()
+
 # Set by --overlay-pool: collapse an overlay's PHYs into a single curve whether
 # or not they coincide. The auto-collapse below only fires on exact equality,
 # which a single frame's difference at one IFS step is enough to defeat.
-OVERLAY_POOL = False
+OVERLAY_POOL = set()
 
 SURFACE = "#fcfcfb"
 MUTED = "#898781"
@@ -917,7 +946,7 @@ def load_overlay(spec):
     # Averaging the two percentages would only agree with that when both PHYs
     # sent the same number of frames, and would quietly weight a short run the
     # same as a long one when they did not.
-    if OVERLAY_POOL:
+    if name in OVERLAY_POOL:
         rx_cols = [c for c in cols if c.startswith("rx_")]
         sent_cols = [c for c in cols if c.startswith("sent_")]
         pts = []
@@ -962,6 +991,11 @@ def load_overlay(spec):
             try:
                 per = float(val)
             except (TypeError, ValueError):
+                continue
+            # NaN means that PHY sent nothing at this step (a same-PHY sweep
+            # leaves one of the two columns empty). Plotting it would invent a
+            # series; dropping it leaves the real one with its own PHY colour.
+            if per != per:
                 continue
             by_phy[OVERLAY_PHY.get(code, code)].append((ifs, per))
 
@@ -1272,9 +1306,20 @@ def main():
                         "--overlay 'replay=../recording/bench/results/per_replay.csv'. "
                         "Repeatable. Accepts `ifs_ms,per_H_pct,per_Z_pct` or "
                         "`ifs_ms,phy,per_pct`.")
-    p.add_argument("--overlay-pool", action="store_true",
-                   help="collapse each overlay's PHYs into one curve, pooling "
-                        "the underlying counts where the file has them")
+    p.add_argument("--overlay-shift", action="append", default=[], metavar="NAME=MS",
+                   help="add MS milliseconds to this overlay's IFS, correcting for "
+                        "the noise padding inside each cropped reference frame. "
+                        "Repeatable.")
+    p.add_argument("--overlay-halve", action="append", default=[], metavar="NAME",
+                   help="divide this overlay's PER by two, for a cross-PHY sweep "
+                        "where one failure costs two frames (the receiver does "
+                        "not swap on a miss). Repeatable; NAME is the overlay's "
+                        "label. Exact only where losses are isolated.")
+    p.add_argument("--overlay-pool", action="append", default=[], metavar="NAME",
+                   help="collapse this overlay's PHYs into one curve, pooling the "
+                        "underlying counts. Repeatable; NAME is the overlay label. "
+                        "Pooling drops the PHY colour, so use it only on an "
+                        "overlay that really carries two PHYs.")
     p.add_argument("--overlay-split", action="store_true",
                    help="keep an overlay's PHY curves separate even when they "
                         "are identical (by default they are pooled into one)")
@@ -1302,7 +1347,10 @@ def main():
         sys.exit("--window must be at least 2 packets")
 
     traces, skipped = load_dir(args.csv_dir)
-    if not traces:
+    # An overlay is a finished curve in its own right, so a figure built only
+    # from overlays needs no captures at all — point --csv-dir at an empty
+    # directory and pass --overlay.
+    if not traces and not args.overlay:
         sys.exit(f"{args.csv_dir}: no capture had a usable packet index")
 
     # Shape is per file, not per trace, so a capture's two PHYs share a marker
@@ -1345,10 +1393,39 @@ def main():
                 sys.exit(f"{flag} wants STEM=VALUE, got {pair!r}")
             into[stem] = value
 
-    global OVERLAYS, OVERLAY_SPLIT, OVERLAY_POOL
+    global OVERLAYS, OVERLAY_SPLIT, OVERLAY_POOL, OVERLAY_HALVE, OVERLAY_SHIFT
+    OVERLAY_SHIFT = {}
+    for spec in args.overlay_shift:
+        n, _, v = spec.rpartition("=")
+        if not n:
+            sys.exit(f"--overlay-shift wants NAME=MS, got {spec!r}")
+        try:
+            OVERLAY_SHIFT[n] = float(v)
+        except ValueError:
+            sys.exit(f"--overlay-shift {spec!r}: {v!r} is not a number")
     OVERLAY_SPLIT = args.overlay_split
-    OVERLAY_POOL = args.overlay_pool
+    OVERLAY_POOL = set(args.overlay_pool)
+    OVERLAY_HALVE = set(args.overlay_halve)
     OVERLAYS = [load_overlay(spec) for spec in args.overlay]
+    known = {n for n, _ in OVERLAYS}
+    for flag, want in (("--overlay-halve", OVERLAY_HALVE), ("--overlay-pool", OVERLAY_POOL)):
+        if want - known:
+            sys.exit(f"{flag} names no such overlay: {', '.join(sorted(want - known))}")
+    OVERLAYS = [(n, [(phy, [(i, p / 2.0) for i, p in pts]) for phy, pts in series]
+                 if n in OVERLAY_HALVE else series)
+                for n, series in OVERLAYS]
+    if OVERLAY_SHIFT:
+        if set(OVERLAY_SHIFT) - known:
+            sys.exit("--overlay-shift names no such overlay: "
+                     f"{', '.join(sorted(set(OVERLAY_SHIFT) - known))}")
+        OVERLAYS = [(n, [(phy, [(i + OVERLAY_SHIFT.get(n, 0.0), p) for i, p in pts])
+                         for phy, pts in series]) for n, series in OVERLAYS]
+        for n, d in sorted(OVERLAY_SHIFT.items()):
+            print(f"overlay {n}: IFS shifted by {d*1000:+.0f} us "
+                  f"(noise padding inside the cropped reference frames)")
+    for n in sorted(OVERLAY_HALVE):
+        print(f"overlay {n}: PER halved (one failure costs two frames on a "
+              f"cross-PHY sweep); exact only where losses are isolated")
     for name, series_by_phy in OVERLAYS:
         for phy, pts in series_by_phy:
             print(f"overlay {name} {phy or '(both PHYs pooled)'}: {len(pts)} point(s), "

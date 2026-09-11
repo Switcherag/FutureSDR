@@ -138,6 +138,9 @@ where
         _m: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
+        // Read before the slices are borrowed: the deferral below must not
+        // stall at end-of-stream, where no further input can ever arrive.
+        let cor_finished = self.in_cor.finished();
         let in_sig = self.in_sig.slice();
         let in_abs = self.in_abs.slice();
         let in_cor = self.in_cor.slice();
@@ -166,6 +169,25 @@ where
                 }
                 State::Found => {
                     if in_cor[i] > THRESHOLD {
+                        // A `wifi_start` tag marks the first *copied* sample, and
+                        // that sample is written on the NEXT iteration. If the
+                        // input chunk ends right here, `produce(o)` is called with
+                        // the tag sitting at index `o` — one past the produced
+                        // range — and the runtime drops it. SyncLong then never
+                        // leaves `State::Broken` and discards the whole frame.
+                        //
+                        // So only commit the latch when this call can also copy
+                        // the sample the tag points at. Otherwise break without
+                        // consuming: state stays `Found`, and the next call sees
+                        // the same two above-threshold samples and latches then.
+                        //
+                        // The odds of landing on a chunk boundary are 1/chunk, so
+                        // this is invisible with the large chunks a warm flowgraph
+                        // sees and dominant under per-frame swapping, where the
+                        // rebuilt chain is fed in chunks of a few dozen samples.
+                        if i + 1 >= n_input && !cor_finished {
+                            break;
+                        }
                         let f_offset = -in_abs[i].arg() / STF_DELAY as f32;
                         self.state = State::Copy(0, f_offset, false);
                         tags.add_tag(o, Tag::NamedF32("wifi_start".to_string(), f_offset));
@@ -176,6 +198,10 @@ where
                 State::Copy(n_copied, f_offset, mut last_above_threshold) => {
                     if in_cor[i] > THRESHOLD {
                         if last_above_threshold && n_copied > MIN_GAP {
+                            // Same tag-at-the-chunk-boundary hazard as above.
+                            if i + 1 >= n_input && !cor_finished {
+                                break;
+                            }
                             let f_offset = -in_abs[i].arg() / STF_DELAY as f32;
                             self.state = State::Copy(0, f_offset, false);
                             tags.add_tag(o, Tag::NamedF32("wifi_start".to_string(), f_offset));
