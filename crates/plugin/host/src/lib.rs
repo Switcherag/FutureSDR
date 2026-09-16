@@ -27,6 +27,7 @@ pub use controller::Hold;
 pub use controller::ReplaceTimings;
 pub use controller::Replacement;
 pub use controller::Retired;
+pub use controller::Standby;
 pub use description::BlockDecl;
 pub use description::Description;
 pub use description::PortDecl;

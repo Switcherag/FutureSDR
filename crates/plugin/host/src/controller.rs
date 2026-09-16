@@ -12,6 +12,7 @@ use anyhow::bail;
 use futuresdr::futures::future::Either;
 use futuresdr::futures::future::select;
 use futuresdr::runtime::BlockId;
+use futuresdr::runtime::DefaultScheduler;
 use futuresdr::runtime::Flowgraph;
 use futuresdr::runtime::FlowgraphHandle;
 use futuresdr::runtime::FlowgraphTask;
@@ -38,16 +39,16 @@ use crate::items::ItemType;
 use crate::items::with_item_type;
 use crate::registry::Registry;
 
-/// What happens to the input of a flowgraph while it is being replaced.
+/// What happens, when a flowgraph is replaced, to the input items it has not
+/// taken yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hold {
-    /// Keep every item. The old flowgraph goes on consuming while the new one
-    /// starts; then the input moves over at one item. Nothing is lost or
+    /// The new flowgraph gets them. Until then the old flowgraph goes on
+    /// consuming; the input moves over at one item, so nothing is lost or
     /// delivered twice.
     Keep,
-    /// Drop what arrives during the replacement. The old flowgraph finishes
-    /// what it already took, its input ends once the new one is running, and
-    /// the new one starts on items that arrive after that.
+    /// They are dropped: the new flowgraph starts on items that arrive once
+    /// it has taken over.
     Discard,
 }
 
@@ -144,6 +145,79 @@ pub struct Replacement {
     pub timings: ReplaceTimings,
 }
 
+/// A running flowgraph, not linked yet, ready to become a flowgraph of the
+/// controller with [`Controller::commit`].
+///
+/// Its inputs deliver nothing and its outputs wait until it is committed;
+/// its blocks can be sent messages to set it up in the meantime. Dropped
+/// without being committed, it is stopped.
+pub struct Standby {
+    name: String,
+    managed: Option<Managed>,
+    scheduler: DefaultScheduler,
+    build: Duration,
+    start: Duration,
+}
+
+impl Standby {
+    /// Name it will run under.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Handle to the flowgraph, for messages.
+    pub fn handle(&self) -> FlowgraphHandle {
+        self.managed().handle.clone()
+    }
+
+    /// Its blocks.
+    pub fn blocks(&self) -> &Blocks {
+        &self.managed().blocks
+    }
+
+    /// Time spent building it (plugins, blocks, connections, bridges).
+    pub fn build_time(&self) -> Duration {
+        self.build
+    }
+
+    /// Time spent starting it.
+    pub fn start_time(&self) -> Duration {
+        self.start
+    }
+
+    fn managed(&self) -> &Managed {
+        self.managed
+            .as_ref()
+            .expect("a standby holds its flowgraph")
+    }
+}
+
+impl Drop for Standby {
+    fn drop(&mut self) {
+        let Some(managed) = self.managed.take() else {
+            return;
+        };
+        for (_, channel, generation) in &managed.outputs {
+            channel.withdraw_writer(*generation);
+        }
+        let Managed { handle, task, .. } = managed;
+        self.scheduler
+            .spawn(async move {
+                let _ = handle.stop().await;
+                let _ = task.await;
+            })
+            .detach();
+    }
+}
+
+impl std::fmt::Debug for Standby {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Standby")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
 struct Managed {
     handle: FlowgraphHandle,
     task: FlowgraphTask,
@@ -172,14 +246,24 @@ type PortKey = (String, String);
 ///
 /// Waiting on the runtime from a blocked thread means that thread has to
 /// be woken up, which after an idle period costs more than the replacement
-/// itself. For the fastest replacements, drive the controller from a task
-/// of its runtime with [`run`](Self::run):
+/// itself. Drive the controller from a task of its runtime with
+/// [`run`](Self::run) instead:
 ///
 /// ```ignore
 /// ctrl.run(|mut ctrl| async move {
 ///     ctrl.replace_async("receiver", rx_b, Hold::Keep).await?;
 ///     anyhow::Ok(())
 /// })?;
+/// ```
+///
+/// Most of a replacement is starting the new flowgraph. To switch in
+/// microseconds, start it ahead with [`prepare`](Self::prepare) and switch
+/// with [`commit`](Self::commit) when the time comes:
+///
+/// ```ignore
+/// let standby = ctrl.prepare("receiver", rx_b)?;
+/// // later
+/// let old = ctrl.commit(standby, Hold::Keep)?;
 /// ```
 pub struct Controller {
     runtime: Runtime,
@@ -392,21 +476,82 @@ impl Controller {
         ))
     }
 
+    /// Build and start `desc` on standby, to become flowgraph `name` when
+    /// [committed](Self::commit). If `name` is running, `desc` must be able
+    /// to replace it (see [`replace_async`](Self::replace_async)).
+    ///
+    /// Starting a flowgraph is the slow part of a replacement: with a
+    /// standby prepared in advance, the replacement itself takes
+    /// microseconds.
+    pub async fn prepare_async(&mut self, name: &str, desc: Description) -> Result<Standby> {
+        let t0 = Instant::now();
+        let what = if self.flowgraphs.contains_key(name) {
+            self.check_ports(name, |port| desc.port(port).map(|p| p.item))?;
+            format!("the replacement of '{name}'")
+        } else {
+            format!("flowgraph '{name}'")
+        };
+        let (fg, parts) = self
+            .assemble(name, &desc)
+            .with_context(|| format!("building {what}"))?;
+        let built = Instant::now();
+        let managed = start(self.runtime.handle(), fg, parts)
+            .await
+            .with_context(|| format!("starting {what}"))?;
+        Ok(Standby {
+            name: name.to_string(),
+            managed: Some(managed),
+            scheduler: self.runtime.scheduler().clone(),
+            build: built - t0,
+            start: built.elapsed(),
+        })
+    }
+
+    /// Blocking form of [`prepare_async`](Self::prepare_async).
+    pub fn prepare(&mut self, name: &str, desc: Description) -> Result<Standby> {
+        block_on(self.prepare_async(name, desc))
+    }
+
+    /// Link `standby` in place of the flowgraph running under its name, or
+    /// as a new flowgraph if none is. This takes microseconds and never
+    /// waits, so it can be called from anywhere.
+    ///
+    /// Returns the flowgraph it replaced, which finishes in the background.
+    /// `hold` decides what happens to the input items the replaced
+    /// flowgraph has not taken yet.
+    pub fn commit(&mut self, mut standby: Standby, hold: Hold) -> Result<Option<Retired>> {
+        let new = standby
+            .managed
+            .take()
+            .expect("a standby holds its flowgraph");
+        let name = std::mem::take(&mut standby.name);
+        if let Err(e) = self.check_standby(&name, &new) {
+            // Dropping the standby stops it.
+            standby.managed = Some(new);
+            return Err(e);
+        }
+        for (_, channel, generation) in &new.outputs {
+            channel.commit_writer(*generation);
+        }
+        let old = self.flowgraphs.remove(&name);
+        for (_, channel, generation) in &new.inputs {
+            match (hold, &old) {
+                (Hold::Discard, Some(_)) => channel.restart_reader(*generation),
+                _ => channel.set_reader(*generation),
+            }
+        }
+        let retired = old.map(|old| self.retire(&name, old));
+        self.flowgraphs.insert(name, new);
+        Ok(retired)
+    }
+
     /// Build and start `desc` as flowgraph `name`.
     pub async fn spawn_async(&mut self, name: &str, desc: Description) -> Result<()> {
         if self.flowgraphs.contains_key(name) {
             bail!("a flowgraph '{name}' is already running");
         }
-        let (fg, parts) = self
-            .assemble(name, &desc)
-            .with_context(|| format!("building flowgraph '{name}'"))?;
-        let managed = start(self.runtime.handle(), fg, parts)
-            .await
-            .with_context(|| format!("starting flowgraph '{name}'"))?;
-        for (_, channel, generation) in &managed.inputs {
-            channel.set_reader(*generation);
-        }
-        self.flowgraphs.insert(name.to_string(), managed);
+        let standby = self.prepare_async(name, desc).await?;
+        self.commit(standby, Hold::Keep)?;
         Ok(())
     }
 
@@ -416,12 +561,14 @@ impl Controller {
     }
 
     /// Replace the running flowgraph `name` with `desc`, without stopping
-    /// the flowgraphs linked to it.
+    /// the flowgraphs linked to it: [`prepare_async`](Self::prepare_async)
+    /// then [`commit`](Self::commit).
     ///
     /// The new flowgraph is started before the old one lets go of its links
     /// (make before break). Ports are matched by name: every input and output
     /// of the old flowgraph that is linked must exist in `desc` with the same
-    /// item type. `hold` decides what happens to input items in between.
+    /// item type. `hold` decides what happens to input items the old
+    /// flowgraph has not taken when the new one takes over.
     ///
     /// If this fails, or the future is dropped before it completes, the old
     /// flowgraph keeps its links.
@@ -432,34 +579,22 @@ impl Controller {
         hold: Hold,
     ) -> Result<Replacement> {
         let t0 = Instant::now();
-        self.check_ports(name, &desc)?;
-        let (fg, parts) = self
-            .assemble(name, &desc)
-            .with_context(|| format!("building the replacement of '{name}'"))?;
-        let built = Instant::now();
-
-        let paused = PausedInputs::pause(&self.flowgraphs[name].inputs, hold);
-        let new = start(self.runtime.handle(), fg, parts)
-            .await
-            .with_context(|| format!("starting the replacement of '{name}'"))?;
-        let started = Instant::now();
-
-        paused.hand_over();
-        for (_, channel, generation) in &new.inputs {
-            match hold {
-                Hold::Keep => channel.set_reader(*generation),
-                Hold::Discard => channel.restart_reader(*generation),
-            }
+        if !self.flowgraphs.contains_key(name) {
+            bail!("no flowgraph '{name}' is running");
         }
+        let standby = self.prepare_async(name, desc).await?;
+        let (build, start) = (standby.build, standby.start);
+        let switching = Instant::now();
+        let old = self
+            .commit(standby, hold)?
+            .expect("the replaced flowgraph was running");
         let switched = Instant::now();
-
-        let old = self.flowgraphs.insert(name.to_string(), new).unwrap();
         Ok(Replacement {
-            old: self.retire(name, old),
+            old,
             timings: ReplaceTimings {
-                build: built - t0,
-                start: started - built,
-                switch: switched - started,
+                build,
+                start,
+                switch: switched - switching,
                 total: switched - t0,
             },
         })
@@ -470,9 +605,9 @@ impl Controller {
         block_on(self.replace_async(name, desc, hold))
     }
 
-    /// Check that `desc` can replace flowgraph `name`: it has every linked
-    /// port, with the same item type.
-    fn check_ports(&self, name: &str, desc: &Description) -> Result<()> {
+    /// Check that a flowgraph with ports `item_of` can replace flowgraph
+    /// `name`: it has every linked port, with the same item type.
+    fn check_ports(&self, name: &str, item_of: impl Fn(&str) -> Option<ItemType>) -> Result<()> {
         let old = self
             .flowgraphs
             .get(name)
@@ -485,16 +620,42 @@ impl Controller {
             if !linked {
                 continue;
             }
-            match desc.port(&port.name) {
-                Some(new) if new.item == port.item => {}
-                Some(new) => bail!(
-                    "port '{}' carries {} in '{name}', {} in the replacement",
+            match item_of(&port.name) {
+                Some(item) if item == port.item => {}
+                Some(item) => bail!(
+                    "port '{}' carries {} in '{name}', {item} in the replacement",
                     port.name,
                     port.item,
-                    new.item
                 ),
                 None => bail!("the replacement of '{name}' has no port '{}'", port.name),
             }
+        }
+        Ok(())
+    }
+
+    /// Check that standby `new` can become flowgraph `name` now: links may
+    /// have changed since it was prepared.
+    fn check_standby(&self, name: &str, new: &Managed) -> Result<()> {
+        for (port, channel, _) in &new.inputs {
+            let Some(from) = self.links.get(&(name.to_string(), port.name.clone())) else {
+                continue;
+            };
+            match self.channels.get(from) {
+                Some(linked) if Arc::ptr_eq(linked, channel) => {}
+                _ => bail!(
+                    "input '{}' of '{name}' was linked after the standby was prepared",
+                    port.name
+                ),
+            }
+        }
+        if self.flowgraphs.contains_key(name) {
+            self.check_ports(name, |port| {
+                new.inputs
+                    .iter()
+                    .chain(&new.outputs)
+                    .find(|(p, _, _)| p.name == port)
+                    .map(|(p, _, _)| p.item)
+            })?;
         }
         Ok(())
     }
@@ -586,13 +747,12 @@ struct Assembled {
     outputs: Vec<(PortDecl, Arc<dyn Pipe>, u64)>,
 }
 
-/// Start an assembled flowgraph. Its output bridges are queued as writers
-/// first, so what they write before the caller finishes the switch is not
-/// taken for a stale writer's, and committed once it runs.
+/// Start an assembled flowgraph on standby: its output bridges wait until
+/// they are committed, and are withdrawn if starting fails or is abandoned.
 async fn start(runtime: RuntimeHandle, fg: Flowgraph, parts: Assembled) -> Result<Managed> {
-    let writers = QueuedWriters::queue(&parts.outputs);
+    let writers = StandbyWriters::new(&parts.outputs);
     let (task, handle) = runtime.start(fg).await?.split();
-    writers.commit();
+    writers.keep();
     Ok(Managed {
         handle,
         task,
@@ -602,72 +762,31 @@ async fn start(runtime: RuntimeHandle, fg: Flowgraph, parts: Assembled) -> Resul
     })
 }
 
-/// Output bridges queued as writers of their channels. Withdrawn when
-/// dropped, unless committed.
-struct QueuedWriters(Vec<(Arc<dyn Pipe>, u64)>);
+/// Output bridges on standby, withdrawn when dropped unless kept.
+struct StandbyWriters(Vec<(Arc<dyn Pipe>, u64)>);
 
-impl QueuedWriters {
-    fn queue(outputs: &[(PortDecl, Arc<dyn Pipe>, u64)]) -> Self {
+impl StandbyWriters {
+    fn new(outputs: &[(PortDecl, Arc<dyn Pipe>, u64)]) -> Self {
         Self(
             outputs
                 .iter()
                 .map(|(_, channel, generation)| {
-                    channel.queue_writer(*generation);
+                    channel.standby_writer(*generation);
                     (channel.clone(), *generation)
                 })
                 .collect(),
         )
     }
 
-    fn commit(mut self) {
-        for (channel, generation) in self.0.drain(..) {
-            channel.commit_writer(generation);
-        }
-    }
-}
-
-impl Drop for QueuedWriters {
-    fn drop(&mut self) {
-        for (channel, generation) in self.0.drain(..) {
-            channel.unqueue_writer(generation);
-        }
-    }
-}
-
-/// With [`Hold::Discard`], the inputs of a flowgraph being replaced: they
-/// drop what arrives, while the old flowgraph keeps reading what is already
-/// queued. They take items again when dropped, unless handed over to the
-/// replacement.
-///
-/// The old flowgraph keeps its reader turn until the replacement takes it:
-/// a bridge that loses its turn ends its stream for good.
-struct PausedInputs(Vec<Arc<dyn Pipe>>);
-
-impl PausedInputs {
-    fn pause(inputs: &[(PortDecl, Arc<dyn Pipe>, u64)], hold: Hold) -> Self {
-        if hold == Hold::Keep {
-            return Self(Vec::new());
-        }
-        Self(
-            inputs
-                .iter()
-                .map(|(_, channel, _)| {
-                    channel.set_accept(false);
-                    channel.clone()
-                })
-                .collect(),
-        )
-    }
-
-    fn hand_over(mut self) {
+    fn keep(mut self) {
         self.0.clear();
     }
 }
 
-impl Drop for PausedInputs {
+impl Drop for StandbyWriters {
     fn drop(&mut self) {
-        for channel in self.0.drain(..) {
-            channel.set_accept(true);
+        for (channel, generation) in self.0.drain(..) {
+            channel.withdraw_writer(generation);
         }
     }
 }

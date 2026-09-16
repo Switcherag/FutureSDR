@@ -5,6 +5,9 @@
 //! channel's current reader may take items and only its current writer may
 //! add them, so moving an end to another flowgraph is a single switch under
 //! the channel's lock.
+//!
+//! The bridges of a flowgraph that runs on standby wait: its sources are not
+//! the reader, and its sinks are standby writers until they are committed.
 
 use std::any::Any;
 use std::collections::VecDeque;
@@ -35,16 +38,15 @@ struct State<T> {
     queue: VecDeque<T>,
     reader: u64,
     writer: u64,
-    /// Take over, in order, as the writers before them finish.
+    /// Committed writers; they take over, in order, as the writers before
+    /// them finish.
     pending_writers: VecDeque<u64>,
-    /// Queued writers whose flowgraph has not started yet: it may never
-    /// start, so their end is not the stream's end.
-    uncommitted: Vec<u64>,
-    /// Uncommitted writers that finished; the stream ends when they are
-    /// committed, unless another writer follows.
+    /// Writers of flowgraphs on standby: they wait, and since they may never
+    /// be committed, their end is not the stream's end.
+    standby_writers: Vec<u64>,
+    /// Standby writers that finished; committing one of them ends the
+    /// stream, unless another writer follows.
     finished_early: Vec<u64>,
-    /// Writes are dropped while false.
-    accept: bool,
     /// The writer finished with nobody to follow: end of stream.
     closed: bool,
     dropped: u64,
@@ -86,9 +88,8 @@ impl<T: CpuSample> Channel<T> {
                 reader: NOBODY,
                 writer: NOBODY,
                 pending_writers: VecDeque::new(),
-                uncommitted: Vec::new(),
+                standby_writers: Vec::new(),
                 finished_early: Vec::new(),
-                accept: true,
                 closed: false,
                 dropped: 0,
                 readers_waiting: Vec::new(),
@@ -104,14 +105,14 @@ impl<T: CpuSample> Channel<T> {
     pub(crate) fn write(&self, generation: u64, items: &[T]) -> Write {
         let mut st = self.lock();
         if st.writer != generation {
-            return if st.pending_writers.contains(&generation) {
+            return if st.waiting_writer(generation) {
                 Write::Wait
             } else {
                 // Replaced: nobody reads what this bridge writes any more.
                 Write::Taken
             };
         }
-        if !st.accept || items.is_empty() {
+        if items.is_empty() {
             return Write::Taken;
         }
         st.queue.extend(items.iter().cloned());
@@ -146,15 +147,15 @@ impl<T: CpuSample> Channel<T> {
     }
 
     /// Writer `generation` finished: hand over to the next writer, or end
-    /// the stream if there is none. A writer that is not committed yet only
-    /// withdraws; its end counts once it is committed.
+    /// the stream if there is none. A standby writer only leaves the
+    /// standby; its end counts once it is committed.
     pub(crate) fn writer_finished(&self, generation: u64) {
         let mut st = self.lock();
-        let committed = !st.uncommitted.contains(&generation);
-        if !committed {
+        if remove(&mut st.standby_writers, generation) {
             st.finished_early.push(generation);
+            return;
         }
-        Self::remove_writer(st, generation, committed);
+        Self::remove_writer(st, generation, true);
     }
 
     fn remove_writer(mut st: MutexGuard<'_, State<T>>, generation: u64, end_of_stream: bool) {
@@ -188,7 +189,7 @@ impl<T: CpuSample> Channel<T> {
 
     fn writer_ready(&self, generation: u64, cx: &mut Context<'_>) -> Poll<()> {
         let mut st = self.lock();
-        if !st.pending_writers.contains(&generation) {
+        if !st.waiting_writer(generation) {
             return Poll::Ready(());
         }
         st.writers_waiting.push(cx.waker().clone());
@@ -196,25 +197,37 @@ impl<T: CpuSample> Channel<T> {
     }
 }
 
+impl<T> State<T> {
+    /// Writer `generation` has not had its turn yet.
+    fn waiting_writer(&self, generation: u64) -> bool {
+        self.pending_writers.contains(&generation) || self.standby_writers.contains(&generation)
+    }
+}
+
+/// Remove `generation` from `list`; whether it was there.
+fn remove(list: &mut Vec<u64>, generation: u64) -> bool {
+    let len = list.len();
+    list.retain(|g| *g != generation);
+    list.len() != len
+}
+
 /// What the controller does with a channel, whatever its item type.
 pub(crate) trait Pipe: Send + Sync {
     fn item(&self) -> ItemType;
     /// Make `generation` the only reader. Wakes the old and the new one.
     fn set_reader(&self, generation: u64);
-    /// Let `generation` write once the writers before it have finished (at
-    /// once if there are none).
-    fn queue_writer(&self, generation: u64);
-    /// The flowgraph of `generation` started: from now on its end is the
-    /// stream's end.
-    fn commit_writer(&self, generation: u64);
-    /// Take back [`queue_writer`](Pipe::queue_writer), without ending the
-    /// stream.
-    fn unqueue_writer(&self, generation: u64);
-    fn set_accept(&self, accept: bool);
-    /// Make `generation` the only reader, starting on an empty queue, and
-    /// take writes again: [`set_reader`](Pipe::set_reader) for
+    /// Make `generation` the only reader, on an empty queue:
+    /// [`set_reader`](Pipe::set_reader) for
     /// [`Hold::Discard`](crate::Hold::Discard), in one step.
     fn restart_reader(&self, generation: u64);
+    /// Put writer `generation` on standby: it waits until committed.
+    fn standby_writer(&self, generation: u64);
+    /// Let standby writer `generation` write once the writers before it have
+    /// finished (at once if there are none). From now on its end is the
+    /// stream's end.
+    fn commit_writer(&self, generation: u64);
+    /// Drop standby writer `generation`, without ending the stream.
+    fn withdraw_writer(&self, generation: u64);
     fn stats(&self) -> ChannelStats;
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
@@ -243,53 +256,49 @@ impl<T: CpuSample> Pipe for Channel<T> {
         wake(waiting);
     }
 
-    fn queue_writer(&self, generation: u64) {
-        let mut st = self.lock();
-        if st.writer == NOBODY {
-            st.writer = generation;
-            st.closed = false;
-        } else {
-            st.pending_writers.push_back(generation);
-        }
-        st.uncommitted.push(generation);
-        let waiting = std::mem::take(&mut st.writers_waiting);
-        drop(st);
-        wake(waiting);
-    }
-
-    fn commit_writer(&self, generation: u64) {
-        let mut st = self.lock();
-        st.uncommitted.retain(|g| *g != generation);
-        let len = st.finished_early.len();
-        st.finished_early.retain(|g| *g != generation);
-        let finished = st.finished_early.len() != len;
-        if finished && st.writer == NOBODY && st.pending_writers.is_empty() {
-            st.closed = true;
-            let waiting = std::mem::take(&mut st.readers_waiting);
-            drop(st);
-            wake(waiting);
-        }
-    }
-
-    fn unqueue_writer(&self, generation: u64) {
-        let mut st = self.lock();
-        st.uncommitted.retain(|g| *g != generation);
-        st.finished_early.retain(|g| *g != generation);
-        Self::remove_writer(st, generation, false);
-    }
-
-    fn set_accept(&self, accept: bool) {
-        self.lock().accept = accept;
-    }
-
     fn restart_reader(&self, generation: u64) {
         let mut st = self.lock();
         st.reader = generation;
         st.queue.clear();
-        st.accept = true;
         let waiting = std::mem::take(&mut st.readers_waiting);
         drop(st);
         wake(waiting);
+    }
+
+    fn standby_writer(&self, generation: u64) {
+        self.lock().standby_writers.push(generation);
+    }
+
+    fn commit_writer(&self, generation: u64) {
+        let mut st = self.lock();
+        let waiting = if remove(&mut st.finished_early, generation) {
+            // It ended without writing: the stream ends with the writers
+            // before it.
+            if st.writer != NOBODY {
+                return;
+            }
+            st.closed = true;
+            std::mem::take(&mut st.readers_waiting)
+        } else {
+            if !remove(&mut st.standby_writers, generation) {
+                return;
+            }
+            if st.writer == NOBODY {
+                st.writer = generation;
+                st.closed = false;
+            } else {
+                st.pending_writers.push_back(generation);
+            }
+            std::mem::take(&mut st.writers_waiting)
+        };
+        drop(st);
+        wake(waiting);
+    }
+
+    fn withdraw_writer(&self, generation: u64) {
+        let mut st = self.lock();
+        remove(&mut st.standby_writers, generation);
+        remove(&mut st.finished_early, generation);
     }
 
     fn stats(&self) -> ChannelStats {
@@ -458,28 +467,38 @@ impl<T: CpuSample> Kernel for BridgeSink<T> {
 mod tests {
     use super::*;
 
+    /// Commit `generation` as a writer of `ch`.
+    fn writer(ch: &Channel<u8>, generation: u64) {
+        ch.standby_writer(generation);
+        ch.commit_writer(generation);
+    }
+
+    fn read(ch: &Channel<u8>, generation: u64, active: &mut bool) -> (Read, Vec<u8>) {
+        let mut out = [0; 16];
+        let r = ch.read(generation, &mut out, active);
+        let n = if let Read::Items(n) = r { n } else { 0 };
+        (r, out[..n].to_vec())
+    }
+
     #[test]
     fn full_queue_drops_the_oldest() {
         let ch = Channel::<u8>::new(ItemType::U8, 4);
-        ch.queue_writer(1);
+        writer(&ch, 1);
         ch.set_reader(2);
         let _ = ch.write(1, &[1, 2, 3]);
         let _ = ch.write(1, &[4, 5, 6]);
-        let mut out = [0; 8];
         let mut active = false;
-        assert!(matches!(ch.read(2, &mut out, &mut active), Read::Items(4)));
-        assert_eq!(&out[..4], &[3, 4, 5, 6]);
+        assert_eq!(read(&ch, 2, &mut active).1, [3, 4, 5, 6]);
         assert_eq!(ch.stats().dropped, 2);
         // more than the capacity at once
         let _ = ch.write(1, &[1, 2, 3, 4, 5, 6, 7]);
-        assert!(matches!(ch.read(2, &mut out, &mut active), Read::Items(4)));
-        assert_eq!(&out[..4], &[4, 5, 6, 7]);
+        assert_eq!(read(&ch, 2, &mut active).1, [4, 5, 6, 7]);
     }
 
     #[test]
     fn reader_switch_is_exact() {
         let ch = Channel::<u8>::new(ItemType::U8, 16);
-        ch.queue_writer(1);
+        writer(&ch, 1);
         ch.set_reader(2);
         let _ = ch.write(1, &[1, 2, 3]);
         let (mut old, mut new) = (false, false);
@@ -499,13 +518,24 @@ mod tests {
     }
 
     #[test]
+    fn a_restarted_reader_starts_on_an_empty_queue() {
+        let ch = Channel::<u8>::new(ItemType::U8, 16);
+        writer(&ch, 1);
+        ch.set_reader(2);
+        let _ = ch.write(1, &[1, 2, 3]);
+        ch.restart_reader(3);
+        let _ = ch.write(1, &[4]);
+        let (mut old, mut new) = (true, false);
+        assert!(matches!(read(&ch, 2, &mut old).0, Read::End));
+        assert_eq!(read(&ch, 3, &mut new).1, [4]);
+    }
+
+    #[test]
     fn writers_take_turns_and_the_last_one_ends_the_stream() {
         let ch = Channel::<u8>::new(ItemType::U8, 16);
         ch.set_reader(9);
-        for g in 1..=2 {
-            ch.queue_writer(g);
-            ch.commit_writer(g);
-        }
+        writer(&ch, 1);
+        writer(&ch, 2);
         assert!(matches!(ch.write(2, &[20]), Write::Wait));
         let _ = ch.write(1, &[10]);
         ch.writer_finished(1);
@@ -515,69 +545,65 @@ mod tests {
             "a stranger is ignored"
         );
         ch.writer_finished(2);
-        let mut out = [0; 4];
         let mut active = false;
-        assert!(matches!(ch.read(9, &mut out, &mut active), Read::Items(2)));
-        assert_eq!(&out[..2], &[10, 21]);
-        assert!(matches!(ch.read(9, &mut out, &mut active), Read::End));
+        assert_eq!(read(&ch, 9, &mut active).1, [10, 21]);
+        assert!(matches!(read(&ch, 9, &mut active).0, Read::End));
     }
 
     #[test]
-    fn writers_queue_in_order_and_can_withdraw() {
+    fn standby_writers_wait_and_take_their_turn_when_committed() {
         let ch = Channel::<u8>::new(ItemType::U8, 16);
         ch.set_reader(9);
-        for g in 1..=4 {
-            ch.queue_writer(g);
-            ch.commit_writer(g);
+        writer(&ch, 1);
+        for g in 2..=4 {
+            ch.standby_writer(g);
         }
-        ch.unqueue_writer(3);
+        assert!(matches!(ch.write(3, &[30]), Write::Wait));
+        // Committed out of order: 4 before 2; 3 is withdrawn.
+        ch.commit_writer(4);
+        ch.commit_writer(2);
+        ch.withdraw_writer(3);
         assert!(
             matches!(ch.write(3, &[30]), Write::Taken),
             "withdrawn: dropped"
         );
-        assert!(matches!(ch.write(4, &[40]), Write::Wait));
+        assert!(matches!(ch.write(2, &[20]), Write::Wait));
+        let _ = ch.write(1, &[10]);
         ch.writer_finished(1);
-        ch.writer_finished(2);
-        let _ = ch.write(4, &[41]);
-        ch.unqueue_writer(4);
-        assert!(
-            !ch.stats().closed,
-            "withdrawing the writer does not end the stream"
-        );
-        let mut out = [0; 4];
+        assert!(matches!(ch.write(2, &[20]), Write::Wait), "4 comes first");
+        let _ = ch.write(4, &[40]);
+        ch.writer_finished(4);
+        let _ = ch.write(2, &[20]);
         let mut active = false;
-        assert!(matches!(ch.read(9, &mut out, &mut active), Read::Items(1)));
-        assert_eq!(out[0], 41);
+        assert_eq!(read(&ch, 9, &mut active).1, [10, 40, 20]);
+        assert!(!ch.stats().closed);
     }
 
     #[test]
     fn a_writer_ends_the_stream_only_once_committed() {
         let ch = Channel::<u8>::new(ItemType::U8, 16);
         ch.set_reader(9);
-        let mut out = [0; 4];
         let mut active = false;
 
-        // Its flowgraph failed to start: withdrawn, the stream goes on.
-        ch.queue_writer(1);
+        // Its flowgraph never goes live: withdrawn, the stream goes on.
+        ch.standby_writer(1);
         ch.writer_finished(1);
-        ch.unqueue_writer(1);
+        ch.withdraw_writer(1);
         assert!(!ch.stats().closed);
 
-        // Its flowgraph started and already finished: the stream ends on commit.
-        ch.queue_writer(2);
-        let _ = ch.write(2, &[20]);
+        // Its flowgraph finished on standby: the stream ends on commit.
+        ch.standby_writer(2);
         ch.writer_finished(2);
         assert!(!ch.stats().closed, "not committed yet");
         ch.commit_writer(2);
         assert!(ch.stats().closed);
-        assert!(matches!(ch.read(9, &mut out, &mut active), Read::Items(1)));
-        assert!(matches!(ch.read(9, &mut out, &mut active), Read::End));
+        assert!(matches!(read(&ch, 9, &mut active).0, Read::End));
 
-        // Ended early behind a running writer: the running writer's end
-        // ends the stream.
-        ch.queue_writer(3);
-        ch.commit_writer(3);
-        ch.queue_writer(4);
+        // Finished on standby behind a running writer: the running writer's
+        // end ends the stream.
+        writer(&ch, 3);
+        assert!(!ch.stats().closed, "a new writer reopens the stream");
+        ch.standby_writer(4);
         ch.writer_finished(4);
         ch.commit_writer(4);
         assert!(!ch.stats().closed);

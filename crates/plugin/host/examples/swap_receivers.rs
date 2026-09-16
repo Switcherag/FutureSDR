@@ -14,6 +14,9 @@
 //! cargo run --example swap_receivers -- --hold keep --every-ms 30
 //! ```
 //!
+//! Each next receiver is prepared right after a replacement, on standby, so
+//! the replacement itself is only a commit.
+//!
 //! Receiver B negates the samples, so the output shows which receiver
 //! handled each one. With `--hold keep` every sample reaches exactly one
 //! receiver, which the program checks.
@@ -25,6 +28,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::bail;
@@ -35,7 +39,6 @@ use plugin_host::Description;
 use plugin_host::Finished;
 use plugin_host::Hold;
 use plugin_host::Registry;
-use plugin_host::ReplaceTimings;
 use plugin_sdk::Sdk;
 
 fn samples(done: &Finished) -> Result<Vec<f32>> {
@@ -99,19 +102,25 @@ fn main() -> Result<()> {
     ctrl.spawn("source", Description::from_file(flows.join("source.toml"))?)?;
 
     // Replace from a task of the runtime: nothing waits for a blocked thread.
-    let (timings, segments) = ctrl.run(move |mut ctrl| async move {
+    let (prepared, commits, segments) = ctrl.run(move |mut ctrl| async move {
         let mut retired = Vec::new();
-        let mut timings: Vec<ReplaceTimings> = Vec::new();
+        let (mut prepared, mut commits) = (Vec::new(), Vec::new());
         let mut next = 1;
+        let mut standby = ctrl
+            .prepare_async("receiver", receivers[next].clone())
+            .await?;
         while !ctrl.link_stats("source.samples").unwrap().closed {
             Timer::after(every).await;
-            let replaced = ctrl
-                .replace_async("receiver", receivers[next].clone(), hold)
-                .await?;
-            timings.push(replaced.timings);
-            retired.push(replaced.old);
+            prepared.push(standby.build_time() + standby.start_time());
+            let t = Instant::now();
+            retired.extend(ctrl.commit(standby, hold)?);
+            commits.push(t.elapsed());
             next = 1 - next;
+            standby = ctrl
+                .prepare_async("receiver", receivers[next].clone())
+                .await?;
         }
+        drop(standby);
         ctrl.wait_async("source").await?;
 
         let mut segments = Vec::new();
@@ -119,14 +128,12 @@ fn main() -> Result<()> {
             segments.push(samples(&old.wait_async().await?)?);
         }
         segments.push(samples(&ctrl.wait_async("receiver").await?)?);
-        anyhow::Ok((timings, segments))
+        anyhow::Ok((prepared, commits, segments))
     })?;
 
-    println!("{} replacements ({hold:?}), every {every:?}", timings.len());
-    stats("build", timings.iter().map(|t| t.build));
-    stats("start", timings.iter().map(|t| t.start));
-    stats("switch", timings.iter().map(|t| t.switch));
-    stats("total", timings.iter().map(|t| t.total));
+    println!("{} replacements ({hold:?}), every {every:?}", commits.len());
+    stats("prepare", prepared.into_iter());
+    stats("commit", commits.into_iter());
 
     let all: Vec<f32> = segments.iter().flatten().copied().collect();
     let by_b = all.iter().filter(|v| v.is_sign_negative()).count();

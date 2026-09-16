@@ -442,3 +442,72 @@ fn a_failed_or_abandoned_replacement_leaves_the_old_flowgraph_linked() {
         got.len()
     );
 }
+
+#[test]
+fn a_standby_source_writes_nothing_until_committed() {
+    let mut ctrl = controller();
+    ctrl.spawn("rx", receiver()).unwrap();
+    let standby = ctrl.prepare("src", source(0, 2e6)).unwrap();
+    assert_eq!(ctrl.names().collect::<Vec<_>>(), ["rx"]);
+    sleep(Duration::from_millis(50));
+    let stats = ctrl.link_stats("src.samples").unwrap();
+    assert_eq!((stats.queued, stats.closed), (0, false));
+
+    assert!(ctrl.commit(standby, Hold::Keep).unwrap().is_none());
+    ctrl.wait("src").unwrap();
+    assert_eq!(items(&ctrl.wait("rx").unwrap()), (0..N).collect::<Vec<_>>());
+}
+
+#[test]
+fn committing_prepared_standbys_loses_nothing() {
+    let mut ctrl = controller();
+    ctrl.spawn("src", source(0, 400_000.0)).unwrap();
+    ctrl.spawn("rx", receiver()).unwrap();
+    let mut standby = ctrl.prepare("rx", receiver()).unwrap();
+    let mut retired = Vec::new();
+    for _ in 0..8 {
+        sleep(Duration::from_millis(40));
+        let t = std::time::Instant::now();
+        retired.push(ctrl.commit(standby, Hold::Keep).unwrap().unwrap());
+        println!("commit: {:?}", t.elapsed());
+        standby = ctrl.prepare("rx", receiver()).unwrap();
+    }
+    drop(standby);
+    let mut all = Vec::new();
+    for old in retired {
+        all.extend(items(&old.wait().unwrap()));
+    }
+    ctrl.wait("src").unwrap();
+    all.extend(items(&ctrl.wait("rx").unwrap()));
+    assert_eq!(all, (0..N).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_dropped_standby_changes_nothing() {
+    let mut ctrl = controller();
+    ctrl.spawn("src", source(0, 400_000.0)).unwrap();
+    ctrl.spawn("rx", receiver()).unwrap();
+    for _ in 0..3 {
+        drop(ctrl.prepare("rx", receiver()).unwrap());
+        drop(ctrl.prepare("src", source(1_000_000, 2e6)).unwrap());
+    }
+    ctrl.wait("src").unwrap();
+    assert_eq!(items(&ctrl.wait("rx").unwrap()), (0..N).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_standby_whose_input_was_linked_since_is_refused() {
+    let mut ctrl = Controller::new(common::registry());
+    let standby = ctrl.prepare("rx", receiver()).unwrap();
+    ctrl.link("src.samples", "rx.samples").unwrap();
+    let err = ctrl.commit(standby, Hold::Keep).unwrap_err();
+    assert!(format!("{err:#}").contains("linked after"), "{err:#}");
+    assert_eq!(ctrl.names().count(), 0);
+
+    // Prepared after linking, it works.
+    let standby = ctrl.prepare("rx", receiver()).unwrap();
+    ctrl.commit(standby, Hold::Keep).unwrap();
+    ctrl.spawn("src", source(0, 2e6)).unwrap();
+    ctrl.wait("src").unwrap();
+    assert_eq!(items(&ctrl.wait("rx").unwrap()), (0..N).collect::<Vec<_>>());
+}

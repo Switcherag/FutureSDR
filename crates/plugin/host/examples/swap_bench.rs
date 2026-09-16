@@ -14,6 +14,10 @@
 //! (`--driver task`, as `dyn` does); `--driver thread` makes them from the
 //! main thread, which then waits for the runtime.
 //!
+//! With `--mode standby`, the next receiver is prepared right after each
+//! replacement, and the replacement is only the commit: the time it takes
+//! is how long the stream waits. Preparing is reported apart.
+//!
 //! ```text
 //! cd crates/plugin
 //! cargo run --release --example swap_bench -- --iterations 50 --rate 1
@@ -21,8 +25,9 @@
 //!
 //! Options: `--iterations N` (replacements per receiver), `--rate R` (source
 //! bytes per second), `--hold keep|discard`, `--settle-ms MS` (pause between
-//! replacements), `--driver task|thread`, `--workers N` (runtime threads,
-//! one per core by default), `--plugins DIR`, `--csv FILE`.
+//! replacements), `--mode on-demand|standby`, `--driver task|thread`,
+//! `--workers N` (runtime threads, one per core by default), `--plugins DIR`,
+//! `--csv FILE`.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -71,6 +76,14 @@ enum Driver {
     Thread,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Read, build, start and switch to the next receiver at once.
+    OnDemand,
+    /// Switch to a receiver prepared in advance.
+    Standby,
+}
+
 #[derive(Default)]
 struct Samples {
     rows: String,
@@ -78,21 +91,70 @@ struct Samples {
     build: Vec<f64>,
     start: Vec<f64>,
     switch: Vec<f64>,
-    replace: Vec<f64>,
+    /// On demand: the replacement; on standby: preparing the next one.
+    prepare: Vec<f64>,
+    /// How long the replacement kept the stream waiting.
     total: Vec<f64>,
 }
 
-async fn replacements(
+impl Samples {
+    fn new() -> Self {
+        Self {
+            rows: String::from(
+                "iteration,swap,target,parse_ms,build_ms,start_ms,switch_ms,prepare_ms,total_ms\n",
+            ),
+            ..Self::default()
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push(
+        &mut self,
+        iteration: usize,
+        swap: usize,
+        target: &Path,
+        parse: Duration,
+        build: Duration,
+        start: Duration,
+        switch: Duration,
+        prepare: Duration,
+        total: Duration,
+    ) -> Result<()> {
+        let values = [parse, build, start, switch, prepare, total].map(ms);
+        for (list, v) in [
+            &mut self.parse,
+            &mut self.build,
+            &mut self.start,
+            &mut self.switch,
+            &mut self.prepare,
+            &mut self.total,
+        ]
+        .into_iter()
+        .zip(values)
+        {
+            list.push(v);
+        }
+        write!(
+            self.rows,
+            "{iteration},{swap},{}",
+            target.file_name().unwrap().to_string_lossy()
+        )?;
+        for v in values {
+            write!(self.rows, ",{v:.4}")?;
+        }
+        writeln!(self.rows)?;
+        Ok(())
+    }
+}
+
+async fn on_demand(
     ctrl: &mut Controller,
     targets: &[PathBuf],
     iterations: usize,
     hold: Hold,
     settle: Duration,
 ) -> Result<Samples> {
-    let mut s = Samples {
-        rows: String::from("iteration,swap,target,parse_ms,build_ms,start_ms,switch_ms,total_ms\n"),
-        ..Samples::default()
-    };
+    let mut s = Samples::new();
     for iteration in 0..iterations {
         for (swap, target) in targets.iter().enumerate() {
             let t = Instant::now();
@@ -103,21 +165,8 @@ async fn replacements(
             drop(replaced.old);
 
             let r = replaced.timings;
-            s.parse.push(ms(parsed));
-            s.build.push(ms(r.build));
-            s.start.push(ms(r.start));
-            s.switch.push(ms(r.switch));
-            s.replace.push(ms(r.total));
-            s.total.push(ms(elapsed));
-            writeln!(
-                s.rows,
-                "{iteration},{swap},{},{:.4},{:.4},{:.4},{:.4},{:.4}",
-                target.file_name().unwrap().to_string_lossy(),
-                ms(parsed),
-                ms(r.build),
-                ms(r.start),
-                ms(r.switch),
-                ms(elapsed)
+            s.push(
+                iteration, swap, target, parsed, r.build, r.start, r.switch, r.total, elapsed,
             )?;
             Timer::after(settle).await;
         }
@@ -125,12 +174,69 @@ async fn replacements(
     Ok(s)
 }
 
+async fn standby(
+    ctrl: &mut Controller,
+    targets: &[PathBuf],
+    iterations: usize,
+    hold: Hold,
+    settle: Duration,
+) -> Result<Samples> {
+    let mut s = Samples::new();
+    let mut next = ctrl
+        .prepare_async("receiver", Description::from_file(&targets[0])?)
+        .await?;
+    for iteration in 0..iterations {
+        for (swap, target) in targets.iter().enumerate() {
+            Timer::after(settle).await;
+            let t = Instant::now();
+            let old = ctrl.commit(next, hold)?;
+            let switched = t.elapsed();
+            drop(old);
+
+            let t = Instant::now();
+            let following = &targets[(swap + 1) % targets.len()];
+            let desc = Description::from_file(following)?;
+            let parsed = t.elapsed();
+            next = ctrl.prepare_async("receiver", desc).await?;
+            let prepared = t.elapsed();
+            s.push(
+                iteration,
+                swap,
+                target,
+                parsed,
+                next.build_time(),
+                next.start_time(),
+                switched,
+                prepared,
+                switched,
+            )?;
+        }
+    }
+    Ok(s)
+}
+
+async fn replacements(
+    ctrl: &mut Controller,
+    mode: Mode,
+    targets: &[PathBuf],
+    iterations: usize,
+    hold: Hold,
+    settle: Duration,
+) -> Result<Samples> {
+    match mode {
+        Mode::OnDemand => on_demand(ctrl, targets, iterations, hold, settle).await,
+        Mode::Standby => standby(ctrl, targets, iterations, hold, settle).await,
+    }
+}
+
 fn main() -> Result<()> {
     let mut iterations = 50;
     let mut rate = 1.0;
     let mut hold = Hold::Discard;
     let mut driver = Driver::Task;
+    let mut mode = Mode::OnDemand;
     let mut workers: Option<usize> = None;
+    let mut poll: Option<Duration> = None;
     let mut settle = Duration::from_millis(200);
     let mut plugins: Option<PathBuf> = None;
     let mut csv: Option<PathBuf> = None;
@@ -143,13 +249,17 @@ fn main() -> Result<()> {
             ("--hold", Some(v)) if v == "discard" => hold = Hold::Discard,
             ("--settle-ms", Some(v)) => settle = Duration::from_millis(v.parse()?),
             ("--workers", Some(v)) => workers = Some(v.parse()?),
+            ("--poll-us", Some(v)) => poll = Some(Duration::from_micros(v.parse()?)),
+            ("--mode", Some(v)) if v == "on-demand" => mode = Mode::OnDemand,
+            ("--mode", Some(v)) if v == "standby" => mode = Mode::Standby,
             ("--driver", Some(v)) if v == "task" => driver = Driver::Task,
             ("--driver", Some(v)) if v == "thread" => driver = Driver::Thread,
             ("--plugins", Some(v)) => plugins = Some(v.into()),
             ("--csv", Some(v)) => csv = Some(v.into()),
             _ => bail!(
                 "usage: swap_bench [--iterations N] [--rate R] [--hold keep|discard] \
-                 [--settle-ms MS] [--driver task|thread] [--workers N] [--plugins DIR] [--csv FILE]"
+                 [--settle-ms MS] [--mode on-demand|standby] [--driver task|thread] [--workers N] \
+                 [--plugins DIR] [--csv FILE]"
             ),
         }
     }
@@ -213,6 +323,14 @@ fn main() -> Result<()> {
         ),
         None => Controller::new(registry),
     };
+    if let Some(period) = poll {
+        // What dyn's idle bridges do: wake up every `period`.
+        ctrl.runtime().spawn_background(async move {
+            loop {
+                Timer::after(period).await;
+            }
+        });
+    }
     ctrl.link("source.bytes", "receiver.bytes")?;
     ctrl.spawn("source", source)?;
     ctrl.spawn("receiver", Description::from_file(&targets[1])?)?;
@@ -220,17 +338,19 @@ fn main() -> Result<()> {
 
     println!(
         "{} replacements ({iterations} x {} receivers), rate {rate} bytes/s, {hold:?}, \
-         settle {settle:?}, from a {driver:?}",
+         settle {settle:?}, {mode:?} from a {driver:?}",
         iterations * targets.len(),
         targets.len()
     );
     let (mut ctrl, s) = match driver {
         Driver::Task => ctrl.run(move |mut ctrl| async move {
-            let s = replacements(&mut ctrl, &targets, iterations, hold, settle).await;
+            let s = replacements(&mut ctrl, mode, &targets, iterations, hold, settle).await;
             (ctrl, s)
         }),
         Driver::Thread => {
-            let s = block_on(replacements(&mut ctrl, &targets, iterations, hold, settle));
+            let s = block_on(replacements(
+                &mut ctrl, mode, &targets, iterations, hold, settle,
+            ));
             (ctrl, s)
         }
     };
@@ -240,7 +360,10 @@ fn main() -> Result<()> {
     summary("build", &s.build);
     summary("start", &s.start);
     summary("switch", &s.switch);
-    summary("replace", &s.replace);
+    match mode {
+        Mode::OnDemand => summary("replace", &s.prepare),
+        Mode::Standby => summary("prepare", &s.prepare),
+    }
     summary("total", &s.total);
     let stats = ctrl.link_stats("source.bytes").unwrap();
     println!("link: {} queued, {} dropped", stats.queued, stats.dropped);

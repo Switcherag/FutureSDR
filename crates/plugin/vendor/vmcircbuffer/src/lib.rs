@@ -1,0 +1,144 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+//! Double Mapped Circular Buffer
+//!
+//! - Thread-safe.
+//! - Supports multiple readers.
+//! - Generic over the item type.
+//! - Provides access to all items (not n-1).
+//! - Supports Linux, macOS, Windows, and Android.
+//! - [Sync](sync), [async](asynchronous), [non-blocking](nonblocking), and [lock-free](lockfree) implementations.
+//! - [Generic](crate::generic) variant that allows specifying custom [Notifiers](crate::Notifier) to ease integration.
+//! - Underlying data structure (i.e., [DoubleMappedBuffer](double_mapped_buffer::DoubleMappedBuffer)) is exported to allow custom implementations.
+//!
+//! # Quick Start
+//!
+//! ```
+//! # #[cfg(feature = "sync")] {
+//! # use vmcircbuffer::sync;
+//! # use vmcircbuffer::generic::CircularError;
+//! let mut w = sync::Circular::new::<u32>().unwrap();
+//! let mut r = w.add_reader();
+//!
+//! // delay producing by 1 sec
+//! let now = std::time::Instant::now();
+//! let delay = std::time::Duration::from_millis(1000);
+//!
+//! // producer thread
+//! std::thread::spawn(move || {
+//!     std::thread::sleep(delay);
+//!     let w_buff = w.slice();
+//!     for v in w_buff.iter_mut() {
+//!         *v = 23;
+//!     }
+//!     let l = w_buff.len();
+//!     w.produce(l);
+//! });
+//!
+//! // blocks until data becomes available
+//! let r_buff = r.slice().unwrap();
+//! assert!(now.elapsed() > delay);
+//! for v in r_buff {
+//!     assert_eq!(*v, 23);
+//! }
+//! let l = r_buff.len();
+//! r.consume(l);
+//! # }
+//! ```
+//!
+//! Enable at least one implementation feature such as `sync`, `async`, `nonblocking`, or `lockfree`.
+//! The crate does not enable any runtime implementation by default.
+//!
+//! # Commonalities
+//!
+//! There are some commonalities between the implementations:
+//! - The `Circular` struct is a factory to create the `Writer`.
+//! - If there are no `Reader`s, the `Writer` will not block but continuously overwrite the buffer.
+//! - The `Writer` has an `add_reader()` method to add `Reader`s.
+//! - When the `Writer` is dropped, the `Reader` can read the remaining items. Afterwards, the `slice()` will return `None`.
+//!
+//! # Details
+//!
+//! This circular buffer implementation maps the underlying buffer twice,
+//! back-to-back into the virtual address space of the process. This arrangement
+//! allows the circular buffer to present the available data sequentially,
+//! (i.e., as a slice) without having to worry about wrapping.
+//!
+//! On Unix-based systems, the mapping is setup with a temporary file. This file
+//! is created in the folder, determined through [std::env::temp_dir], which
+//! considers environment variables. This can be used, if the standard paths are
+//! not present of not writable on the platform.
+//!
+//! # Features
+//!
+//! The `async`, `nonblocking`, `sync`, and `lockfree` feature flags enable the
+//! corresponding implementations. No runtime implementation is enabled by default.
+//! In addition, the `generic` flag controls the generic implementation, while
+//! [DoubleMappedBuffer](double_mapped_buffer::DoubleMappedBuffer) is always available.
+
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+#[cfg(feature = "async")]
+pub mod asynchronous;
+pub mod double_mapped_buffer;
+#[cfg_attr(docsrs, doc(cfg(feature = "generic")))]
+#[cfg(feature = "generic")]
+pub mod generic;
+#[cfg_attr(docsrs, doc(cfg(feature = "lockfree")))]
+#[cfg(feature = "lockfree")]
+pub mod lockfree;
+#[cfg_attr(docsrs, doc(cfg(feature = "nonblocking")))]
+#[cfg(feature = "nonblocking")]
+pub mod nonblocking;
+#[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
+#[cfg(feature = "sync")]
+pub mod sync;
+
+/// A custom notifier can be used to trigger arbitrary mechanism to signal to a
+/// reader or writer that data or buffer space is available. This could be a
+/// write to an sync/async channel or a condition variable.
+#[cfg_attr(docsrs, doc(cfg(feature = "generic")))]
+#[cfg(feature = "generic")]
+pub trait Notifier {
+    /// Arm the notifier.
+    fn arm(&mut self);
+    /// The implementation must
+    /// - only notify if armed
+    /// - notify
+    /// - unarm
+    fn notify(&mut self);
+}
+
+/// Custom metadata to annotate items.
+#[cfg_attr(docsrs, doc(cfg(any(feature = "generic", feature = "lockfree"))))]
+#[cfg(any(feature = "generic", feature = "lockfree"))]
+pub trait Metadata {
+    type Item: Clone;
+
+    /// Create metadata container.
+    fn new() -> Self;
+    /// Add metadata, applying `offset` shift to items.
+    fn add_from_slice(&mut self, offset: usize, tags: &[Self::Item]);
+    /// Copy metadata into the provided output vector.
+    fn get_into(&self, out: &mut Vec<Self::Item>);
+    /// Prune metadata, i.e., delete consumed [items](Self::Item) and update offsets for the remaining.
+    fn consume(&mut self, items: usize);
+}
+
+/// Void implementation for the [Metadata] trait for buffers that don't use metadata.
+#[cfg_attr(docsrs, doc(cfg(any(feature = "generic", feature = "lockfree"))))]
+#[cfg(any(feature = "generic", feature = "lockfree"))]
+pub struct NoMetadata;
+
+#[cfg(any(feature = "generic", feature = "lockfree"))]
+impl Metadata for NoMetadata {
+    type Item = ();
+
+    fn new() -> Self {
+        Self
+    }
+    fn add_from_slice(&mut self, _offset: usize, _tags: &[Self::Item]) {}
+    fn get_into(&self, out: &mut Vec<Self::Item>) {
+        out.clear();
+    }
+    fn consume(&mut self, _items: usize) {}
+}

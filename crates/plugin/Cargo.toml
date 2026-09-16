@@ -16,7 +16,7 @@ cargo-features = ["profile-rustflags"]
 [workspace]
 resolver = "3"
 members = ["api", "rt", "host", "sdk"]
-exclude = ["blocks"]
+exclude = ["blocks", "vendor"]
 
 [workspace.package]
 version = "0.8.0"
@@ -34,6 +34,11 @@ futuresdr-plugin-api = { path = "api" }
 futuresdr-plugin-rt = { path = "rt" }
 futuresdr-plugin-sdk = { path = "sdk" }
 anyhow = "1.0"
+
+# Circular buffers that reuse their memory mappings, so that starting
+# flowgraphs over and over stays cheap (see vendor/vmcircbuffer/PATCHED.md).
+[patch.crates-io]
+vmcircbuffer = { path = "vendor/vmcircbuffer" }
 
 # Rust dylibs need the standard library as a shared library too, or it would
 # be linked into every plugin and into the host once more.
