@@ -15,7 +15,7 @@ futuresdr-plugin-api.workspace = true
 # Links the shared copy of FutureSDR that plugins use.
 futuresdr-plugin-rt.workspace = true
 libloading = "0.8"
-toml = "0.9"
+toml = { version = "0.9", features = ["preserve_order"] }
 
 [dev-dependencies]
 futuresdr-plugin-sdk.workspace = true

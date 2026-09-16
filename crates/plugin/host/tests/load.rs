@@ -9,7 +9,10 @@ use futuresdr::prelude::*;
 use plugin_host::Settings;
 
 fn settings(block: &str, pairs: &[(&str, Pmt)]) -> Settings {
-    let values: HashMap<String, Pmt> = pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+    let values: HashMap<String, Pmt> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
     Settings::new(block, values)
 }
 
@@ -32,14 +35,35 @@ fn basic_plugin_exports_its_block_types() {
     assert!(registry.get("Scale<u8>").is_none());
     let origin = &registry.get("Head<f32>").unwrap().origin;
     assert_eq!(origin.plugin, "basic");
-    assert_eq!(origin.library.as_deref(), Some(common::basic_plugin().as_path()));
+    assert_eq!(
+        origin.library.as_deref(),
+        Some(common::basic_plugin().canonicalize().unwrap().as_path())
+    );
 }
 
 #[test]
-fn loading_twice_is_refused() {
+fn loading_the_same_library_twice_does_nothing() {
     let mut registry = common::registry();
-    let err = registry.load(&common::basic_plugin()).unwrap_err();
-    assert!(err.to_string().contains("already registered"), "{err:#}");
+    assert!(registry.load(&common::basic_plugin()).unwrap().is_empty());
+}
+
+#[test]
+fn a_copy_exporting_the_same_types_is_refused() {
+    let copy = common::scratch("copy").join("libfsdr_blocks_basic_bis.so");
+    std::fs::copy(common::basic_plugin(), &copy).unwrap();
+    let mut registry = common::registry();
+    let err = registry.load(&copy).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("already registered by plugin 'basic'"),
+        "{err:#}"
+    );
+
+    // On its own, the copy is a separate library with the same blocks.
+    let mut registry = plugin_host::Registry::new();
+    assert!(!registry.load(&copy).unwrap().is_empty());
+    let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+    assert!(maps.contains("libfsdr_blocks_basic_bis.so"));
 }
 
 #[test]
@@ -47,7 +71,10 @@ fn not_a_plugin_is_refused() {
     let mut registry = plugin_host::Registry::new();
     let libc = std::path::Path::new("/lib64/libm.so.6");
     let err = registry.load(libc).unwrap_err();
-    assert!(err.to_string().contains("not a FutureSDR plugin"), "{err:#}");
+    assert!(
+        err.to_string().contains("not a FutureSDR plugin"),
+        "{err:#}"
+    );
 }
 
 #[test]
@@ -55,8 +82,16 @@ fn chain_of_plugin_blocks() -> anyhow::Result<()> {
     let registry = common::registry();
     let mut fg = Flowgraph::new();
     let items: Vec<Pmt> = (0..10).map(|i| Pmt::F64(i as f64)).collect();
-    let src = registry.add(&mut fg, "VectorSource<f32>", &settings("src", &[("items", Pmt::VecPmt(items))]))?;
-    let scale = registry.add(&mut fg, "Scale<f32>", &settings("scale", &[("factor", Pmt::F64(2.0))]))?;
+    let src = registry.add(
+        &mut fg,
+        "VectorSource<f32>",
+        &settings("src", &[("items", Pmt::VecPmt(items))]),
+    )?;
+    let scale = registry.add(
+        &mut fg,
+        "Scale<f32>",
+        &settings("scale", &[("factor", Pmt::F64(2.0))]),
+    )?;
     let snk = registry.add(&mut fg, "VectorSink<f32>", &settings("snk", &[]))?;
     fg.stream_dyn(src.id, "output", scale.id, "input")?;
     fg.stream_dyn(scale.id, "output", snk.id, "input")?;

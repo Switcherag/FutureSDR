@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -43,6 +44,7 @@ pub struct Entry {
 #[derive(Default, Clone)]
 pub struct Registry {
     types: BTreeMap<String, Entry>,
+    libraries: BTreeSet<PathBuf>,
 }
 
 impl Registry {
@@ -58,25 +60,43 @@ impl Registry {
     }
 
     /// Load the plugin library at `path` and register its block types.
+    /// Returns their names; nothing if the library is already loaded.
     ///
     /// All its symbols are resolved at once, so a library built against
     /// another build of `futuresdr-plugin-rt` is rejected here.
     pub fn load(&mut self, path: &Path) -> Result<Vec<String>> {
-        let library = unsafe { Library::open(Some(path), RTLD_NOW | RTLD_LOCAL) }.with_context(|| {
-            format!(
-                "loading plugin {} (was it built against this program's SDK?)",
-                path.display()
-            )
-        })?;
-        let entry: fn() -> Plugin = *unsafe { library.get::<fn() -> Plugin>(ENTRY_SYMBOL.as_bytes()) }
-            .with_context(|| format!("{} is not a FutureSDR plugin", path.display()))?;
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("plugin {}", path.display()))?;
+        if self.libraries.contains(&canonical) {
+            return Ok(Vec::new());
+        }
+        let library =
+            unsafe { Library::open(Some(path), RTLD_NOW | RTLD_LOCAL) }.with_context(|| {
+                format!(
+                    "loading plugin {} (was it built against this program's SDK?)",
+                    path.display()
+                )
+            })?;
+        let entry: fn() -> Plugin =
+            *unsafe { library.get::<fn() -> Plugin>(ENTRY_SYMBOL.as_bytes()) }
+                .with_context(|| format!("{} is not a FutureSDR plugin", path.display()))?;
         // Keep the code mapped for the rest of the process.
         std::mem::forget(library);
 
         let plugin = entry();
         let names = plugin.blocks.iter().map(|b| b.name.clone()).collect();
-        self.insert(plugin, Some(path.to_path_buf()))?;
+        self.insert(plugin, Some(canonical.clone()))?;
+        self.libraries.insert(canonical);
         Ok(names)
+    }
+
+    /// Load every library in `paths` that is not loaded yet.
+    pub fn load_all<P: AsRef<Path>>(&mut self, paths: impl IntoIterator<Item = P>) -> Result<()> {
+        for path in paths {
+            self.load(path.as_ref())?;
+        }
+        Ok(())
     }
 
     /// Load every plugin library (`lib*.so`) in `dir`, skipping the shared
@@ -115,7 +135,11 @@ impl Registry {
                 plugin.name
             );
         }
-        if let Some(dup) = plugin.blocks.iter().find(|b| self.types.contains_key(&b.name)) {
+        if let Some(dup) = plugin
+            .blocks
+            .iter()
+            .find(|b| self.types.contains_key(&b.name))
+        {
             let other = &self.types[&dup.name].origin;
             bail!(
                 "block type '{}' of plugin '{}' is already registered by plugin '{}'",
@@ -129,7 +153,8 @@ impl Registry {
                 plugin: plugin.name,
                 library: library.clone(),
             };
-            self.types.insert(block.name.clone(), Entry { block, origin });
+            self.types
+                .insert(block.name.clone(), Entry { block, origin });
         }
         Ok(())
     }

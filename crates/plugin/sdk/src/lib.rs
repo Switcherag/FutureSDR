@@ -100,7 +100,12 @@ impl Sdk {
             .ok_or_else(|| anyhow!("this process has not loaded lib{RT_CRATE}"))?;
         let profile_dir = rt
             .ancestors()
-            .find(|dir| matches!(dir.file_name().and_then(|n| n.to_str()), Some("debug" | "release")))
+            .find(|dir| {
+                matches!(
+                    dir.file_name().and_then(|n| n.to_str()),
+                    Some("debug" | "release")
+                )
+            })
             .ok_or_else(|| anyhow!("{} is not in a Cargo target directory", rt.display()))?;
         let profile = Profile::parse(profile_dir.file_name().unwrap().to_str().unwrap())?;
         Ok(Self {
@@ -119,7 +124,12 @@ impl Sdk {
     pub fn pack(workspace: &Path, profile: Profile, out: &Path) -> Result<Self> {
         let mut cargo = Command::new(cargo_bin());
         cargo
-            .args(["build", "-p", RT_PACKAGE, "--message-format=json-render-diagnostics"])
+            .args([
+                "build",
+                "-p",
+                RT_PACKAGE,
+                "--message-format=json-render-diagnostics",
+            ])
             .arg("--manifest-path")
             .arg(workspace);
         if profile == Profile::Release {
@@ -241,7 +251,9 @@ impl Sdk {
             .arg(format!("{RT_CRATE}={}", self.rt.display()))
             .args(["-C", "prefer-dynamic"]);
         if let Some(meta) = &self.rt_metadata {
-            cargo.arg("--extern").arg(format!("{RT_CRATE}={}", meta.display()));
+            cargo
+                .arg("--extern")
+                .arg(format!("{RT_CRATE}={}", meta.display()));
         }
         for dir in &self.deps {
             cargo.arg("-L").arg(format!("dependency={}", dir.display()));
@@ -250,7 +262,12 @@ impl Sdk {
             cargo.env("RUSTUP_TOOLCHAIN", &self.toolchain);
         }
         // Settings of an enclosing build must not leak into this one.
-        for var in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR"] {
+        for var in [
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_TARGET_DIR",
+            "CARGO_BUILD_TARGET_DIR",
+        ] {
             cargo.env_remove(var);
         }
 
@@ -330,12 +347,15 @@ fn find_rt_metadata(rt: &Path, profile_dir: &Path) -> Option<PathBuf> {
     }
     let inode = fs::metadata(rt).ok()?.ino();
     let package = profile_dir.join("build").join(RT_PACKAGE);
-    fs::read_dir(package).ok()?.filter_map(|e| e.ok()).find_map(|unit| {
-        let out = unit.path().join("out");
-        let library = out.join(rt.file_name()?);
-        let meta = library.with_extension("rmeta");
-        (fs::metadata(&library).ok()?.ino() == inode && meta.is_file()).then_some(meta)
-    })
+    fs::read_dir(package)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .find_map(|unit| {
+            let out = unit.path().join("out");
+            let library = out.join(rt.file_name()?);
+            let meta = library.with_extension("rmeta");
+            (fs::metadata(&library).ok()?.ino() == inode && meta.is_file()).then_some(meta)
+        })
 }
 
 fn is_rt_library(path: &Path) -> bool {

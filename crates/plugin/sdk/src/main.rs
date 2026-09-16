@@ -31,7 +31,10 @@ fn main() -> Result<()> {
     let mut profile = Profile::Dev;
     let mut positional = Vec::new();
     while let Some(arg) = args.next() {
-        let mut value = || args.next().ok_or_else(|| anyhow::anyhow!("{arg} needs a value"));
+        let mut value = || {
+            args.next()
+                .ok_or_else(|| anyhow::anyhow!("{arg} needs a value"))
+        };
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(value()?)),
             "--sdk" => sdk = Some(PathBuf::from(value()?)),
@@ -49,7 +52,9 @@ fn main() -> Result<()> {
 
     match command.as_str() {
         "pack" => {
-            let Some(out) = out else { bail!("pack needs --out\n{USAGE}") };
+            let Some(out) = out else {
+                bail!("pack needs --out\n{USAGE}")
+            };
             let sdk = Sdk::pack(&workspace, profile, &out)?;
             println!("SDK in {} ({})", out.display(), sdk.rustc);
         }
@@ -63,7 +68,9 @@ fn main() -> Result<()> {
             println!("{}", library.display());
         }
         "info" => {
-            let Some(dir) = sdk else { bail!("info needs --sdk\n{USAGE}") };
+            let Some(dir) = sdk else {
+                bail!("info needs --sdk\n{USAGE}")
+            };
             let sdk = Sdk::open(&dir)?;
             println!("library   {}", sdk.rt.display());
             for dir in &sdk.deps {

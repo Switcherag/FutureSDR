@@ -32,24 +32,24 @@ impl FromIndex for Complex32 {
     }
 }
 
-/// Emit `0, 1, 2, ...` (wrapping for small integer types), `n` items in
-/// total, at most `chunk` per call.
+/// Emit `start, start + 1, ...` (wrapping for small integer types), `n`
+/// items in total, at most `chunk` per call.
 #[derive(Block)]
 pub struct Counter<T: FromIndex> {
     #[output]
     output: DefaultCpuWriter<T>,
     next: u64,
-    n: u64,
+    end: u64,
     chunk: usize,
 }
 
 impl<T: FromIndex> Counter<T> {
-    /// Count to `n`.
-    pub fn new(n: u64, chunk: usize) -> Self {
+    /// Count `n` items from `start`.
+    pub fn new(start: u64, n: u64, chunk: usize) -> Self {
         Self {
             output: DefaultCpuWriter::default(),
-            next: 0,
-            n,
+            next: start,
+            end: start + n,
             chunk: chunk.max(1),
         }
     }
@@ -63,13 +63,16 @@ impl<T: FromIndex> Kernel for Counter<T> {
         _meta: &BlockMeta,
     ) -> Result<()> {
         let out = self.output.slice();
-        let m = out.len().min(self.chunk).min((self.n - self.next) as usize);
+        let m = out
+            .len()
+            .min(self.chunk)
+            .min((self.end - self.next) as usize);
         for (k, v) in out[..m].iter_mut().enumerate() {
             *v = T::from_index(self.next + k as u64);
         }
         self.output.produce(m);
         self.next += m as u64;
-        if self.next == self.n {
+        if self.next == self.end {
             io.finished = true;
         } else if m > 0 {
             io.call_again = true;
@@ -127,7 +130,8 @@ where
 
 fn drop_policy(s: &Settings) -> anyhow::Result<blocks::SelectorDropPolicy> {
     let name: String = s.get_or("drop_policy", "same-rate".to_string())?;
-    name.parse().map_err(|e| anyhow::anyhow!("block '{}': drop_policy: {e}", s.block()))
+    name.parse()
+        .map_err(|e| anyhow::anyhow!("block '{}': drop_policy: {e}", s.block()))
 }
 
 export_plugin! {
@@ -196,8 +200,8 @@ export_plugin! {
         {
             name: "Counter",
             types: default,
-            description: "Emit 0, 1, 2, ... (`n` items, at most `chunk` per call).",
-            add: |s| Counter::<T>::new(s.get("n")?, s.get_or("chunk", 4096)?),
+            description: "Emit `start`, `start + 1`, ... (`n` items, at most `chunk` per call).",
+            add: |s| Counter::<T>::new(s.get_or("start", 0)?, s.get("n")?, s.get_or("chunk", 4096)?),
         },
         {
             name: "Scale",

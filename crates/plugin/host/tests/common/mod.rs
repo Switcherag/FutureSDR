@@ -27,6 +27,16 @@ pub fn basic_plugin() -> PathBuf {
         .clone()
 }
 
+/// A fresh directory for test files.
+pub fn scratch(name: &str) -> PathBuf {
+    let dir = workspace()
+        .join("target/test-scratch")
+        .join(format!("{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 /// A registry holding the `basic` plugin.
 pub fn registry() -> Registry {
     let mut registry = Registry::new();

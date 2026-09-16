@@ -32,8 +32,13 @@ impl Settings {
 
     /// Setting `key`, which must be present.
     pub fn get<T: FromSetting>(&self, key: &str) -> anyhow::Result<T> {
-        self.get_opt(key)?
-            .ok_or_else(|| anyhow!("block '{}': missing setting '{key}' ({})", self.block, T::EXPECTED))
+        self.get_opt(key)?.ok_or_else(|| {
+            anyhow!(
+                "block '{}': missing setting '{key}' ({})",
+                self.block,
+                T::EXPECTED
+            )
+        })
     }
 
     /// Setting `key`, or `default` when it is absent.
@@ -159,8 +164,14 @@ impl<T: FromSetting> FromSetting for Vec<T> {
     fn from_setting(value: &Pmt) -> Option<Self> {
         match value {
             Pmt::VecPmt(items) => items.iter().map(T::from_setting).collect(),
-            Pmt::VecF32(items) => items.iter().map(|v| T::from_setting(&Pmt::F32(*v))).collect(),
-            Pmt::VecU64(items) => items.iter().map(|v| T::from_setting(&Pmt::U64(*v))).collect(),
+            Pmt::VecF32(items) => items
+                .iter()
+                .map(|v| T::from_setting(&Pmt::F32(*v)))
+                .collect(),
+            Pmt::VecU64(items) => items
+                .iter()
+                .map(|v| T::from_setting(&Pmt::U64(*v)))
+                .collect(),
             Pmt::Blob(items) => items
                 .iter()
                 .map(|v| T::from_setting(&Pmt::Usize(*v as usize)))
@@ -184,7 +195,10 @@ mod tests {
     fn settings(pairs: &[(&str, Pmt)]) -> Settings {
         Settings::new(
             "blk",
-            pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
         )
     }
 
