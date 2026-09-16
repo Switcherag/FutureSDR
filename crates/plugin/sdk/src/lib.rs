@@ -30,8 +30,6 @@ use anyhow::bail;
 
 /// Crate name of the shared library.
 pub const RT_CRATE: &str = "futuresdr_plugin_rt";
-/// Package that builds it.
-pub const RT_PACKAGE: &str = "futuresdr-plugin-rt";
 /// File describing an SDK directory.
 pub const MANIFEST: &str = "sdk.env";
 
@@ -98,6 +96,18 @@ impl Sdk {
             .filter_map(|line| line.find('/').map(|i| PathBuf::from(line[i..].trim_end())))
             .find(|path| is_rt_library(path))
             .ok_or_else(|| anyhow!("this process has not loaded lib{RT_CRATE}"))?;
+        Self::of_library(&rt)
+    }
+
+    /// The SDK of the shared library at `rt`, used in place in the Cargo
+    /// target directory it was built in, e.g.
+    /// `target/release/libfuturesdr_plugin_rt.so`.
+    ///
+    /// The toolchain is taken to be the one this crate was built with.
+    pub fn of_library(rt: &Path) -> Result<Self> {
+        let rt = rt
+            .canonicalize()
+            .with_context(|| format!("{}", rt.display()))?;
         let profile_dir = rt
             .ancestors()
             .find(|dir| {
@@ -106,11 +116,12 @@ impl Sdk {
                     Some("debug" | "release")
                 )
             })
-            .ok_or_else(|| anyhow!("{} is not in a Cargo target directory", rt.display()))?;
+            .ok_or_else(|| anyhow!("{} is not in a Cargo target directory", rt.display()))?
+            .to_path_buf();
         let profile = Profile::parse(profile_dir.file_name().unwrap().to_str().unwrap())?;
         Ok(Self {
-            deps: target_dependency_dirs(profile_dir)?,
-            rt_metadata: find_rt_metadata(&rt, profile_dir),
+            deps: target_dependency_dirs(&profile_dir)?,
+            rt_metadata: find_rt_metadata(&rt, &profile_dir),
             profile,
             rt,
             toolchain: TOOLCHAIN.to_string(),
@@ -118,77 +129,87 @@ impl Sdk {
         })
     }
 
-    /// Build the shared library of the plugin workspace at `workspace`
-    /// (its `Cargo.toml`) and copy it, with the metadata of every crate it
-    /// was built from, into `out`.
-    pub fn pack(workspace: &Path, profile: Profile, out: &Path) -> Result<Self> {
-        let mut cargo = Command::new(cargo_bin());
-        cargo
-            .args([
-                "build",
-                "-p",
-                RT_PACKAGE,
-                "--message-format=json-render-diagnostics",
-            ])
-            .arg("--manifest-path")
-            .arg(workspace);
-        if profile == Profile::Release {
-            cargo.arg("--release");
+    /// The crates the shared library was built from, as file stems
+    /// (`futuresdr-456abc4db73f1f48`), standard library included.
+    pub fn crates(&self) -> Result<Vec<String>> {
+        let metadata = self.rt_metadata.as_ref().unwrap_or(&self.rt);
+        let mut rustc = Command::new("rustc");
+        rustc.args(["-Z", "ls=root"]).arg(metadata);
+        if !self.toolchain.is_empty() {
+            rustc.env("RUSTUP_TOOLCHAIN", &self.toolchain);
         }
-        let mut child = cargo
-            .stdout(Stdio::piped())
-            .spawn()
-            .context("running cargo")?;
+        let out = rustc.output().context("running rustc -Z ls")?;
+        if !out.status.success() {
+            bail!(
+                "rustc -Z ls {}: {}",
+                metadata.display(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        // "=External Dependencies=" lines: "<n> <name>-<disambiguator> hash ..."
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace();
+                words.next()?.parse::<usize>().ok()?;
+                let stem = words.next()?;
+                (words.next() == Some("hash")).then(|| stem.to_string())
+            })
+            .collect())
+    }
 
-        let mut files = Vec::new();
-        for line in BufReader::new(child.stdout.take().unwrap()).lines() {
-            let line = line?;
-            let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
-                continue;
-            };
-            if msg["reason"] != "compiler-artifact" {
-                continue;
-            }
-            for f in msg["filenames"].as_array().into_iter().flatten() {
-                let f = PathBuf::from(f.as_str().unwrap_or_default());
-                // Only what rustc reads when compiling against these crates.
-                let keep = matches!(
-                    f.extension().and_then(|e| e.to_str()),
-                    Some("rlib" | "rmeta" | "so")
-                ) && !f.to_string_lossy().contains("/build/");
-                if keep {
-                    files.push(f);
-                }
-            }
-        }
-        if !child.wait()?.success() {
-            bail!("cargo build -p {RT_PACKAGE} failed");
-        }
-
+    /// Copy the shared library and every crate it was built from into `out`,
+    /// and describe them there. Returns the SDK in `out`.
+    pub fn pack(&self, out: &Path) -> Result<Self> {
         let deps = out.join("deps");
         fs::create_dir_all(&deps)?;
-        let mut rt = None;
-        for f in &files {
-            let dst = deps.join(f.file_name().unwrap());
-            fs::copy(f, &dst).with_context(|| format!("copying {}", f.display()))?;
-            if is_rt_library(&dst) {
-                rt = Some((f.clone(), dst));
+        let sysroot = sysroot_libs(&self.toolchain)?;
+        let copy = |from: &Path| -> Result<PathBuf> {
+            let to = deps.join(from.file_name().unwrap());
+            fs::copy(from, &to).with_context(|| format!("copying {}", from.display()))?;
+            Ok(to)
+        };
+
+        for stem in self.crates()? {
+            let find = |ext: &str| {
+                let name = format!("lib{stem}.{ext}");
+                self.deps
+                    .iter()
+                    .map(|dir| dir.join(&name))
+                    .find(|f| f.is_file())
+            };
+            // Plugins get the code of these crates from the shared library;
+            // compiling against them needs their metadata only. Proc-macro
+            // crates are shared libraries themselves.
+            let files: Vec<PathBuf> = match (find("rmeta"), find("rlib")) {
+                (Some(meta), _) => vec![meta],
+                (None, rlib) => rlib.into_iter().collect(),
+            }
+            .into_iter()
+            .chain(find("so"))
+            .collect();
+            if files.is_empty() {
+                // The standard library comes with the toolchain.
+                let in_sysroot = ["rlib", "rmeta", "so"]
+                    .iter()
+                    .any(|ext| sysroot.join(format!("lib{stem}.{ext}")).is_file());
+                if !in_sysroot {
+                    bail!("crate {stem} of lib{RT_CRATE} not found");
+                }
+                continue;
+            }
+            for f in files {
+                copy(&f)?;
             }
         }
-        let (built, rt) = rt.ok_or_else(|| anyhow!("cargo did not report lib{RT_CRATE}.so"))?;
-        let mut rt_metadata = None;
-        if let Some(meta) = find_rt_metadata(&built, built.parent().unwrap()) {
-            let dst = deps.join(meta.file_name().unwrap());
-            fs::copy(&meta, &dst)?;
-            rt_metadata = Some(dst);
-        }
+
         let sdk = Self {
-            rt,
-            rt_metadata,
+            rt: copy(&self.rt)?,
+            rt_metadata: self.rt_metadata.as_deref().map(copy).transpose()?,
             deps: vec![deps],
-            profile,
-            toolchain: TOOLCHAIN.to_string(),
-            rustc: RUSTC.to_string(),
+            profile: self.profile,
+            toolchain: self.toolchain.clone(),
+            rustc: self.rustc.clone(),
         };
         sdk.write_manifest(out)?;
         Ok(sdk)
@@ -336,6 +357,19 @@ fn target_dependency_dirs(profile_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
+/// Where the toolchain keeps the standard library.
+fn sysroot_libs(toolchain: &str) -> Result<PathBuf> {
+    let mut rustc = Command::new("rustc");
+    rustc.args(["--print", "target-libdir"]);
+    if !toolchain.is_empty() {
+        rustc.env("RUSTUP_TOOLCHAIN", toolchain);
+    }
+    let out = rustc
+        .output()
+        .context("running rustc --print target-libdir")?;
+    Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
 /// The `.rmeta` belonging to the shared library `rt`: next to it, or, when
 /// `rt` is the copy Cargo places in the profile directory, next to the
 /// original in the build directory (same file, same inode).
@@ -346,7 +380,7 @@ fn find_rt_metadata(rt: &Path, profile_dir: &Path) -> Option<PathBuf> {
         return Some(sibling);
     }
     let inode = fs::metadata(rt).ok()?.ino();
-    let package = profile_dir.join("build").join(RT_PACKAGE);
+    let package = profile_dir.join("build").join("futuresdr-plugin-rt");
     fs::read_dir(package)
         .ok()?
         .filter_map(|e| e.ok())

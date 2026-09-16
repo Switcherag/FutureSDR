@@ -1,0 +1,15 @@
+# Receiver A: keeps the samples as they are.
+name = "rx_a"
+connections = """
+copy > snk
+"""
+
+[blocks.copy]
+type = "Copy<f32>"
+
+[blocks.snk]
+type = "VectorSink<f32>"
+capacity = 400000
+
+[inputs]
+samples = "copy.input"

@@ -1,0 +1,20 @@
+# Receiver B: negates the samples, so its share of the stream is recognisable.
+name = "rx_b"
+connections = """
+flip > delay > snk   # the delay of zero is just one more block
+"""
+
+[blocks.flip]
+type = "Scale<f32>"
+factor = -1.0
+
+[blocks.delay]
+type = "Delay<f32>"
+n = 0
+
+[blocks.snk]
+type = "VectorSink<f32>"
+capacity = 400000
+
+[inputs]
+samples = "flip.input"

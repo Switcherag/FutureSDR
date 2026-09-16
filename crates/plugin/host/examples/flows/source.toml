@@ -1,0 +1,15 @@
+# A counter paced to `rate` items per second, offered on port `samples`.
+name = "source"
+connections = "count > pace"
+
+[blocks.count]
+type = "Counter<f32>"
+n = 400000
+chunk = 1024
+
+[blocks.pace]
+type = "Throttle<f32>"
+rate = 200000
+
+[outputs]
+samples = "pace.output"
