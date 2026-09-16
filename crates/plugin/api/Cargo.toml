@@ -1,0 +1,13 @@
+[package]
+name = "futuresdr-plugin-api"
+description = "What a FutureSDR plugin exports: block types and their settings."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "plugin_api"
+
+[dependencies]
+anyhow.workspace = true
+futuresdr.workspace = true

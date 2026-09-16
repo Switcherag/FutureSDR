@@ -1,0 +1,21 @@
+[package]
+name = "futuresdr-plugin-host"
+description = "Load FutureSDR plugins, build flowgraphs from TOML descriptions, spawn and replace running flowgraphs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "plugin_host"
+
+[dependencies]
+anyhow.workspace = true
+futuresdr.workspace = true
+futuresdr-plugin-api.workspace = true
+# Links the shared copy of FutureSDR that plugins use.
+futuresdr-plugin-rt.workspace = true
+libloading = "0.8"
+toml = "0.9"
+
+[dev-dependencies]
+futuresdr-plugin-sdk.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "fsdr-blocks-basic"
+description = "Basic FutureSDR stream and message blocks, as a plugin."
+version = "0.8.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# No dependencies: `futuresdr_plugin_rt` is provided by the SDK that builds
+# this crate (`fsdr-plugin build --sdk <dir> .`).
+[lib]
+crate-type = ["dylib"]
+
+[workspace]

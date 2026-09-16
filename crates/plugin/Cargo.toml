@@ -1,0 +1,44 @@
+cargo-features = ["profile-rustflags"]
+
+# Plugin support for FutureSDR, as an add-on: nothing in the runtime core
+# depends on it.
+#
+#   api   what a plugin exports (block types, settings), plugin side
+#   rt    the one shared library that plugins and hosts link: FutureSDR and
+#         the plugin API, compiled once
+#   host  loads plugins, builds flowgraphs from TOML descriptions, spawns and
+#         replaces running flowgraphs
+#   sdk   packs `rt` with its dependency metadata and compiles plugins against
+#         it, without rebuilding FutureSDR
+#
+# Plugins (e.g. `blocks/basic`) are standalone crates built with the SDK, not
+# members of this workspace.
+[workspace]
+resolver = "3"
+members = ["api", "rt", "host", "sdk"]
+exclude = ["blocks"]
+
+[workspace.package]
+version = "0.8.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# The one FutureSDR configuration every plugin is built against. Kept small:
+# no control port, no hardware drivers.
+futuresdr = { path = "../..", default-features = false, features = [
+    "tracing_max_level_debug",
+    "tracing_release_max_level_info",
+] }
+futuresdr-plugin-api = { path = "api" }
+futuresdr-plugin-rt = { path = "rt" }
+futuresdr-plugin-sdk = { path = "sdk" }
+anyhow = "1.0"
+
+# Rust dylibs need the standard library as a shared library too, or it would
+# be linked into every plugin and into the host once more.
+[profile.dev]
+rustflags = ["-C", "prefer-dynamic"]
+
+[profile.release]
+rustflags = ["-C", "prefer-dynamic"]
