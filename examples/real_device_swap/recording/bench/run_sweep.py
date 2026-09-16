@@ -34,6 +34,7 @@ Usage:
 
 import argparse
 import csv
+import glob
 import json
 import os
 import subprocess
@@ -126,6 +127,15 @@ def main():
 
     for d in (args.iq_dir, args.csv_dir, os.path.dirname(args.out), os.path.dirname(args.log)):
         os.makedirs(d, exist_ok=True)
+
+    # Clear last run's per-step CSVs. They are this sweep's scratch output, and
+    # leaving them means a later analysis over `csv/*.csv` silently pools steps
+    # from different sweeps -- which happened: a 41-step run left 101 files
+    # behind from an earlier 10 -> 0.1 ms sweep, and the per-direction swap
+    # times computed from them were a blend of several runs.
+    if not args.resume:
+        for stale in glob.glob(os.path.join(args.csv_dir, "ifs_*.csv")):
+            os.remove(stale)
 
     steps = ifs_steps(args.ifs_start, args.ifs_stop, args.ifs_step)
 

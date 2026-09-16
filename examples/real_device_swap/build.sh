@@ -67,7 +67,11 @@ for p in "${ECOSYSTEM[@]}"; do PKG_ARGS+=(-p "$p"); done
 if [ "${1:-}" = "--clean" ]; then
   cargo clean --release 2>&1 | tail -3
 fi
-cargo build --release "${PKG_ARGS[@]}" || { echo "build FAILED"; exit 1; }
+# EXTRA_CARGO_ARGS lets a host without libbladeRF drop the quicktune feature:
+#   EXTRA_CARGO_ARGS=--no-default-features bash build.sh
+# It still goes through THIS script, so the whole package set is resolved in one
+# invocation and the ABI stays consistent -- which is the rule below.
+cargo build --release ${EXTRA_CARGO_ARGS:-} "${PKG_ARGS[@]}" || { echo "build FAILED"; exit 1; }
 
 # ── ABI guard ────────────────────────────────────────────────────
 # Catch the two silent failure modes:

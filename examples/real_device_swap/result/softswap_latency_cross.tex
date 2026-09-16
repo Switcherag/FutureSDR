@@ -1,0 +1,35 @@
+%% Requires \usepackage{booktabs}
+%%
+%% In-sweep swap time: every swap performed while generating the PER curves in
+%% plot/per_soft.png, i.e. interleaved with real decoding of a replayed 4 MSps
+%% stream (flows/samples_head.toml, discard policy, no radio). 115047 swaps
+%% over 41 IFS steps from 4.0 to 0.0 ms, CPU frequency cap lifted.
+%%
+%% Same-PHY rows alternate the A and B flows of one PHY. "(cross)" rows come
+%% from the alternating 802.15.4 / 802.11ah sweep, split by the flow the swap
+%% BUILDS: the cost is set by the destination (802.11ah v6 is 14 blocks and 17
+%% connections, 802.15.4 is 6 and 5), with a smaller term for tearing down the
+%% outgoing flowgraph -- which is why arriving at 802.15.4 from 802.11ah costs
+%% more than arriving from another 802.15.4 flow.
+%%
+%% These are ~1.3x lower than the idle back-to-back softswap_latency figures:
+%% there, 50 ms of settle between swaps lets the runtime's worker threads
+%% deschedule, so each swap pays a cold start that a busy receiver does not.
+\captionof{table}{Measured PHY swap time in ms using CPU timestamp
+    (mean ($\sigma$)), measured from line 1 to line 12 of
+    Algorithm~\ref{alg:swap} during the PER sweeps. ``(cross)'' rows arrive
+    from the other PHY.}
+  \label{tab:softswap-latency}
+  \footnotesize
+  \setlength{\tabcolsep}{6pt}
+  \begin{tabular}{lrr}
+    \toprule
+    Direction & Mean & $\sigma$ \\
+    \midrule
+    To 802.11ah & 0.696 & 0.142 \\
+    To 802.15.4 & 0.268 & 0.054 \\
+    \midrule
+    To 802.11ah (cross) & 0.697 & 0.141 \\
+    To 802.15.4 (cross) & 0.297 & 0.056 \\
+    \bottomrule
+  \end{tabular}

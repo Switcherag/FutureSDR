@@ -271,6 +271,17 @@ opt-level = 3
 debug = false
 panic = "unwind"
 
+[profile.mono-nolto]
+# The same control group with LTO switched off, to isolate what fat LTO buys
+# the static build. Everything else is inherited from [profile.mono] -- same
+# opt-level, same codegen-units = 1 -- so LTO is the only variable.
+#
+# "off" rather than `false`: in Cargo `false` means thin *local* LTO. With a
+# single codegen unit that happens to be a no-op too, but "off" says what is
+# meant and does not depend on it.
+inherits = "mono"
+lto = "off"
+
 [profile.release]
 codegen-units = 1
 debug = false
