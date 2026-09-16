@@ -24,12 +24,12 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::bail;
 use futuresdr::blocks::VectorSink;
+use futuresdr::runtime::Timer;
 use plugin_host::Controller;
 use plugin_host::Description;
 use plugin_host::Finished;
@@ -98,23 +98,29 @@ fn main() -> Result<()> {
     ctrl.spawn("receiver", receivers[0].clone())?;
     ctrl.spawn("source", Description::from_file(flows.join("source.toml"))?)?;
 
-    let mut retired = Vec::new();
-    let mut timings: Vec<ReplaceTimings> = Vec::new();
-    let mut next = 1;
-    while !ctrl.link_stats("source.samples").unwrap().closed {
-        sleep(every);
-        let replaced = ctrl.replace("receiver", receivers[next].clone(), hold)?;
-        timings.push(replaced.timings);
-        retired.push(replaced.old);
-        next = 1 - next;
-    }
-    ctrl.wait("source")?;
+    // Replace from a task of the runtime: nothing waits for a blocked thread.
+    let (timings, segments) = ctrl.run(move |mut ctrl| async move {
+        let mut retired = Vec::new();
+        let mut timings: Vec<ReplaceTimings> = Vec::new();
+        let mut next = 1;
+        while !ctrl.link_stats("source.samples").unwrap().closed {
+            Timer::after(every).await;
+            let replaced = ctrl
+                .replace_async("receiver", receivers[next].clone(), hold)
+                .await?;
+            timings.push(replaced.timings);
+            retired.push(replaced.old);
+            next = 1 - next;
+        }
+        ctrl.wait_async("source").await?;
 
-    let mut segments = Vec::new();
-    for old in retired {
-        segments.push(samples(&old.wait()?)?);
-    }
-    segments.push(samples(&ctrl.wait("receiver")?)?);
+        let mut segments = Vec::new();
+        for old in retired {
+            segments.push(samples(&old.wait_async().await?)?);
+        }
+        segments.push(samples(&ctrl.wait_async("receiver").await?)?);
+        anyhow::Ok((timings, segments))
+    })?;
 
     println!("{} replacements ({hold:?}), every {every:?}", timings.len());
     stats("build", timings.iter().map(|t| t.build));

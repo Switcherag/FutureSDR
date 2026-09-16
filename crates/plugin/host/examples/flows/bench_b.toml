@@ -1,0 +1,12 @@
+# Swap benchmark, receiver B: two blocks.
+name = "bench_b"
+connections = "copy > snk"
+
+[blocks.copy]
+type = "Copy<u8>"
+
+[blocks.snk]
+type = "NullSink<u8>"
+
+[inputs]
+bytes = "copy.input"

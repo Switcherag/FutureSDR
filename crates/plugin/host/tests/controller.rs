@@ -6,6 +6,12 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use futuresdr::blocks::VectorSink;
+use futuresdr::futures::FutureExt;
+use futuresdr::runtime::Timer;
+use futuresdr::runtime::dev::prelude::*;
+use plugin_api::BlockType;
+use plugin_api::Plugin;
+use plugin_api::add_kernel;
 use plugin_host::Controller;
 use plugin_host::Description;
 use plugin_host::Finished;
@@ -252,4 +258,187 @@ fn unlinked_ports_can_be_stopped() {
     assert!(items(&rx).is_empty());
     ctrl.stop("src").unwrap();
     assert_eq!(ctrl.names().count(), 0);
+}
+
+#[test]
+fn the_controller_runs_as_a_task_of_its_runtime() {
+    let (ctrl, all) = controller().run(|mut ctrl| async move {
+        let all = async {
+            ctrl.spawn_async("src", source(0, 400_000.0)).await?;
+            ctrl.spawn_async("rx", receiver()).await?;
+            let mut retired = Vec::new();
+            for _ in 0..4 {
+                Timer::after(Duration::from_millis(40)).await;
+                let replaced = ctrl.replace_async("rx", receiver(), Hold::Keep).await?;
+                retired.push(replaced.old);
+            }
+            let mut all = Vec::new();
+            for old in retired {
+                all.extend(items(&old.wait_async().await?));
+            }
+            ctrl.wait_async("src").await?;
+            all.extend(items(&ctrl.wait_async("rx").await?));
+            anyhow::Ok(all)
+        }
+        .await;
+        (ctrl, all)
+    });
+    assert_eq!(all.unwrap(), (0..N).collect::<Vec<_>>());
+    assert_eq!(ctrl.names().count(), 0);
+}
+
+/// Pass-through block that fails to start, or takes a while to.
+#[derive(Block)]
+struct Gate {
+    #[input]
+    input: DefaultCpuReader<f32>,
+    #[output]
+    output: DefaultCpuWriter<f32>,
+    fail: bool,
+}
+
+impl Gate {
+    fn new(fail: bool) -> Self {
+        Self {
+            input: DefaultCpuReader::default(),
+            output: DefaultCpuWriter::default(),
+            fail,
+        }
+    }
+}
+
+impl Kernel for Gate {
+    async fn init(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
+        if self.fail {
+            anyhow::bail!("this block never starts");
+        }
+        Timer::after(Duration::from_millis(50)).await;
+        Ok(())
+    }
+
+    async fn work(
+        &mut self,
+        io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &BlockMeta,
+    ) -> Result<()> {
+        let i = self.input.slice();
+        let o = self.output.slice();
+        let (len, m) = (i.len(), i.len().min(o.len()));
+        o[..m].copy_from_slice(&i[..m]);
+        self.input.consume(m);
+        self.output.produce(m);
+        if self.input.finished() && m == len {
+            io.finished = true;
+        }
+        Ok(())
+    }
+}
+
+/// A controller that also knows `Broken<f32>` and `Slow<f32>` gates.
+fn controller_with_gates() -> Controller {
+    let mut registry = common::registry();
+    registry
+        .register(Plugin::new(
+            "gates",
+            vec![
+                BlockType {
+                    name: "Broken<f32>".into(),
+                    description: "Never starts.",
+                    add: |fg, _| add_kernel(fg, Gate::new(true)),
+                },
+                BlockType {
+                    name: "Slow<f32>".into(),
+                    description: "Takes 50 ms to start.",
+                    add: |fg, _| add_kernel(fg, Gate::new(false)),
+                },
+            ],
+        ))
+        .unwrap();
+    let mut ctrl = Controller::new(registry);
+    ctrl.link("src.samples", "rx.samples").unwrap();
+    ctrl
+}
+
+/// Counts from `start` through gate `gate`, out of port `samples`.
+fn gated_source(start: u64, gate: &str) -> Description {
+    Description::from_toml(&format!(
+        r#"
+        connections = "count > gate"
+        [blocks.count]
+        type = "Counter<f32>"
+        start = {start}
+        n = {N}
+        [blocks.gate]
+        type = "{gate}<f32>"
+        [outputs]
+        samples = "gate.output"
+        "#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_source_that_fails_to_start_leaves_the_stream_open() {
+    let mut ctrl = controller_with_gates();
+    ctrl.spawn("rx", receiver()).unwrap();
+    let err = ctrl.spawn("src", gated_source(0, "Broken")).unwrap_err();
+    assert!(format!("{err:#}").contains("never starts"), "{err:#}");
+    sleep(Duration::from_millis(50));
+    assert!(!ctrl.link_stats("src.samples").unwrap().closed);
+
+    ctrl.spawn("src", source(0, 2e6)).unwrap();
+    ctrl.wait("src").unwrap();
+    assert_eq!(items(&ctrl.wait("rx").unwrap()), (0..N).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_failed_or_abandoned_replacement_leaves_the_old_flowgraph_linked() {
+    let mut ctrl = controller_with_gates();
+    ctrl.spawn("src", source(0, 400_000.0)).unwrap();
+    ctrl.spawn("rx", receiver()).unwrap();
+    sleep(Duration::from_millis(50));
+
+    let gated_receiver = |gate: &str| {
+        Description::from_toml(&format!(
+            r#"
+            connections = "gate > snk"
+            [blocks.gate]
+            type = "{gate}<f32>"
+            [blocks.snk]
+            type = "VectorSink<f32>"
+            [inputs]
+            samples = "gate.input"
+            "#
+        ))
+        .unwrap()
+    };
+    let err = ctrl
+        .replace("rx", gated_receiver("Broken"), Hold::Discard)
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("never starts"), "{err:#}");
+    // Polled once, then dropped while the new flowgraphs are starting.
+    let abandoned = ctrl
+        .replace_async("rx", gated_receiver("Slow"), Hold::Discard)
+        .now_or_never();
+    assert!(abandoned.is_none());
+    let abandoned = ctrl
+        .replace_async("src", gated_source(1_000_000, "Slow"), Hold::Keep)
+        .now_or_never();
+    assert!(abandoned.is_none());
+    sleep(Duration::from_millis(100));
+
+    ctrl.wait("src").unwrap();
+    let got = items(&ctrl.wait("rx").unwrap());
+    assert_increasing(&got);
+    assert_eq!(
+        got.last(),
+        Some(&(N - 1)),
+        "the old source still feeds the old receiver, to the end"
+    );
+    assert!(
+        got.len() as u64 > N / 2,
+        "only a moment's worth is dropped: {} items",
+        got.len()
+    );
 }

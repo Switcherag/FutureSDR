@@ -1,0 +1,8 @@
+# Swap benchmark, receiver A: one block.
+name = "bench_a"
+
+[blocks.snk]
+type = "NullSink<u8>"
+
+[inputs]
+bytes = "snk.input"

@@ -37,6 +37,12 @@ struct State<T> {
     writer: u64,
     /// Take over, in order, as the writers before them finish.
     pending_writers: VecDeque<u64>,
+    /// Queued writers whose flowgraph has not started yet: it may never
+    /// start, so their end is not the stream's end.
+    uncommitted: Vec<u64>,
+    /// Uncommitted writers that finished; the stream ends when they are
+    /// committed, unless another writer follows.
+    finished_early: Vec<u64>,
     /// Writes are dropped while false.
     accept: bool,
     /// The writer finished with nobody to follow: end of stream.
@@ -80,6 +86,8 @@ impl<T: CpuSample> Channel<T> {
                 reader: NOBODY,
                 writer: NOBODY,
                 pending_writers: VecDeque::new(),
+                uncommitted: Vec::new(),
+                finished_early: Vec::new(),
                 accept: true,
                 closed: false,
                 dropped: 0,
@@ -138,13 +146,18 @@ impl<T: CpuSample> Channel<T> {
     }
 
     /// Writer `generation` finished: hand over to the next writer, or end
-    /// the stream if there is none.
+    /// the stream if there is none. A writer that is not committed yet only
+    /// withdraws; its end counts once it is committed.
     pub(crate) fn writer_finished(&self, generation: u64) {
-        self.remove_writer(generation, true);
+        let mut st = self.lock();
+        let committed = !st.uncommitted.contains(&generation);
+        if !committed {
+            st.finished_early.push(generation);
+        }
+        Self::remove_writer(st, generation, committed);
     }
 
-    fn remove_writer(&self, generation: u64, end_of_stream: bool) {
-        let mut st = self.lock();
+    fn remove_writer(mut st: MutexGuard<'_, State<T>>, generation: u64, end_of_stream: bool) {
         if st.writer == generation {
             match st.pending_writers.pop_front() {
                 Some(next) => st.writer = next,
@@ -191,11 +204,17 @@ pub(crate) trait Pipe: Send + Sync {
     /// Let `generation` write once the writers before it have finished (at
     /// once if there are none).
     fn queue_writer(&self, generation: u64);
+    /// The flowgraph of `generation` started: from now on its end is the
+    /// stream's end.
+    fn commit_writer(&self, generation: u64);
     /// Take back [`queue_writer`](Pipe::queue_writer), without ending the
     /// stream.
     fn unqueue_writer(&self, generation: u64);
     fn set_accept(&self, accept: bool);
-    fn clear(&self);
+    /// Make `generation` the only reader, starting on an empty queue, and
+    /// take writes again: [`set_reader`](Pipe::set_reader) for
+    /// [`Hold::Discard`](crate::Hold::Discard), in one step.
+    fn restart_reader(&self, generation: u64);
     fn stats(&self) -> ChannelStats;
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
@@ -232,21 +251,45 @@ impl<T: CpuSample> Pipe for Channel<T> {
         } else {
             st.pending_writers.push_back(generation);
         }
+        st.uncommitted.push(generation);
         let waiting = std::mem::take(&mut st.writers_waiting);
         drop(st);
         wake(waiting);
     }
 
+    fn commit_writer(&self, generation: u64) {
+        let mut st = self.lock();
+        st.uncommitted.retain(|g| *g != generation);
+        let len = st.finished_early.len();
+        st.finished_early.retain(|g| *g != generation);
+        let finished = st.finished_early.len() != len;
+        if finished && st.writer == NOBODY && st.pending_writers.is_empty() {
+            st.closed = true;
+            let waiting = std::mem::take(&mut st.readers_waiting);
+            drop(st);
+            wake(waiting);
+        }
+    }
+
     fn unqueue_writer(&self, generation: u64) {
-        self.remove_writer(generation, false);
+        let mut st = self.lock();
+        st.uncommitted.retain(|g| *g != generation);
+        st.finished_early.retain(|g| *g != generation);
+        Self::remove_writer(st, generation, false);
     }
 
     fn set_accept(&self, accept: bool) {
         self.lock().accept = accept;
     }
 
-    fn clear(&self) {
-        self.lock().queue.clear();
+    fn restart_reader(&self, generation: u64) {
+        let mut st = self.lock();
+        st.reader = generation;
+        st.queue.clear();
+        st.accept = true;
+        let waiting = std::mem::take(&mut st.readers_waiting);
+        drop(st);
+        wake(waiting);
     }
 
     fn stats(&self) -> ChannelStats {
@@ -459,8 +502,10 @@ mod tests {
     fn writers_take_turns_and_the_last_one_ends_the_stream() {
         let ch = Channel::<u8>::new(ItemType::U8, 16);
         ch.set_reader(9);
-        ch.queue_writer(1);
-        ch.queue_writer(2);
+        for g in 1..=2 {
+            ch.queue_writer(g);
+            ch.commit_writer(g);
+        }
         assert!(matches!(ch.write(2, &[20]), Write::Wait));
         let _ = ch.write(1, &[10]);
         ch.writer_finished(1);
@@ -483,6 +528,7 @@ mod tests {
         ch.set_reader(9);
         for g in 1..=4 {
             ch.queue_writer(g);
+            ch.commit_writer(g);
         }
         ch.unqueue_writer(3);
         assert!(
@@ -502,5 +548,40 @@ mod tests {
         let mut active = false;
         assert!(matches!(ch.read(9, &mut out, &mut active), Read::Items(1)));
         assert_eq!(out[0], 41);
+    }
+
+    #[test]
+    fn a_writer_ends_the_stream_only_once_committed() {
+        let ch = Channel::<u8>::new(ItemType::U8, 16);
+        ch.set_reader(9);
+        let mut out = [0; 4];
+        let mut active = false;
+
+        // Its flowgraph failed to start: withdrawn, the stream goes on.
+        ch.queue_writer(1);
+        ch.writer_finished(1);
+        ch.unqueue_writer(1);
+        assert!(!ch.stats().closed);
+
+        // Its flowgraph started and already finished: the stream ends on commit.
+        ch.queue_writer(2);
+        let _ = ch.write(2, &[20]);
+        ch.writer_finished(2);
+        assert!(!ch.stats().closed, "not committed yet");
+        ch.commit_writer(2);
+        assert!(ch.stats().closed);
+        assert!(matches!(ch.read(9, &mut out, &mut active), Read::Items(1)));
+        assert!(matches!(ch.read(9, &mut out, &mut active), Read::End));
+
+        // Ended early behind a running writer: the running writer's end
+        // ends the stream.
+        ch.queue_writer(3);
+        ch.commit_writer(3);
+        ch.queue_writer(4);
+        ch.writer_finished(4);
+        ch.commit_writer(4);
+        assert!(!ch.stats().closed);
+        ch.writer_finished(3);
+        assert!(ch.stats().closed);
     }
 }

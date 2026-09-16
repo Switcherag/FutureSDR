@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -15,17 +16,18 @@ use futuresdr::runtime::Flowgraph;
 use futuresdr::runtime::FlowgraphHandle;
 use futuresdr::runtime::FlowgraphTask;
 use futuresdr::runtime::Runtime;
+use futuresdr::runtime::RuntimeHandle;
 use futuresdr::runtime::TerminatedFlowgraph;
 use futuresdr::runtime::Timer;
 use futuresdr::runtime::block_on;
 use futuresdr::runtime::channel::oneshot;
 use futuresdr::runtime::dev::TypedBlockGuard;
+use futuresdr::runtime::scheduler::Scheduler;
 
 use crate::bridge::BridgeSink;
 use crate::bridge::BridgeSource;
 use crate::bridge::Channel;
 use crate::bridge::ChannelStats;
-use crate::bridge::NOBODY;
 use crate::bridge::Pipe;
 use crate::bridge::next_generation;
 use crate::builder::Blocks;
@@ -43,9 +45,9 @@ pub enum Hold {
     /// starts; then the input moves over at one item. Nothing is lost or
     /// delivered twice.
     Keep,
-    /// Drop what arrives during the replacement. The old flowgraph's input
-    /// ends at once, and the new one starts on items that arrive after it
-    /// is running.
+    /// Drop what arrives during the replacement. The old flowgraph finishes
+    /// what it already took, its input ends once the new one is running, and
+    /// the new one starts on items that arrive after that.
     Discard,
 }
 
@@ -106,15 +108,22 @@ impl Retired {
     }
 
     /// Wait until it has terminated.
-    pub fn wait(self) -> Result<Finished> {
+    pub async fn wait_async(self) -> Result<Finished> {
         let name = self.name;
-        let flowgraph = block_on(self.done)
+        let flowgraph = self
+            .done
+            .await
             .map_err(|_| anyhow!("flowgraph '{name}' was dropped"))?
             .with_context(|| format!("flowgraph '{name}'"))?;
         Ok(Finished {
             flowgraph,
             blocks: self.blocks,
         })
+    }
+
+    /// Blocking form of [`wait_async`](Self::wait_async).
+    pub fn wait(self) -> Result<Finished> {
+        block_on(self.wait_async())
     }
 }
 
@@ -157,8 +166,21 @@ type PortKey = (String, String);
 /// let done = ctrl.replace("receiver", Description::from_file("rx_b.toml")?, Hold::Keep)?;
 /// ```
 ///
-/// The methods block; call them from ordinary threads, not from inside the
-/// runtime's tasks.
+/// Each operation comes in two forms: `spawn_async`, `replace_async`, ...
+/// for async code, and `spawn`, `replace`, ... that block the calling
+/// thread and must not be called from the runtime's tasks.
+///
+/// Waiting on the runtime from a blocked thread means that thread has to
+/// be woken up, which after an idle period costs more than the replacement
+/// itself. For the fastest replacements, drive the controller from a task
+/// of its runtime with [`run`](Self::run):
+///
+/// ```ignore
+/// ctrl.run(|mut ctrl| async move {
+///     ctrl.replace_async("receiver", rx_b, Hold::Keep).await?;
+///     anyhow::Ok(())
+/// })?;
+/// ```
 pub struct Controller {
     runtime: Runtime,
     registry: Registry,
@@ -242,6 +264,18 @@ impl Controller {
     /// The runtime the flowgraphs run on.
     pub fn runtime(&self) -> &Runtime {
         &self.runtime
+    }
+
+    /// Run `f` with this controller as a task of its runtime, and block
+    /// until it completes. Return the controller from `f` to keep using it.
+    pub fn run<F, Fut, T>(self, f: F) -> T
+    where
+        F: FnOnce(Self) -> Fut,
+        Fut: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let scheduler = self.runtime.scheduler().clone();
+        block_on(scheduler.spawn(f(self)))
     }
 
     /// Connect output `from` of one flowgraph to input `to` of another, both
@@ -358,47 +392,27 @@ impl Controller {
         ))
     }
 
-    /// Start an assembled flowgraph. Its output bridges are queued as
-    /// writers first, so nothing they write before the caller finishes the
-    /// switch is taken for a stale writer's.
-    fn start(&self, fg: Flowgraph, parts: Assembled) -> Result<Managed> {
-        for (_, channel, generation) in &parts.outputs {
-            channel.queue_writer(*generation);
-        }
-        let (task, handle) = match self.runtime.start(fg) {
-            Ok(running) => running.split(),
-            Err(e) => {
-                for (_, channel, generation) in &parts.outputs {
-                    channel.unqueue_writer(*generation);
-                }
-                return Err(e.into());
-            }
-        };
-        Ok(Managed {
-            handle,
-            task,
-            blocks: parts.blocks,
-            inputs: parts.inputs,
-            outputs: parts.outputs,
-        })
-    }
-
     /// Build and start `desc` as flowgraph `name`.
-    pub fn spawn(&mut self, name: &str, desc: Description) -> Result<()> {
+    pub async fn spawn_async(&mut self, name: &str, desc: Description) -> Result<()> {
         if self.flowgraphs.contains_key(name) {
             bail!("a flowgraph '{name}' is already running");
         }
         let (fg, parts) = self
             .assemble(name, &desc)
             .with_context(|| format!("building flowgraph '{name}'"))?;
-        let managed = self
-            .start(fg, parts)
+        let managed = start(self.runtime.handle(), fg, parts)
+            .await
             .with_context(|| format!("starting flowgraph '{name}'"))?;
         for (_, channel, generation) in &managed.inputs {
             channel.set_reader(*generation);
         }
         self.flowgraphs.insert(name.to_string(), managed);
         Ok(())
+    }
+
+    /// Blocking form of [`spawn_async`](Self::spawn_async).
+    pub fn spawn(&mut self, name: &str, desc: Description) -> Result<()> {
+        block_on(self.spawn_async(name, desc))
     }
 
     /// Replace the running flowgraph `name` with `desc`, without stopping
@@ -408,8 +422,57 @@ impl Controller {
     /// (make before break). Ports are matched by name: every input and output
     /// of the old flowgraph that is linked must exist in `desc` with the same
     /// item type. `hold` decides what happens to input items in between.
-    pub fn replace(&mut self, name: &str, desc: Description, hold: Hold) -> Result<Replacement> {
+    ///
+    /// If this fails, or the future is dropped before it completes, the old
+    /// flowgraph keeps its links.
+    pub async fn replace_async(
+        &mut self,
+        name: &str,
+        desc: Description,
+        hold: Hold,
+    ) -> Result<Replacement> {
         let t0 = Instant::now();
+        self.check_ports(name, &desc)?;
+        let (fg, parts) = self
+            .assemble(name, &desc)
+            .with_context(|| format!("building the replacement of '{name}'"))?;
+        let built = Instant::now();
+
+        let paused = PausedInputs::pause(&self.flowgraphs[name].inputs, hold);
+        let new = start(self.runtime.handle(), fg, parts)
+            .await
+            .with_context(|| format!("starting the replacement of '{name}'"))?;
+        let started = Instant::now();
+
+        paused.hand_over();
+        for (_, channel, generation) in &new.inputs {
+            match hold {
+                Hold::Keep => channel.set_reader(*generation),
+                Hold::Discard => channel.restart_reader(*generation),
+            }
+        }
+        let switched = Instant::now();
+
+        let old = self.flowgraphs.insert(name.to_string(), new).unwrap();
+        Ok(Replacement {
+            old: self.retire(name, old),
+            timings: ReplaceTimings {
+                build: built - t0,
+                start: started - built,
+                switch: switched - started,
+                total: switched - t0,
+            },
+        })
+    }
+
+    /// Blocking form of [`replace_async`](Self::replace_async).
+    pub fn replace(&mut self, name: &str, desc: Description, hold: Hold) -> Result<Replacement> {
+        block_on(self.replace_async(name, desc, hold))
+    }
+
+    /// Check that `desc` can replace flowgraph `name`: it has every linked
+    /// port, with the same item type.
+    fn check_ports(&self, name: &str, desc: &Description) -> Result<()> {
         let old = self
             .flowgraphs
             .get(name)
@@ -433,54 +496,7 @@ impl Controller {
                 None => bail!("the replacement of '{name}' has no port '{}'", port.name),
             }
         }
-
-        let (fg, parts) = self
-            .assemble(name, &desc)
-            .with_context(|| format!("building the replacement of '{name}'"))?;
-        let built = Instant::now();
-
-        let old = self.flowgraphs.remove(name).unwrap();
-        if hold == Hold::Discard {
-            for (_, channel, _) in &old.inputs {
-                channel.set_accept(false);
-                channel.set_reader(NOBODY);
-            }
-        }
-        let new = match self.start(fg, parts) {
-            Ok(new) => new,
-            Err(e) => {
-                if hold == Hold::Discard {
-                    for (_, channel, generation) in &old.inputs {
-                        channel.set_accept(true);
-                        channel.set_reader(*generation);
-                    }
-                }
-                self.flowgraphs.insert(name.to_string(), old);
-                return Err(e.context(format!("starting the replacement of '{name}'")));
-            }
-        };
-        let started = Instant::now();
-
-        for (_, channel, generation) in &new.inputs {
-            if hold == Hold::Discard {
-                channel.clear();
-                channel.set_accept(true);
-            }
-            channel.set_reader(*generation);
-        }
-        let switched = Instant::now();
-
-        let retired = self.retire(name, old);
-        self.flowgraphs.insert(name.to_string(), new);
-        Ok(Replacement {
-            old: retired,
-            timings: ReplaceTimings {
-                build: built - t0,
-                start: started - built,
-                switch: switched - started,
-                total: switched - t0,
-            },
-        })
+        Ok(())
     }
 
     /// Let a replaced flowgraph finish in the background: it drains once
@@ -518,7 +534,7 @@ impl Controller {
 
     /// Stop flowgraph `name` and wait until it has terminated. Streams it
     /// writes to end.
-    pub fn stop(&mut self, name: &str) -> Result<Finished> {
+    pub async fn stop_async(&mut self, name: &str) -> Result<Finished> {
         let managed = self
             .flowgraphs
             .remove(name)
@@ -529,26 +545,38 @@ impl Controller {
             blocks,
             ..
         } = managed;
-        let flowgraph = block_on(async move {
-            let _ = handle.stop().await;
-            task.await
-        })
-        .with_context(|| format!("stopping flowgraph '{name}'"))?;
+        let _ = handle.stop().await;
+        let flowgraph = task
+            .await
+            .with_context(|| format!("stopping flowgraph '{name}'"))?;
         Ok(Finished { flowgraph, blocks })
+    }
+
+    /// Blocking form of [`stop_async`](Self::stop_async).
+    pub fn stop(&mut self, name: &str) -> Result<Finished> {
+        block_on(self.stop_async(name))
     }
 
     /// Wait until flowgraph `name` has finished by itself: its sources
     /// ended, including the flowgraphs feeding its inputs.
-    pub fn wait(&mut self, name: &str) -> Result<Finished> {
+    pub async fn wait_async(&mut self, name: &str) -> Result<Finished> {
         let managed = self
             .flowgraphs
             .remove(name)
             .ok_or_else(|| anyhow!("no flowgraph '{name}' is running"))?;
-        let flowgraph = block_on(managed.task).with_context(|| format!("flowgraph '{name}'"))?;
+        let flowgraph = managed
+            .task
+            .await
+            .with_context(|| format!("flowgraph '{name}'"))?;
         Ok(Finished {
             flowgraph,
             blocks: managed.blocks,
         })
+    }
+
+    /// Blocking form of [`wait_async`](Self::wait_async).
+    pub fn wait(&mut self, name: &str) -> Result<Finished> {
+        block_on(self.wait_async(name))
     }
 }
 
@@ -556,4 +584,90 @@ struct Assembled {
     blocks: Blocks,
     inputs: Vec<(PortDecl, Arc<dyn Pipe>, u64)>,
     outputs: Vec<(PortDecl, Arc<dyn Pipe>, u64)>,
+}
+
+/// Start an assembled flowgraph. Its output bridges are queued as writers
+/// first, so what they write before the caller finishes the switch is not
+/// taken for a stale writer's, and committed once it runs.
+async fn start(runtime: RuntimeHandle, fg: Flowgraph, parts: Assembled) -> Result<Managed> {
+    let writers = QueuedWriters::queue(&parts.outputs);
+    let (task, handle) = runtime.start(fg).await?.split();
+    writers.commit();
+    Ok(Managed {
+        handle,
+        task,
+        blocks: parts.blocks,
+        inputs: parts.inputs,
+        outputs: parts.outputs,
+    })
+}
+
+/// Output bridges queued as writers of their channels. Withdrawn when
+/// dropped, unless committed.
+struct QueuedWriters(Vec<(Arc<dyn Pipe>, u64)>);
+
+impl QueuedWriters {
+    fn queue(outputs: &[(PortDecl, Arc<dyn Pipe>, u64)]) -> Self {
+        Self(
+            outputs
+                .iter()
+                .map(|(_, channel, generation)| {
+                    channel.queue_writer(*generation);
+                    (channel.clone(), *generation)
+                })
+                .collect(),
+        )
+    }
+
+    fn commit(mut self) {
+        for (channel, generation) in self.0.drain(..) {
+            channel.commit_writer(generation);
+        }
+    }
+}
+
+impl Drop for QueuedWriters {
+    fn drop(&mut self) {
+        for (channel, generation) in self.0.drain(..) {
+            channel.unqueue_writer(generation);
+        }
+    }
+}
+
+/// With [`Hold::Discard`], the inputs of a flowgraph being replaced: they
+/// drop what arrives, while the old flowgraph keeps reading what is already
+/// queued. They take items again when dropped, unless handed over to the
+/// replacement.
+///
+/// The old flowgraph keeps its reader turn until the replacement takes it:
+/// a bridge that loses its turn ends its stream for good.
+struct PausedInputs(Vec<Arc<dyn Pipe>>);
+
+impl PausedInputs {
+    fn pause(inputs: &[(PortDecl, Arc<dyn Pipe>, u64)], hold: Hold) -> Self {
+        if hold == Hold::Keep {
+            return Self(Vec::new());
+        }
+        Self(
+            inputs
+                .iter()
+                .map(|(_, channel, _)| {
+                    channel.set_accept(false);
+                    channel.clone()
+                })
+                .collect(),
+        )
+    }
+
+    fn hand_over(mut self) {
+        self.0.clear();
+    }
+}
+
+impl Drop for PausedInputs {
+    fn drop(&mut self) {
+        for channel in self.0.drain(..) {
+            channel.set_accept(true);
+        }
+    }
 }
