@@ -997,9 +997,7 @@ fn derive_block_impl(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
         impl #kernel_interface_impl_generics #interface_trait for #struct_name #unconstraint_generics
             #kernel_interface_where_clause
         {
-            fn is_blocking() -> bool {
-                #blocking
-            }
+            const IS_BLOCKING: bool = #blocking;
             fn type_name() -> &'static str {
                 static TYPE_NAME: &str = #type_name;
                 TYPE_NAME

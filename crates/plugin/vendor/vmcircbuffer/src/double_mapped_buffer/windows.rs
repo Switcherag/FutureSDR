@@ -17,42 +17,19 @@ use winapi::um::{
 };
 
 use super::DoubleMappedBufferError;
-use super::pagesize;
 
+/// A file mapping of `size` bytes, mapped twice, back-to-back.
 #[derive(Debug)]
-pub struct DoubleMappedBufferImpl {
+pub struct Mapping {
     addr: usize,
     handle: usize,
-    size_bytes: usize,
-    item_size: usize,
+    size: usize,
 }
 
-impl DoubleMappedBufferImpl {
-    pub fn new(
-        min_items: usize,
-        item_size: usize,
-        alignment: usize,
-    ) -> Result<Self, DoubleMappedBufferError> {
-        for _ in 0..5 {
-            let ret = Self::new_try(min_items, item_size, alignment);
-            if ret.is_ok() {
-                return ret;
-            }
-        }
-        Self::new_try(min_items, item_size, alignment)
-    }
-
-    fn new_try(
-        min_items: usize,
-        item_size: usize,
-        alignment: usize,
-    ) -> Result<Self, DoubleMappedBufferError> {
-        let ps = pagesize();
-        let mut size = ps;
-        while size < min_items * item_size || !size.is_multiple_of(item_size) {
-            size += ps;
-        }
-
+impl Mapping {
+    /// Map `size` bytes, a multiple of the allocation granularity, twice, at
+    /// an address that is a multiple of `alignment`.
+    pub fn new(size: usize, alignment: usize) -> Result<Self, DoubleMappedBufferError> {
         unsafe {
             let handle = CreateFileMappingA(
                 INVALID_HANDLE_VALUE,
@@ -87,6 +64,7 @@ impl DoubleMappedBufferImpl {
             }
 
             if !(first_tmp as usize).is_multiple_of(alignment) {
+                UnmapViewOfFile(first_cpy);
                 CloseHandle(handle);
                 return Err(DoubleMappedBufferError::Alignment);
             }
@@ -99,11 +77,10 @@ impl DoubleMappedBufferImpl {
                 return Err(DoubleMappedBufferError::MapSecond);
             }
 
-            Ok(DoubleMappedBufferImpl {
+            Ok(Mapping {
                 addr: first_tmp as usize,
                 handle: handle as usize,
-                size_bytes: size,
-                item_size,
+                size,
             })
         }
     }
@@ -112,16 +89,16 @@ impl DoubleMappedBufferImpl {
         self.addr
     }
 
-    pub fn capacity(&self) -> usize {
-        self.size_bytes / self.item_size
+    pub fn size(&self) -> usize {
+        self.size
     }
 }
 
-impl Drop for DoubleMappedBufferImpl {
+impl Drop for Mapping {
     fn drop(&mut self) {
         unsafe {
             UnmapViewOfFile(self.addr as LPCVOID);
-            UnmapViewOfFile((self.addr + self.size_bytes) as LPCVOID);
+            UnmapViewOfFile((self.addr + self.size) as LPCVOID);
             CloseHandle(self.handle as HANDLE);
         }
     }

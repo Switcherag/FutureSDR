@@ -115,12 +115,16 @@ impl<T: CpuSample> Channel<T> {
         if items.is_empty() {
             return Write::Taken;
         }
-        st.queue.extend(items.iter().cloned());
-        let excess = st.queue.len().saturating_sub(self.capacity);
+        // Only the newest `capacity` items can stay: skip the others before
+        // copying them.
+        let skip = items.len().saturating_sub(self.capacity);
+        let items = &items[skip..];
+        let excess = (st.queue.len() + items.len()).saturating_sub(self.capacity);
         if excess > 0 {
             st.queue.drain(..excess);
-            st.dropped += excess as u64;
         }
+        st.dropped += (skip + excess) as u64;
+        st.queue.extend(items);
         let waiting = std::mem::take(&mut st.readers_waiting);
         drop(st);
         wake(waiting);
@@ -140,9 +144,11 @@ impl<T: CpuSample> Channel<T> {
         if n == 0 {
             return if st.closed { Read::End } else { Read::Empty };
         }
-        for (slot, item) in out.iter_mut().zip(st.queue.drain(..n)) {
-            *slot = item;
-        }
+        let (first, second) = st.queue.as_slices();
+        let k = first.len().min(n);
+        out[..k].copy_from_slice(&first[..k]);
+        out[k..n].copy_from_slice(&second[..n - k]);
+        st.queue.drain(..n);
         Read::Items(n)
     }
 
@@ -609,5 +615,94 @@ mod tests {
         assert!(!ch.stats().closed);
         ch.writer_finished(3);
         assert!(ch.stats().closed);
+    }
+}
+
+/// Items per second through a bridge, against the same flowgraph without
+/// one. `cargo test --release -p futuresdr-plugin-host --lib -- --ignored
+/// --nocapture throughput`
+#[cfg(test)]
+mod throughput {
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use futuresdr::blocks::NullSink;
+    use futuresdr::blocks::NullSource;
+    use futuresdr::num_complex::Complex32;
+    use futuresdr::runtime::BlockRef;
+    use futuresdr::runtime::Flowgraph;
+    use futuresdr::runtime::Runtime;
+    use futuresdr::runtime::block_on;
+
+    use super::*;
+
+    const RUN: Duration = Duration::from_secs(3);
+
+    /// Run the flowgraphs for `RUN`, then count what `snk` of the first one got.
+    fn received<T: CpuSample>(
+        rt: &Runtime,
+        fgs: Vec<Flowgraph>,
+        snk: &BlockRef<NullSink<T>>,
+    ) -> f64 {
+        let running: Vec<_> = fgs
+            .into_iter()
+            .map(|fg| rt.start(fg).unwrap().split())
+            .collect();
+        let t = Instant::now();
+        std::thread::sleep(RUN);
+        let elapsed = t.elapsed();
+        let mut done = Vec::new();
+        for (task, handle) in running {
+            block_on(handle.stop()).unwrap();
+            done.push(block_on(task).unwrap());
+        }
+        done[0].block(snk).unwrap().n_received() as f64 / elapsed.as_secs_f64()
+    }
+
+    fn bench<T: CpuSample>(rt: &Runtime, item: ItemType, capacity: usize) {
+        let mut fg = Flowgraph::new();
+        let src = fg.add(NullSource::<T>::new()).unwrap();
+        let snk = fg.add(NullSink::<T>::new()).unwrap();
+        fg.stream_dyn(src.id(), "output", snk.id(), "input")
+            .unwrap();
+        let direct = received(rt, vec![fg], &snk);
+
+        let channel = Channel::<T>::new(item, capacity);
+        let (writer, reader) = (next_generation(), next_generation());
+        let mut up = Flowgraph::new();
+        let src = up.add(NullSource::<T>::new()).unwrap();
+        let bsnk = up.add(BridgeSink::new(channel.clone(), writer)).unwrap();
+        up.stream_dyn(src.id(), "output", bsnk.id(), "input")
+            .unwrap();
+        let mut down = Flowgraph::new();
+        let bsrc = down
+            .add(BridgeSource::new(channel.clone(), reader))
+            .unwrap();
+        let snk = down.add(NullSink::<T>::new()).unwrap();
+        down.stream_dyn(bsrc.id(), "output", snk.id(), "input")
+            .unwrap();
+        channel.standby_writer(writer);
+        channel.commit_writer(writer);
+        channel.set_reader(reader);
+        let bridged = received(rt, vec![down, up], &snk);
+        println!(
+            "dynv4 {:<5} direct {:9.1} M/s   bridged {:9.1} M/s",
+            item.name(),
+            direct / 1e6,
+            bridged / 1e6
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn throughput() {
+        let rt = Runtime::new();
+        // The capacities of the dyn branch's bridges, or $THROUGHPUT_CAPACITY.
+        let capacity = |dyn_capacity| {
+            std::env::var("THROUGHPUT_CAPACITY").map_or(dyn_capacity, |c| c.parse().unwrap())
+        };
+        bench::<u8>(&rt, ItemType::U8, capacity(32_768));
+        bench::<f32>(&rt, ItemType::F32, capacity(8_192));
+        bench::<Complex32>(&rt, ItemType::Complex32, capacity(32_768));
     }
 }

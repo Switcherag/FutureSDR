@@ -11,3 +11,9 @@ license = "Apache-2.0"
 crate-type = ["dylib"]
 
 [workspace]
+
+# What the SDK uses when a plugin does not say: one codegen unit, no symbol
+# table (the exported symbols stay).
+[profile.release]
+codegen-units = 1
+strip = "symbols"

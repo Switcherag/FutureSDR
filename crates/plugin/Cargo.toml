@@ -34,6 +34,7 @@ futuresdr-plugin-api = { path = "api" }
 futuresdr-plugin-rt = { path = "rt" }
 futuresdr-plugin-sdk = { path = "sdk" }
 anyhow = "1.0"
+toml = { version = "0.9", features = ["preserve_order"] }
 
 # Circular buffers that reuse their memory mappings, so that starting
 # flowgraphs over and over stays cheap (see vendor/vmcircbuffer/PATCHED.md).
@@ -47,3 +48,6 @@ rustflags = ["-C", "prefer-dynamic"]
 
 [profile.release]
 rustflags = ["-C", "prefer-dynamic"]
+# Smaller and faster code for the shared library, the host and the SDK tools.
+codegen-units = 1
+strip = "symbols"

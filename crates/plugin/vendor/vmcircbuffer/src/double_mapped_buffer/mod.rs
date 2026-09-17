@@ -1,18 +1,26 @@
 //! Underlying data structure that maps a buffer twice into virtual memory.
+//!
+//! The mappings of dropped buffers are kept for new buffers of the same size,
+//! up to a limit set with [`set_pool_limit`].
 
 #[allow(clippy::module_inception)]
 mod double_mapped_buffer;
 pub use double_mapped_buffer::DoubleMappedBuffer;
 
+mod pool;
+pub use pool::DEFAULT_POOL_LIMIT;
+use pool::DoubleMappedBufferImpl;
+pub use pool::set_pool_limit;
+
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-use windows::DoubleMappedBufferImpl;
+use windows::Mapping;
 
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-use unix::DoubleMappedBufferImpl;
+use unix::Mapping;
 
 use thiserror::Error;
 /// Errors that can occur when setting up the double mapping.

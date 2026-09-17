@@ -383,7 +383,11 @@ impl Flowgraph {
     where
         K: SendKernel + 'static,
     {
-        block_on(self.add_async(block))
+        if <K as KernelInterface>::IS_BLOCKING {
+            block_on(self.add_async(block))
+        } else {
+            Ok(self.add_normal_kernel(block))
+        }
     }
 
     /// Asynchronously add a block and return a typed reference to it.
@@ -394,7 +398,7 @@ impl Flowgraph {
     where
         K: SendKernel + 'static,
     {
-        if <K as KernelInterface>::is_blocking() {
+        if <K as KernelInterface>::IS_BLOCKING {
             let domain = self.local_domain()?;
             let domain_id = self.validate_local_domain(domain)?;
             self.add_kernel_to_domain_async(domain_id, move || block)

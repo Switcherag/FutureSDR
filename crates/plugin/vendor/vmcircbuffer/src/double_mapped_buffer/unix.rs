@@ -1,118 +1,52 @@
 use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::os::unix::ffi::OsStringExt;
 
 use super::DoubleMappedBufferError;
-use super::pagesize;
 
-/// Double mappings of dropped buffers, kept for reuse.
-///
-/// Mapping a buffer takes a temporary file, six system calls and a page
-/// fault per page on first use; unmapping it interrupts every core the
-/// process ran on. Flowgraphs that are started and stopped over and over
-/// allocate the same sizes again and again, so the mappings are kept.
-static POOL: Mutex<Pool> = Mutex::new(Pool {
-    buffers: Vec::new(),
-    bytes: 0,
-});
-
-/// Most memory the pool keeps, counting both mappings of each buffer.
-const POOL_MAX_BYTES: usize = 64 << 20;
-
-struct Pool {
-    /// (address, size of one mapping)
-    buffers: Vec<(usize, usize)>,
-    bytes: usize,
-}
-
-impl Pool {
-    fn take(&mut self, size: usize, alignment: usize) -> Option<usize> {
-        let i = self
-            .buffers
-            .iter()
-            .rposition(|(addr, s)| *s == size && addr.is_multiple_of(alignment))?;
-        let (addr, _) = self.buffers.swap_remove(i);
-        self.bytes -= 2 * size;
-        Some(addr)
-    }
-
-    fn give(&mut self, addr: usize, size: usize) -> bool {
-        if self.bytes + 2 * size > POOL_MAX_BYTES {
-            return false;
+/// A new, empty file only this process can reach, open for reading and
+/// writing.
+fn shared_memory() -> Result<libc::c_int, DoubleMappedBufferError> {
+    #[cfg(target_os = "linux")]
+    {
+        let fd = unsafe { libc::memfd_create(c"buffer".as_ptr(), libc::MFD_CLOEXEC) };
+        if fd >= 0 {
+            return Ok(fd);
         }
-        self.buffers.push((addr, size));
-        self.bytes += 2 * size;
-        true
+        // e.g., memfd_create denied by a seccomp filter: use a temporary file
+    }
+
+    let mut path = std::env::temp_dir();
+    path.push("buffer-XXXXXX");
+    let mut template = CString::new(path.into_os_string().into_vec())
+        .map_err(|_| DoubleMappedBufferError::Create)?
+        .into_bytes_with_nul();
+    unsafe {
+        let fd = libc::mkstemp(template.as_mut_ptr().cast::<libc::c_char>());
+        if fd < 0 {
+            return Err(DoubleMappedBufferError::Create);
+        }
+        if libc::unlink(template.as_ptr().cast::<libc::c_char>()) < 0 {
+            libc::close(fd);
+            return Err(DoubleMappedBufferError::Unlink);
+        }
+        Ok(fd)
     }
 }
 
+/// A file of `size` bytes, mapped twice, back-to-back.
 #[derive(Debug)]
-pub struct DoubleMappedBufferImpl {
+pub struct Mapping {
     addr: usize,
-    size_bytes: usize,
-    item_size: usize,
+    size: usize,
 }
 
-impl DoubleMappedBufferImpl {
-    pub fn new(
-        min_items: usize,
-        item_size: usize,
-        alignment: usize,
-    ) -> Result<Self, DoubleMappedBufferError> {
-        for _ in 0..5 {
-            let ret = Self::new_try(min_items, item_size, alignment);
-            if ret.is_ok() {
-                return ret;
-            }
-        }
-        Self::new_try(min_items, item_size, alignment)
-    }
-
-    fn new_try(
-        min_items: usize,
-        item_size: usize,
-        alignment: usize,
-    ) -> Result<Self, DoubleMappedBufferError> {
-        let ps = pagesize();
-        let mut size = ps;
-        while size < min_items * item_size || !size.is_multiple_of(item_size) {
-            size += ps;
-        }
-
-        let pooled = POOL
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take(size, alignment);
-        if let Some(addr) = pooled {
-            return Ok(DoubleMappedBufferImpl {
-                addr,
-                size_bytes: size,
-                item_size,
-            });
-        }
-
-        let tmp = std::env::temp_dir();
-        let mut path = PathBuf::new();
-        path.push(tmp);
-        path.push("buffer-XXXXXX");
-        let cstring = CString::new(path.into_os_string().as_bytes()).unwrap();
-        let path = cstring.as_bytes_with_nul().as_ptr();
-
-        let fd;
+impl Mapping {
+    /// Map `size` bytes, a multiple of the page size, twice, at an address
+    /// that is a multiple of `alignment`.
+    pub fn new(size: usize, alignment: usize) -> Result<Self, DoubleMappedBufferError> {
+        let fd = shared_memory()?;
         let buff;
         unsafe {
-            fd = libc::mkstemp(path as *mut libc::c_char);
-            if fd < 0 {
-                return Err(DoubleMappedBufferError::Create);
-            }
-
-            let ret = libc::unlink(path.cast::<libc::c_char>());
-            if ret < 0 {
-                libc::close(fd);
-                return Err(DoubleMappedBufferError::Unlink);
-            }
-
             let ret = libc::ftruncate(fd, 2 * size as libc::off_t);
             if ret < 0 {
                 libc::close(fd);
@@ -132,6 +66,7 @@ impl DoubleMappedBufferImpl {
                 return Err(DoubleMappedBufferError::Placeholder);
             }
             if !(buff as usize).is_multiple_of(alignment) {
+                libc::munmap(buff, 2 * size);
                 libc::close(fd);
                 return Err(DoubleMappedBufferError::Alignment);
             }
@@ -145,29 +80,28 @@ impl DoubleMappedBufferImpl {
                 0,
             );
             if buff2 != buff.add(size) {
-                libc::munmap(buff, size);
+                libc::munmap(buff, 2 * size);
                 libc::close(fd);
                 return Err(DoubleMappedBufferError::MapSecond);
             }
 
             let ret = libc::ftruncate(fd, size as libc::off_t);
             if ret < 0 {
-                libc::munmap(buff, size);
-                libc::munmap(buff2, size);
+                libc::munmap(buff, 2 * size);
                 libc::close(fd);
                 return Err(DoubleMappedBufferError::Truncate);
             }
 
             let ret = libc::close(fd);
             if ret < 0 {
+                libc::munmap(buff, 2 * size);
                 return Err(DoubleMappedBufferError::Close);
             }
         }
 
-        Ok(DoubleMappedBufferImpl {
+        Ok(Mapping {
             addr: buff as usize,
-            size_bytes: size,
-            item_size,
+            size,
         })
     }
 
@@ -175,22 +109,15 @@ impl DoubleMappedBufferImpl {
         self.addr
     }
 
-    pub fn capacity(&self) -> usize {
-        self.size_bytes / self.item_size
+    pub fn size(&self) -> usize {
+        self.size
     }
 }
 
-impl Drop for DoubleMappedBufferImpl {
+impl Drop for Mapping {
     fn drop(&mut self) {
-        let kept = POOL
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .give(self.addr, self.size_bytes);
-        if kept {
-            return;
-        }
         unsafe {
-            libc::munmap(self.addr as *mut libc::c_void, self.size_bytes * 2);
+            libc::munmap(self.addr as *mut libc::c_void, self.size * 2);
         }
     }
 }

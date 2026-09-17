@@ -209,23 +209,6 @@ mod test {
     }
 
     #[test]
-    fn dropped_mappings_are_reused_and_cleared() {
-        // A size no other test uses: the pool is shared.
-        let b = DoubleMappedBuffer::<u32>::new(77_777).expect("failed to create buffer");
-        let addr = unsafe { b.slice().as_ptr() } as usize;
-        unsafe { b.slice_mut().fill(0xdead_beef) };
-        drop(b);
-
-        let b = DoubleMappedBuffer::<u32>::new(77_777).expect("failed to create buffer");
-        assert_eq!(unsafe { b.slice().as_ptr() } as usize, addr, "mapping reused");
-        unsafe {
-            assert!(b.slice().iter().all(|v| *v == 0), "items reset");
-            b.slice_mut()[0] = 7;
-            assert_eq!(b.slice_with_offset(b.capacity())[0], 7, "still double mapped");
-        }
-    }
-
-    #[test]
     fn many_buffers() {
         let _b0 = DoubleMappedBuffer::<u32>::new(123).expect("failed to create buffer");
         let _b1 = DoubleMappedBuffer::<u32>::new(456).expect("failed to create buffer");

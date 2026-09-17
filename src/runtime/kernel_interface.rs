@@ -25,7 +25,14 @@ use crate::runtime::dev::WorkIo;
 pub trait KernelInterface {
     /// Whether this block should run in a separate thread instead of on
     /// a normal scheduler worker.
-    fn is_blocking() -> bool;
+    ///
+    /// A constant, so that generic code for the other kind of block is not
+    /// instantiated.
+    const IS_BLOCKING: bool = false;
+    /// [`IS_BLOCKING`](Self::IS_BLOCKING).
+    fn is_blocking() -> bool {
+        Self::IS_BLOCKING
+    }
     /// Static block type name.
     fn type_name() -> &'static str;
     /// Access one type-erased stream input and its public name by dense index.
@@ -137,10 +144,6 @@ mod tests {
     struct MissingPorts;
 
     impl KernelInterface for MissingPorts {
-        fn is_blocking() -> bool {
-            false
-        }
-
         fn type_name() -> &'static str {
             "MissingPorts"
         }

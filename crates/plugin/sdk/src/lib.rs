@@ -255,8 +255,31 @@ impl Sdk {
     ///
     /// The crate must have `crate-type = ["dylib"]`, no dependencies, and its
     /// own `[workspace]`.
+    ///
+    /// Release builds use one codegen unit and drop the symbol table (the
+    /// exported symbols stay), for small and fast plugins, unless the crate's
+    /// `[profile.release]` sets `codegen-units` or `strip`.
     pub fn build_plugin(&self, manifest: &Path, target_dir: &Path) -> Result<PathBuf> {
         let mut cargo = Command::new(cargo_bin());
+        if self.profile == Profile::Release {
+            let text = fs::read_to_string(manifest)
+                .with_context(|| format!("reading {}", manifest.display()))?;
+            let table: toml::Table =
+                toml::from_str(&text).with_context(|| format!("parsing {}", manifest.display()))?;
+            let release = table
+                .get("profile")
+                .and_then(|p| p.get("release"))
+                .and_then(|r| r.as_table());
+            for (key, var, value) in [
+                ("codegen-units", "CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "1"),
+                ("strip", "CARGO_PROFILE_RELEASE_STRIP", "symbols"),
+            ] {
+                if !release.is_some_and(|r| r.contains_key(key)) && std::env::var_os(var).is_none()
+                {
+                    cargo.env(var, value);
+                }
+            }
+        }
         cargo
             .args(["rustc", "--lib", "--message-format=json-render-diagnostics"])
             .arg("--manifest-path")
