@@ -89,6 +89,16 @@ pub struct Added {
     pub block_ref: Box<dyn Any + Send>,
 }
 
+impl Added {
+    /// A block known only by its id, e.g. one a helper function added.
+    pub fn untyped(id: BlockId) -> Self {
+        Self {
+            id,
+            block_ref: Box::new(()),
+        }
+    }
+}
+
 impl std::fmt::Debug for Added {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Added")
@@ -157,6 +167,8 @@ pub fn type_label(ty: &str) -> String {
 /// - `add: |s| expr` builds the kernel from the block's [`Settings`] `s`; `?`
 ///   may be used on settings lookups and anything returning
 ///   [`anyhow::Result`].
+/// - `build: |fg, s| expr` (without `types`) adds the block itself and
+///   returns the [`Added`], for blocks a helper function builds.
 #[macro_export]
 macro_rules! export_plugin {
     (name: $plugin:literal, blocks: [ $( $block:tt ),* $(,)? ] $(,)?) => {
@@ -209,6 +221,17 @@ macro_rules! __export_block {
     ($blocks:ident, {
         name: $name:literal,
         $( description: $desc:literal, )?
+        build: |$fg:ident, $s:ident| $body:expr $(,)?
+    }) => {
+        $blocks.push($crate::BlockType {
+            name: ::std::string::String::from($name),
+            description: $crate::__description!($($desc)?),
+            add: |$fg, $s| $body,
+        });
+    };
+    ($blocks:ident, {
+        name: $name:literal,
+        $( description: $desc:literal, )?
         add: |$s:ident| $body:expr $(,)?
     }) => {
         $blocks.push($crate::BlockType {
@@ -237,6 +260,45 @@ macro_rules! __description {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod exported {
+        use crate::Added;
+
+        export_plugin! {
+            name: "built",
+            blocks: [
+                {
+                    name: "Built",
+                    description: "Added by a helper.",
+                    build: |fg, s| {
+                        let head = futuresdr::blocks::Head::<u8>::new(s.get("n")?);
+                        Ok(Added::untyped(fg.add(head)?.id()))
+                    },
+                },
+            ]
+        }
+    }
+
+    #[test]
+    fn blocks_built_by_helpers_are_exported() {
+        let plugin = exported::futuresdr_plugin_entry();
+        let block = &plugin.blocks[0];
+        assert_eq!(
+            (block.name.as_str(), block.description),
+            ("Built", "Added by a helper.")
+        );
+        let mut fg = futuresdr::runtime::Flowgraph::new();
+        let settings = Settings::new(
+            "b",
+            [("n".to_string(), futuresdr::runtime::Pmt::Usize(3))].into(),
+        );
+        let added = (block.add)(&mut fg, &settings).unwrap();
+        assert!(added.block_ref.downcast_ref::<()>().is_some(), "untyped");
+        assert!(
+            (block.add)(&mut fg, &Settings::default()).is_err(),
+            "n is required"
+        );
+    }
 
     #[test]
     fn type_labels_drop_paths_and_spaces() {

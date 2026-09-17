@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Test pipeline of the plugin add-on. CI runs the same stages.
 #
-#   ./ci.sh                  fmt lint test sdk size
+#   ./ci.sh                  fmt lint test plugins sdk size
 #   ./ci.sh all              every stage
 #   ./ci.sh <stage>...       the given stages, in that order
 #
 # Stages
-#   fmt       rustfmt: this workspace, the basic plugin, the vendored crate and
-#             the core files the add-on changed
-#   lint      clippy -D warnings; the basic plugin through the SDK with
+#   fmt       rustfmt: this workspace, the plugin crates in blocks/, the
+#             vendored crate and the core files the add-on changed
+#   lint      clippy -D warnings; the plugin crates through the SDK with
 #             --clippy --deny-warnings; rustdoc warnings; unused dependencies
 #             (if cargo-machete is installed)
 #   test      unit and integration tests, debug profile
+#   plugins   the tests of the plugin crates in blocks/ (receivers against
+#             recordings), through a debug SDK; with WLAN_HALOW_RECORDING,
+#             also the one-second HaLow recording, through a release SDK
 #   release   the same with the release profile (one codegen unit, stripped),
 #             and the bridge throughput measurement
 #   sdk       end to end: pack an SDK from a release build, move it, build
@@ -76,6 +79,23 @@ release_sdk() {
     mv "$CI/e2e/packed" "$CI/e2e/sdk"
 }
 
+# The plugin crates.
+PLUGINS=()
+for manifest in "$ROOT"/blocks/*/Cargo.toml; do
+    PLUGINS+=("$(dirname "$manifest")")
+done
+
+# Pack an SDK from the debug build into $CI/dev-sdk. Once per run.
+DEV_SDK=""
+dev_sdk() {
+    [ -n "$DEV_SDK" ] && return
+    cargo build -q -p futuresdr-plugin-rt -p futuresdr-plugin-sdk
+    rm -rf "$CI/dev-sdk"
+    "$ROOT/target/debug/fsdr-plugin" pack \
+        --from "$ROOT/target/debug/libfuturesdr_plugin_rt.so" --out "$CI/dev-sdk" >/dev/null
+    DEV_SDK="$CI/dev-sdk"
+}
+
 # A plugin crate with one block type, in directory $1.
 tiny_plugin() {
     mkdir -p "$1/src"
@@ -112,7 +132,9 @@ EOF
 stage_fmt() {
     step "fmt"
     cargo fmt --all --check
-    cargo fmt --check --manifest-path blocks/basic/Cargo.toml
+    for plugin in "${PLUGINS[@]}"; do
+        cargo fmt --check --manifest-path "$plugin/Cargo.toml"
+    done
     cargo fmt --check --manifest-path vendor/vmcircbuffer/Cargo.toml
     (cd "$CORE" && rustfmt --edition 2024 --check \
         src/runtime/flowgraph.rs src/runtime/kernel_interface.rs \
@@ -123,13 +145,13 @@ stage_lint() {
     step "clippy"
     cargo clippy -q --workspace --all-targets -- -D warnings
 
-    step "clippy: basic plugin, through a debug SDK"
-    cargo build -q -p futuresdr-plugin-rt -p futuresdr-plugin-sdk
-    rm -rf "$CI/lint"
-    "$ROOT/target/debug/fsdr-plugin" pack \
-        --from "$ROOT/target/debug/libfuturesdr_plugin_rt.so" --out "$CI/lint/sdk" >/dev/null
-    "$ROOT/target/debug/fsdr-plugin" build --sdk "$CI/lint/sdk" blocks/basic \
-        --target-dir "$CI/lint/target" --clippy --deny-warnings >/dev/null
+    step "clippy: plugin crates, through a debug SDK"
+    dev_sdk
+    for plugin in "${PLUGINS[@]}"; do
+        echo "  ${plugin#"$ROOT"/}"
+        "$ROOT/target/debug/fsdr-plugin" build --sdk "$DEV_SDK" "$plugin" \
+            --target-dir "$CI/lint" --clippy --deny-warnings >/dev/null
+    done
 
     step "rustdoc"
     RUSTDOCFLAGS="-D warnings" cargo doc -q --workspace --no-deps
@@ -145,6 +167,21 @@ stage_lint() {
 stage_test() {
     step "tests (debug)"
     cargo test -q --workspace
+}
+
+stage_plugins() {
+    dev_sdk
+    for plugin in "${PLUGINS[@]}"; do
+        step "plugin tests: ${plugin#"$ROOT"/}"
+        "$ROOT/target/debug/fsdr-plugin" test --sdk "$DEV_SDK" "$plugin" \
+            --target-dir "$CI/plugins" -- --quiet
+    done
+    if [ -n "${WLAN_HALOW_RECORDING:-}" ]; then
+        step "plugin tests: HaLow recording, release"
+        release_sdk
+        fsdr_plugin test --sdk "$CI/e2e/sdk" blocks/wlan --target-dir "$CI/plugins" \
+            -- --ignored --nocapture ah_long_recording
+    fi
 }
 
 stage_release() {
@@ -187,12 +224,16 @@ stage_size() {
     release_sdk
     rm -rf "$CI/size"
     tiny_plugin "$CI/size/tiny"
-    local tiny basic
+    local tiny basic wlan zigbee
     tiny=$(fsdr_plugin build --sdk "$CI/e2e/sdk" "$CI/size/tiny" --target-dir "$CI/size/target")
     basic=$(fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/basic --target-dir "$CI/size/target")
+    wlan=$(fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/wlan --target-dir "$CI/size/target")
+    zigbee=$(fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/zigbee --target-dir "$CI/size/target")
     check_size "shared library" "$RT" 6000000
     check_size "one-block plugin" "$tiny" 150000
     check_size "basic plugin (74 block types)" "$basic" 2000000
+    check_size "wlan plugin (802.11a and ah)" "$wlan" 500000
+    check_size "zigbee plugin" "$zigbee" 500000
     check_size "swap_bench" "$ROOT/target/release/examples/swap_bench" 2000000
 
     step "no local-domain code in plugins of non-blocking blocks"
@@ -296,8 +337,8 @@ stage_coverage() {
     echo "line coverage $lines% (at least $min%)"
 }
 
-ALL=(fmt lint test release sdk size core vendor miri stress coverage)
-DEFAULT=(fmt lint test sdk size)
+ALL=(fmt lint test plugins release sdk size core vendor miri stress coverage)
+DEFAULT=(fmt lint test plugins sdk size)
 
 if [ $# -eq 0 ]; then
     set -- "${DEFAULT[@]}"

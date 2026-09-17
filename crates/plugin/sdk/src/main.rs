@@ -4,6 +4,7 @@
 //! fsdr-plugin pack  --from <libfuturesdr_plugin_rt.so> --out <dir>
 //! fsdr-plugin build --sdk <dir> <plugin crate dir> [--target-dir <dir>]
 //!                   [--clippy] [--deny-warnings]
+//! fsdr-plugin test  --sdk <dir> <plugin crate dir> [--target-dir <dir>] [-- <test args>]
 //! fsdr-plugin info  --sdk <dir>
 //! ```
 //!
@@ -22,6 +23,7 @@ usage:
   fsdr-plugin pack  --from <libfuturesdr_plugin_rt.so> --out <dir>
   fsdr-plugin build --sdk <dir> <plugin crate dir> [--target-dir <dir>]
                     [--clippy] [--deny-warnings]
+  fsdr-plugin test  --sdk <dir> <plugin crate dir> [--target-dir <dir>] [-- <test args>]
   fsdr-plugin info  --sdk <dir>";
 
 fn main() -> Result<()> {
@@ -39,6 +41,7 @@ fn main() -> Result<()> {
     let mut target_dir = None;
     let mut options = BuildOptions::default();
     let mut positional = Vec::new();
+    let mut test_args = Vec::new();
     while let Some(arg) = args.next() {
         let mut value = || {
             args.next()
@@ -51,6 +54,10 @@ fn main() -> Result<()> {
             "--target-dir" => target_dir = Some(PathBuf::from(value()?)),
             "--clippy" => options.clippy = true,
             "--deny-warnings" => options.deny_warnings = true,
+            "--" => {
+                test_args.extend(args.by_ref());
+                break;
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -82,6 +89,14 @@ fn main() -> Result<()> {
             let library =
                 sdk.build_plugin_with(&crate_dir.join("Cargo.toml"), &target_dir, &options)?;
             println!("{}", library.display());
+        }
+        "test" => {
+            let (Some(dir), [crate_dir]) = (sdk, positional.as_slice()) else {
+                bail!("test needs --sdk and one plugin crate\n{USAGE}");
+            };
+            let sdk = Sdk::open(&dir)?;
+            let target_dir = target_dir.unwrap_or_else(|| crate_dir.join("target"));
+            sdk.test_plugin(&crate_dir.join("Cargo.toml"), &target_dir, &test_args)?;
         }
         "info" => {
             let Some(dir) = sdk else {

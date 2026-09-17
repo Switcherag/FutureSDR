@@ -51,6 +51,11 @@ fn usage_and_mistakes() {
         (vec!["pack"], "pack needs --from and --out"),
         (vec!["pack", "--from", missing, "--out", missing], "nothing"),
         (vec!["build", "--sdk", missing], "build needs"),
+        (vec!["test", missing], "test needs"),
+        (
+            vec!["test", "--sdk", missing, missing, missing],
+            "test needs",
+        ),
         (vec!["info"], "info needs --sdk"),
         (vec!["info", "--bogus"], "unknown option --bogus"),
         (vec!["info", "--sdk"], "--sdk needs a value"),
@@ -120,6 +125,19 @@ fn a_plugin_that_does_not_build_is_reported() {
             "--deny-warnings",
         ]);
         assert!(!ok && err.contains("building plugin"), "{err}");
+        let target = sdk.join("target");
+        let (ok, _, err) = fsdr_plugin(&[
+            "test",
+            "--sdk",
+            sdk.to_str().unwrap(),
+            krate.to_str().unwrap(),
+            "--target-dir",
+            target.to_str().unwrap(),
+            "--",
+            "--exact",
+            "none",
+        ]);
+        assert!(!ok && err.contains("testing plugin"), "{err}");
     }
     let sdk = Sdk::open(&fake_sdk("manifest", MANIFEST)).unwrap();
     let err = format!(

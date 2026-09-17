@@ -28,12 +28,12 @@ jobs:
       - run: crates/plugin/ci.sh fmt lint
 
   test:
-    name: Tests, debug and release
+    name: Tests, debug and release, plugin crates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
-      - run: crates/plugin/ci.sh test release
+      - run: crates/plugin/ci.sh test plugins release
 
   sdk:
     name: SDK end to end, size budgets

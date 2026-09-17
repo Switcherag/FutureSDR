@@ -27,7 +27,8 @@ fn a_packed_sdk_builds_loadable_plugins() -> anyhow::Result<()> {
     let packed = Sdk::of_this_process()?.pack(&dir.join("sdk"))?;
 
     let sdk = Sdk::open(&dir.join("sdk"))?;
-    assert_eq!(sdk.rt, packed.rt);
+    // Opened SDKs have absolute paths, which plugin builds need.
+    assert_eq!(sdk.rt, packed.rt.canonicalize()?);
     assert_eq!(
         sdk.crates()?,
         Sdk::of_this_process()?.crates()?,
@@ -134,6 +135,49 @@ fn tiny_plugin(dir: &Path, name: &str, profile: &str) -> std::path::PathBuf {
     .unwrap();
     std::fs::write(dir.join("src/lib.rs"), TINY).unwrap();
     dir.join("Cargo.toml")
+}
+
+/// The tests of a plugin crate run against the SDK, with arguments for
+/// the test harness; failing tests fail the command.
+#[test]
+fn plugin_tests_run_against_the_sdk() -> anyhow::Result<()> {
+    let dir = common::scratch("plugin-tests");
+    let manifest = tiny_plugin(&dir, "tiny_tested", "");
+    let tests = r#"
+#[cfg(test)]
+mod tests {
+    use futuresdr::prelude::*;
+
+    #[test]
+    fn copies() -> Result<()> {
+        let mut fg = Flowgraph::new();
+        let src = fg.add(blocks::VectorSource::<u8>::new(vec![1, 2]))?;
+        let copy = fg.add(blocks::Copy::<u8>::new())?;
+        let snk = fg.add(blocks::VectorSink::<u8>::new(4))?;
+        fg.stream_dyn(src.id(), "output", copy.id(), "input")?;
+        fg.stream_dyn(copy.id(), "output", snk.id(), "input")?;
+        let done = Runtime::new().run(fg)?;
+        assert_eq!(done.block(&snk)?.items(), &vec![1, 2]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn fails() {
+        panic!("as asked");
+    }
+}
+"#;
+    let lib = manifest.with_file_name("src/lib.rs");
+    std::fs::write(&lib, format!("{TINY}{tests}"))?;
+    let sdk = Sdk::of_this_process()?;
+    let target = dir.join("target");
+    let args = |args: &[&str]| -> Vec<String> { args.iter().map(|a| a.to_string()).collect() };
+    sdk.test_plugin(&manifest, &target, &args(&["--test-threads=1"]))?;
+    let failed = sdk.test_plugin(&manifest, &target, &args(&["--include-ignored"]));
+    let err = format!("{:#}", failed.unwrap_err());
+    assert!(err.contains("testing plugin"), "{err}");
+    Ok(())
 }
 
 /// Whether the ELF file has a symbol table (the dynamic one aside).

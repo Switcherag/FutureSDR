@@ -1,0 +1,17 @@
+[package]
+name = "fsdr-blocks-wlan"
+description = "IEEE 802.11a and 802.11ah (HaLow) receiver blocks, as a plugin."
+version = "0.8.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# No dependencies: `futuresdr_plugin_rt` is provided by the SDK that builds
+# this crate (`fsdr-plugin build --sdk <dir> .`).
+[lib]
+crate-type = ["dylib"]
+
+[workspace]
+
+[profile.release]
+codegen-units = 1
+strip = "symbols"

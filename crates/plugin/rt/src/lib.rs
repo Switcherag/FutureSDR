@@ -18,6 +18,24 @@
 
 pub use futuresdr::*;
 pub use plugin_api;
+/// FFT plans of the library FutureSDR's `Fft` block uses, `rustfft`, made
+/// by this library: planning in a plugin would compile all of `rustfft`'s
+/// algorithms into it.
+pub mod fft {
+    use std::sync::Arc;
+
+    pub use rustfft::Fft;
+
+    /// A forward FFT of `len` points on `Complex32`.
+    pub fn forward(len: usize) -> Arc<dyn Fft<f32>> {
+        rustfft::FftPlanner::new().plan_fft_forward(len)
+    }
+
+    /// An inverse FFT of `len` points on `Complex32`, not normalized.
+    pub fn inverse(len: usize) -> Arc<dyn Fft<f32>> {
+        rustfft::FftPlanner::new().plan_fft_inverse(len)
+    }
+}
 
 /// Everything a plugin crate usually needs. Replaces FutureSDR's own
 /// application prelude for plugin crates.
@@ -25,6 +43,7 @@ pub mod prelude {
     pub use futuresdr::blocks;
     pub use futuresdr::num_complex::Complex64;
     pub use futuresdr::runtime::dev::prelude::*;
+    pub use plugin_api::Added;
     pub use plugin_api::FromSetting;
     pub use plugin_api::Settings;
     pub use plugin_api::anyhow;

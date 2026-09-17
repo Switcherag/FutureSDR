@@ -226,6 +226,10 @@ impl Sdk {
 
     /// Open an SDK directory written by [`Sdk::pack`].
     pub fn open(dir: &Path) -> Result<Self> {
+        // Absolute: builds run the compiler from the plugin's directory.
+        let dir = &dir
+            .canonicalize()
+            .with_context(|| format!("{} is not an SDK", dir.display()))?;
         let text = fs::read_to_string(dir.join(MANIFEST))
             .with_context(|| format!("{} is not an SDK", dir.display()))?;
         let get = |key: &str| -> Result<String> {
@@ -302,6 +306,7 @@ impl Sdk {
                 }
             }
         }
+        self.prepare(&mut cargo);
         cargo
             .args(["rustc", "--lib", "--message-format=json-render-diagnostics"])
             .arg("--manifest-path")
@@ -311,33 +316,9 @@ impl Sdk {
         if self.profile == Profile::Release {
             cargo.arg("--release");
         }
-        cargo
-            .arg("--")
-            .arg("--extern")
-            .arg(format!("{RT_CRATE}={}", self.rt.display()))
-            .args(["-C", "prefer-dynamic"]);
-        if let Some(meta) = &self.rt_metadata {
-            cargo
-                .arg("--extern")
-                .arg(format!("{RT_CRATE}={}", meta.display()));
-        }
-        for dir in &self.deps {
-            cargo.arg("-L").arg(format!("dependency={}", dir.display()));
-        }
+        cargo.arg("--").args(self.rustc_flags());
         if options.deny_warnings {
             cargo.args(["-D", "warnings"]);
-        }
-        if !self.toolchain.is_empty() {
-            cargo.env("RUSTUP_TOOLCHAIN", &self.toolchain);
-        }
-        // Settings of an enclosing build must not leak into this one.
-        for var in [
-            "RUSTFLAGS",
-            "CARGO_ENCODED_RUSTFLAGS",
-            "CARGO_TARGET_DIR",
-            "CARGO_BUILD_TARGET_DIR",
-        ] {
-            cargo.env_remove(var);
         }
 
         let mut child = cargo
@@ -364,6 +345,74 @@ impl Sdk {
             bail!("building plugin {} failed", manifest.display());
         }
         library.ok_or_else(|| anyhow!("cargo built no library for {}", manifest.display()))
+    }
+
+    /// Run the unit tests of the plugin crate whose manifest is `manifest`,
+    /// against this SDK, passing `args` to the test harness.
+    pub fn test_plugin(&self, manifest: &Path, target_dir: &Path, args: &[String]) -> Result<()> {
+        let mut cargo = Command::new(cargo_bin());
+        self.prepare(&mut cargo);
+        cargo
+            .args(["test", "--lib"])
+            .arg("--manifest-path")
+            .arg(manifest)
+            .arg("--target-dir")
+            .arg(target_dir);
+        if self.profile == Profile::Release {
+            cargo.arg("--release");
+        }
+        cargo.arg("--").args(args);
+        // `cargo test` passes no extra compiler flags on its command line; the
+        // plugin has no dependencies, so these reach only its own crate.
+        cargo.env("CARGO_ENCODED_RUSTFLAGS", self.rustc_flags().join("\u{1f}"));
+        // The test program loads the shared library and the standard library.
+        let mut path = vec![
+            self.rt.parent().unwrap_or(Path::new(".")).to_path_buf(),
+            sysroot_libs(&self.toolchain)?,
+        ];
+        path.extend(std::env::split_paths(
+            &std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default(),
+        ));
+        cargo.env("LD_LIBRARY_PATH", std::env::join_paths(path)?);
+        if !cargo.status().context("running cargo")?.success() {
+            bail!("testing plugin {} failed", manifest.display());
+        }
+        Ok(())
+    }
+
+    /// Compiler flags that make the shared library, and what it is built
+    /// from, available to a plugin crate.
+    fn rustc_flags(&self) -> Vec<String> {
+        let mut flags = vec![
+            "--extern".to_string(),
+            format!("{RT_CRATE}={}", self.rt.display()),
+            "-C".to_string(),
+            "prefer-dynamic".to_string(),
+        ];
+        if let Some(meta) = &self.rt_metadata {
+            flags.push("--extern".to_string());
+            flags.push(format!("{RT_CRATE}={}", meta.display()));
+        }
+        for dir in &self.deps {
+            flags.push("-L".to_string());
+            flags.push(format!("dependency={}", dir.display()));
+        }
+        flags
+    }
+
+    /// The toolchain of the SDK, and nothing of an enclosing build.
+    fn prepare(&self, cargo: &mut Command) {
+        if !self.toolchain.is_empty() {
+            cargo.env("RUSTUP_TOOLCHAIN", &self.toolchain);
+        }
+        for var in [
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_TARGET_DIR",
+            "CARGO_BUILD_TARGET_DIR",
+        ] {
+            cargo.env_remove(var);
+        }
     }
 }
 
