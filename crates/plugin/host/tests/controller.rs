@@ -590,7 +590,7 @@ fn random_replacements_keep_every_item() {
                     1 => {
                         let standby = ctrl.prepare_async("rx", f64_receiver()).await?;
                         Timer::after(Duration::from_millis(pause)).await;
-                        retired.extend(ctrl.commit(standby, Hold::Keep)?);
+                        retired.extend(ctrl.commit_async(standby, Hold::Keep).await?);
                     }
                     2 | 3 => {
                         next_source += 1;
@@ -599,7 +599,7 @@ fn random_replacements_keep_every_item() {
                             ctrl.replace_async("src", desc, Hold::Keep).await?;
                         } else {
                             let standby = ctrl.prepare_async("src", desc).await?;
-                            ctrl.commit(standby, Hold::Keep)?;
+                            ctrl.commit_async(standby, Hold::Keep).await?;
                         }
                     }
                     4 => drop(ctrl.prepare_async("rx", f64_receiver()).await?),
@@ -705,8 +705,6 @@ fn accessors_and_mistaken_names() {
     }
     let err = ctrl.link("src.samples", "rx.samples").unwrap_err();
     assert!(err.to_string().contains("already linked"), "{err}");
-    let err = ctrl.link("src.samples", "rx2.samples").unwrap_err();
-    assert!(err.to_string().contains("already feeds"), "{err}");
     assert!(ctrl.link_stats("src.samples").is_none(), "no channel yet");
     for name in ["nobody", ""] {
         assert!(ctrl.stop(name).is_err());

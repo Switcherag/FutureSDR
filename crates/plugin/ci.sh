@@ -25,8 +25,8 @@
 #   vendor    tests of vendor/vmcircbuffer, plain and with AddressSanitizer
 #   miri      the plugin API's unit tests under Miri
 #   stress    randomized tests with CI_SCALE (default 20) times the cases,
-#             then the controller tests CI_REPEAT (default 5) times with
-#             every core busy
+#             then the controller and link tests CI_REPEAT (default 5) times
+#             with every core busy
 #   coverage  line coverage of api, host and sdk, at least CI_MIN_COVERAGE
 #             percent (default 90); HTML report in target/ci/coverage/html
 #             (needs llvm-tools)
@@ -278,8 +278,8 @@ stage_stress() {
     step "randomized tests, $scale times the cases"
     PLUGIN_TEST_CASES="$scale" cargo test -q --workspace --release
 
-    step "controller tests, $repeat times, every core busy"
-    cargo test -q --release -p futuresdr-plugin-host --test controller --no-run
+    step "controller and link tests, $repeat times, every core busy"
+    cargo test -q --release -p futuresdr-plugin-host --test controller --test links --no-run
     local i status=0
     BUSY=()
     for ((i = 0; i < $(nproc); i++)); do
@@ -288,7 +288,8 @@ stage_stress() {
     done
     for ((i = 1; i <= repeat; i++)); do
         echo "  run $i"
-        timeout 600 cargo test -q --release -p futuresdr-plugin-host --test controller ||
+        timeout 600 cargo test -q --release -p futuresdr-plugin-host --test controller \
+            --test links ||
             { status=$?; break; }
     done
     kill "${BUSY[@]}" 2>/dev/null || true

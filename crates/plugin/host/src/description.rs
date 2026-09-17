@@ -44,10 +44,27 @@ use crate::items::ItemType;
 ///
 /// [outputs]
 /// kept = { port = "head.output", type = "f32" }
+///
+/// # message ports other flowgraphs can link to
+/// [message_inputs]
+/// commands = "head.config"
+///
+/// [message_outputs]
+/// frames = "decoder.rx_frames"
+///
+/// # settings this flowgraph lets the flowgraphs it feeds ask for: the
+/// # message input of a block that takes the value
+/// [controls]
+/// frequency = "src.freq"
+///
+/// # what this flowgraph asks of the flowgraphs that feed it; numbers are
+/// # sent as f64
+/// [radio]
+/// frequency = 919.0e6
 /// ```
 ///
 /// A port's item type defaults to the parameter of its block's type
-/// (`f32` for `Head<f32>`).
+/// (`f32` for `Head<f32>`). Stream and message ports share one namespace.
 #[derive(Debug, Clone, Default)]
 pub struct Description {
     /// Optional name.
@@ -62,6 +79,16 @@ pub struct Description {
     pub inputs: Vec<PortDecl>,
     /// Stream outputs other flowgraphs can read.
     pub outputs: Vec<PortDecl>,
+    /// Message inputs other flowgraphs can post to.
+    pub message_inputs: Vec<MessagePortDecl>,
+    /// Message outputs other flowgraphs and the application can take.
+    pub message_outputs: Vec<MessagePortDecl>,
+    /// Settings the flowgraphs this one feeds can ask for, each the message
+    /// input of a block.
+    pub controls: Vec<MessagePortDecl>,
+    /// Settings this flowgraph asks of the flowgraphs feeding it, in file
+    /// order.
+    pub radio: Vec<(String, Pmt)>,
 }
 
 /// One block of a [`Description`].
@@ -88,13 +115,29 @@ pub struct PortDecl {
     pub item: ItemType,
 }
 
-const KEYS: [&str; 6] = [
+/// A message port of a flowgraph, or a control, bound to a message port of
+/// one of its blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagePortDecl {
+    /// Port or control name, unique in the flowgraph.
+    pub name: String,
+    /// Block it is bound to.
+    pub block: String,
+    /// Message port of that block.
+    pub port: String,
+}
+
+const KEYS: [&str; 10] = [
     "name",
     "plugins",
     "connections",
     "blocks",
     "inputs",
     "outputs",
+    "message_inputs",
+    "message_outputs",
+    "controls",
+    "radio",
 ];
 
 impl Description {
@@ -145,11 +188,34 @@ impl Description {
         let text = strings(table.get("connections"), "connections")?.join("\n");
         let connections = connect::parse(&text).map_err(|e| anyhow!("connections:{e}"))?;
 
+        let radio = match table.get("radio") {
+            None => Vec::new(),
+            Some(Value::Table(values)) => values
+                .iter()
+                .map(|(k, v)| {
+                    let value = match v {
+                        Value::Integer(i) => Pmt::F64(*i as f64),
+                        v => to_pmt(v),
+                    };
+                    (k.clone(), value)
+                })
+                .collect(),
+            Some(_) => bail!("'radio' must be a table of settings"),
+        };
+
         let desc = Self {
             name,
             plugins,
             inputs: ports(table.get("inputs"), "inputs", &blocks)?,
             outputs: ports(table.get("outputs"), "outputs", &blocks)?,
+            message_inputs: message_ports(table.get("message_inputs"), "message_inputs", &blocks)?,
+            message_outputs: message_ports(
+                table.get("message_outputs"),
+                "message_outputs",
+                &blocks,
+            )?,
+            controls: message_ports(table.get("controls"), "controls", &blocks)?,
+            radio,
             links: connections.links,
             blocks,
         };
@@ -170,9 +236,16 @@ impl Description {
         }
 
         let mut names = HashSet::new();
-        for port in self.inputs.iter().chain(&self.outputs) {
-            if !names.insert(port.name.as_str()) {
-                bail!("port '{}' is declared twice", port.name);
+        let message_ports = self.message_inputs.iter().chain(&self.message_outputs);
+        let all = self
+            .inputs
+            .iter()
+            .chain(&self.outputs)
+            .map(|p| &p.name)
+            .chain(message_ports.map(|p| &p.name));
+        for name in all {
+            if !names.insert(name.as_str()) {
+                bail!("port '{name}' is declared twice");
             }
         }
 
@@ -207,6 +280,14 @@ impl Description {
         self.inputs
             .iter()
             .chain(&self.outputs)
+            .find(|p| p.name == name)
+    }
+
+    /// The message input or output port `name`.
+    pub fn message_port(&self, name: &str) -> Option<&MessagePortDecl> {
+        self.message_inputs
+            .iter()
+            .chain(&self.message_outputs)
             .find(|p| p.name == name)
     }
 
@@ -262,6 +343,53 @@ fn block_decl(name: &str, decl: &Value) -> Result<BlockDecl> {
     })
 }
 
+/// `"block.port"`, for port `name` of table `key`.
+fn target<'a>(
+    key: &str,
+    name: &str,
+    target: &'a str,
+    blocks: &[BlockDecl],
+) -> Result<(&'a str, &'a str)> {
+    if !is_ident(name) {
+        bail!("{key}: port name '{name}' must be an identifier (letters, digits, `_`)");
+    }
+    let (block, port) = target
+        .split_once('.')
+        .filter(|(_, port)| !port.is_empty())
+        .ok_or_else(|| anyhow!("{key}.{name}: '{target}' is not \"block.port\""))?;
+    if !blocks.iter().any(|b| b.name == block) {
+        bail!("{key}.{name}: no block '{block}'");
+    }
+    Ok((block, port))
+}
+
+fn message_ports(
+    value: Option<&Value>,
+    key: &str,
+    blocks: &[BlockDecl],
+) -> Result<Vec<MessagePortDecl>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let Value::Table(entries) = value else {
+        bail!("'{key}' must be a table of \"block.port\" strings");
+    };
+    entries
+        .iter()
+        .map(|(name, entry)| {
+            let entry = entry
+                .as_str()
+                .ok_or_else(|| anyhow!("{key}.{name} must be \"block.port\""))?;
+            let (block, port) = target(key, name, entry, blocks)?;
+            Ok(MessagePortDecl {
+                name: name.clone(),
+                block: block.to_string(),
+                port: port.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn ports(value: Option<&Value>, key: &str, blocks: &[BlockDecl]) -> Result<Vec<PortDecl>> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -272,9 +400,6 @@ fn ports(value: Option<&Value>, key: &str, blocks: &[BlockDecl]) -> Result<Vec<P
     entries
         .iter()
         .map(|(name, entry)| {
-            if !is_ident(name) {
-                bail!("{key}: port name '{name}' must be an identifier (letters, digits, `_`)");
-            }
             let (target, item) = match entry {
                 Value::String(target) => (target.as_str(), None),
                 Value::Table(fields) => {
@@ -294,14 +419,8 @@ fn ports(value: Option<&Value>, key: &str, blocks: &[BlockDecl]) -> Result<Vec<P
                 }
                 _ => bail!("{key}.{name} must be \"block.port\" or a table"),
             };
-            let (block, port) = target
-                .split_once('.')
-                .filter(|(_, port)| !port.is_empty())
-                .ok_or_else(|| anyhow!("{key}.{name}: '{target}' is not \"block.port\""))?;
-            let decl = blocks
-                .iter()
-                .find(|b| b.name == block)
-                .ok_or_else(|| anyhow!("{key}.{name}: no block '{block}'"))?;
+            let (block, port) = self::target(key, name, target, blocks)?;
+            let decl = blocks.iter().find(|b| b.name == block).unwrap();
             let item = item
                 .or_else(|| ItemType::of_block_type(&decl.type_name))
                 .ok_or_else(|| {
@@ -402,6 +521,49 @@ mod tests {
     }
 
     #[test]
+    fn parses_message_ports_controls_and_radio() {
+        let d = Description::from_toml(
+            r#"
+            [blocks.src]
+            type = "X"
+            [blocks.dec]
+            type = "Y"
+            [message_inputs]
+            commands = "src.config"
+            [message_outputs]
+            frames = "dec.rx_frames"
+            [controls]
+            frequency = "src.freq"
+            [radio]
+            frequency = 919000000
+            gain = 10.5
+            antenna = "RX2"
+            "#,
+        )
+        .unwrap();
+        let port = |name: &str, block: &str, port: &str| MessagePortDecl {
+            name: name.into(),
+            block: block.into(),
+            port: port.into(),
+        };
+        assert_eq!(d.message_inputs, [port("commands", "src", "config")]);
+        assert_eq!(d.message_outputs, [port("frames", "dec", "rx_frames")]);
+        assert_eq!(d.message_port("frames"), Some(&d.message_outputs[0]));
+        assert_eq!(d.message_port("commands"), Some(&d.message_inputs[0]));
+        assert!(d.message_port("frequency").is_none() && d.port("frames").is_none());
+        assert_eq!(d.controls, [port("frequency", "src", "freq")]);
+        assert_eq!(
+            d.radio,
+            [
+                ("frequency".to_string(), Pmt::F64(919e6)),
+                ("gain".to_string(), Pmt::F64(10.5)),
+                ("antenna".to_string(), Pmt::String("RX2".into())),
+            ],
+            "in file order, integers as f64"
+        );
+    }
+
+    #[test]
     fn rejects_mistakes() {
         let cases = [
             ("unknown = 1", "unknown key"),
@@ -440,6 +602,28 @@ mod tests {
                 "[blocks.a]\ntype='Head<u8>'\n[inputs]\n'x.y' = 'a.input'",
                 "must be an identifier",
             ),
+            (
+                "[blocks.a]\ntype='Head<u8>'\n[inputs]\nx = 'a.input'\n[message_outputs]\nx = 'a.out'",
+                "declared twice",
+            ),
+            (
+                "[blocks.a]\ntype='X'\n[message_inputs]\nx = { port = 'a.in' }",
+                "must be \"block.port\"",
+            ),
+            (
+                "[blocks.a]\ntype='X'\n[message_outputs]\nx = 'b.out'",
+                "no block 'b'",
+            ),
+            (
+                "[blocks.a]\ntype='X'\n[controls]\nx = 'a'",
+                "not \"block.port\"",
+            ),
+            (
+                "[blocks.a]\ntype='X'\n[controls]\n'a b' = 'a.f'",
+                "identifier",
+            ),
+            ("message_inputs = 'a.in'", "table of"),
+            ("radio = 3", "'radio' must be a table"),
         ];
         for (text, expected) in cases {
             let err = format!("{:#}", Description::from_toml(text).unwrap_err());
@@ -463,6 +647,19 @@ mod tests {
             assert!(is_ident(&port.name) && !port.port.is_empty(), "{text}");
             assert!(names.insert(port.name.as_str()), "{text}");
             assert_eq!(d.port(&port.name), Some(port), "{text}");
+        }
+        for port in d.message_inputs.iter().chain(&d.message_outputs) {
+            assert!(declared.contains(&port.block.as_str()), "{text}");
+            assert!(is_ident(&port.name) && !port.port.is_empty(), "{text}");
+            assert!(names.insert(port.name.as_str()), "{text}");
+            assert_eq!(d.message_port(&port.name), Some(port), "{text}");
+        }
+        for control in &d.controls {
+            assert!(declared.contains(&control.block.as_str()), "{text}");
+            assert!(is_ident(&control.name), "{text}");
+        }
+        for (_, value) in &d.radio {
+            assert!(!matches!(value, Pmt::Isize(_)), "{text}");
         }
         for block in &d.blocks {
             assert!(is_ident(&block.name), "{text}");
@@ -576,7 +773,14 @@ mod tests {
                 );
             }
         }
-        for (table, port) in [("inputs", "input"), ("outputs", "output")] {
+        let tables = [
+            ("inputs", "input"),
+            ("outputs", "output"),
+            ("message_inputs", "in"),
+            ("message_outputs", "out"),
+            ("controls", "freq"),
+        ];
+        for (table, port) in tables {
             if rng.chance(60) {
                 text += &format!("[{table}]\n");
                 for name in ["x", "y", "z"].iter().take(rng.below(3)) {
@@ -588,6 +792,12 @@ mod tests {
                     let target = format!("\"{}.{port}\"", rng.pick(blocks));
                     text += &format!("{name} = {}\n", good(rng, target));
                 }
+            }
+        }
+        if rng.chance(30) {
+            text += "[radio]\n";
+            for key in ["frequency", "gain"].iter().take(rng.below(3)) {
+                text += &format!("{key} = {}\n", value(rng, 0));
             }
         }
         text

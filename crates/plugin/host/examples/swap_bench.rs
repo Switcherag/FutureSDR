@@ -189,7 +189,7 @@ async fn standby(
         for (swap, target) in targets.iter().enumerate() {
             Timer::after(settle).await;
             let t = Instant::now();
-            let old = ctrl.commit(next, hold)?;
+            let old = ctrl.commit_async(next, hold).await?;
             let switched = t.elapsed();
             drop(old);
 

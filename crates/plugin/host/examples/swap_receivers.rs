@@ -113,7 +113,7 @@ fn main() -> Result<()> {
             Timer::after(every).await;
             prepared.push(standby.build_time() + standby.start_time());
             let t = Instant::now();
-            retired.extend(ctrl.commit(standby, hold)?);
+            retired.extend(ctrl.commit_async(standby, hold).await?);
             commits.push(t.elapsed());
             next = 1 - next;
             standby = ctrl

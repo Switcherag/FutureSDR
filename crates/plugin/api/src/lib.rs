@@ -280,6 +280,8 @@ mod tests {
     }
 
     #[test]
+    // Flowgraphs read FutureSDR's configuration, from the home directory.
+    #[cfg_attr(miri, ignore)]
     fn blocks_built_by_helpers_are_exported() {
         let plugin = exported::futuresdr_plugin_entry();
         let block = &plugin.blocks[0];
