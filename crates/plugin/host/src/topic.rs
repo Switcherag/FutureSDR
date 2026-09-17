@@ -8,7 +8,8 @@
 //!
 //! Every flowgraph that ran under the output's name may publish: a replaced
 //! flowgraph's last messages still arrive. A flowgraph on standby publishes
-//! once it is committed.
+//! once it is committed. Each message carries the name of the description
+//! of the flowgraph that posted it.
 
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -33,7 +34,7 @@ struct Subscription {
     id: u64,
     /// A tap: selecting a link does not park it.
     tap: bool,
-    queue: VecDeque<Pmt>,
+    queue: VecDeque<Message>,
     reader: u64,
     parked: bool,
     dropped: u64,
@@ -44,7 +45,7 @@ struct Subscription {
 struct State {
     subscriptions: Vec<Subscription>,
     /// Publishers on standby, with what they posted.
-    standby: Vec<(u64, VecDeque<Pmt>)>,
+    standby: Vec<(u64, VecDeque<Message>)>,
     /// Standby publishers that were dropped; they publish nothing.
     withdrawn: Vec<u64>,
     closed: bool,
@@ -55,7 +56,7 @@ impl State {
         self.subscriptions.iter_mut().find(|s| s.id == id)
     }
 
-    fn deliver(&mut self, messages: impl IntoIterator<Item = Pmt>) -> Vec<Waker> {
+    fn deliver(&mut self, messages: impl IntoIterator<Item = Message>) -> Vec<Waker> {
         let mut waiting = Vec::new();
         for pmt in messages {
             let mut rest = self.subscriptions.iter_mut().filter(|s| !s.parked);
@@ -75,7 +76,10 @@ impl State {
     }
 }
 
-fn push(sub: &mut Subscription, pmt: Pmt) {
+/// A message, and the name of the flowgraph that posted it.
+type Message = (Arc<str>, Pmt);
+
+fn push(sub: &mut Subscription, pmt: Message) {
     if sub.queue.len() == MESSAGE_CAPACITY {
         sub.queue.pop_front();
         sub.dropped += 1;
@@ -88,7 +92,7 @@ fn wake(wakers: Vec<Waker>) {
 }
 
 pub(crate) enum Take {
-    Message(Pmt),
+    Message(Message),
     Empty,
     End,
 }
@@ -108,8 +112,9 @@ impl Topic {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Publisher `generation` posted `pmt`.
-    pub(crate) fn publish(&self, generation: u64, pmt: Pmt) {
+    /// Publisher `generation`, of flowgraph `origin`, posted `pmt`.
+    pub(crate) fn publish(&self, generation: u64, origin: &Arc<str>, pmt: Pmt) {
+        let pmt = (origin.clone(), pmt);
         let mut st = self.lock();
         if st.withdrawn.contains(&generation) {
             return;
@@ -308,11 +313,16 @@ impl Future for TopicReady {
 pub(crate) struct TopicSink {
     topic: Arc<Topic>,
     generation: u64,
+    origin: Arc<str>,
 }
 
 impl TopicSink {
-    pub(crate) fn new(topic: Arc<Topic>, generation: u64) -> Self {
-        Self { topic, generation }
+    pub(crate) fn new(topic: Arc<Topic>, generation: u64, origin: Arc<str>) -> Self {
+        Self {
+            topic,
+            generation,
+            origin,
+        }
     }
 
     async fn r#in(
@@ -325,7 +335,7 @@ impl TopicSink {
         if matches!(p, Pmt::Finished) {
             io.finished = true;
         } else {
-            self.topic.publish(self.generation, p);
+            self.topic.publish(self.generation, &self.origin, p);
         }
         Ok(Pmt::Ok)
     }
@@ -377,7 +387,7 @@ impl Kernel for TopicSource {
         self.wait = None;
         loop {
             match self.topic.take(self.sub, self.generation, &mut self.active) {
-                Take::Message(pmt) => mo.post("out", pmt).await?,
+                Take::Message((_, pmt)) => mo.post("out", pmt).await?,
                 Take::Empty => {
                     self.wait = Some(TopicReady {
                         topic: self.topic.clone(),
@@ -421,10 +431,16 @@ impl Tap {
     /// The next message, or `None` once the controller is gone and every
     /// message was taken.
     pub async fn recv(&mut self) -> Option<Pmt> {
+        self.recv_from().await.map(|(_, pmt)| pmt)
+    }
+
+    /// The next message, and the name of the flowgraph that posted it: the
+    /// `name` of its description, or else the name it runs under.
+    pub async fn recv_from(&mut self) -> Option<(Arc<str>, Pmt)> {
         let mut active = true;
         loop {
             match self.topic.take(self.sub, self.sub, &mut active) {
-                Take::Message(pmt) => return Some(pmt),
+                Take::Message(message) => return Some(message),
                 Take::End => return None,
                 Take::Empty => {
                     TopicReady {
@@ -441,8 +457,14 @@ impl Tap {
 
     /// The next message, if one is queued.
     pub fn try_recv(&mut self) -> Option<Pmt> {
+        self.try_recv_from().map(|(_, pmt)| pmt)
+    }
+
+    /// The next message and where it comes from (see
+    /// [`recv_from`](Self::recv_from)), if one is queued.
+    pub fn try_recv_from(&mut self) -> Option<(Arc<str>, Pmt)> {
         match self.topic.take(self.sub, self.sub, &mut true) {
-            Take::Message(pmt) => Some(pmt),
+            Take::Message(message) => Some(message),
             _ => None,
         }
     }
@@ -472,9 +494,13 @@ impl std::fmt::Debug for Tap {
 mod tests {
     use super::*;
 
+    fn origin() -> Arc<str> {
+        Arc::from("fg")
+    }
+
     fn take_all(topic: &Topic, sub: u64, reader: u64, active: &mut bool) -> Vec<u64> {
         let mut got = Vec::new();
-        while let Take::Message(Pmt::U64(v)) = topic.take(sub, reader, active) {
+        while let Take::Message((_, Pmt::U64(v))) = topic.take(sub, reader, active) {
             got.push(v);
         }
         got
@@ -487,7 +513,7 @@ mod tests {
         topic.set_reader(a, 10);
         topic.set_reader(b, 20);
         for v in 0..3 {
-            topic.publish(1, Pmt::U64(v));
+            topic.publish(1, &origin(), Pmt::U64(v));
         }
         let (mut ra, mut rb) = (false, false);
         assert!(
@@ -498,11 +524,11 @@ mod tests {
         assert!(take_all(&topic, b, 20, &mut rb).is_empty(), "parked");
         assert_eq!(topic.stats(b), Some((0, 0, true)));
 
-        topic.publish(1, Pmt::U64(3));
+        topic.publish(1, &origin(), Pmt::U64(3));
         topic.set_reader(a, 11);
         assert!(matches!(topic.take(a, 10, &mut ra), Take::End), "replaced");
         assert_eq!(take_all(&topic, a, 11, &mut false), [3]);
-        topic.publish(1, Pmt::U64(4));
+        topic.publish(1, &origin(), Pmt::U64(4));
         topic.restart_reader(a, 12);
         assert!(take_all(&topic, a, 12, &mut false).is_empty(), "restarted");
 
@@ -518,7 +544,7 @@ mod tests {
         let sub = topic.subscribe(false, false);
         topic.set_reader(sub, 1);
         for v in 0..MESSAGE_CAPACITY as u64 + 2 {
-            topic.publish(7, Pmt::U64(v));
+            topic.publish(7, &origin(), Pmt::U64(v));
         }
         assert_eq!(topic.stats(sub), Some((MESSAGE_CAPACITY, 2, false)));
         assert_eq!(take_all(&topic, sub, 1, &mut false)[0], 2);
@@ -532,10 +558,10 @@ mod tests {
         topic.standby_publisher(5);
         topic.standby_publisher(6);
         for v in 0..MESSAGE_CAPACITY as u64 + 1 {
-            topic.publish(5, Pmt::U64(v));
+            topic.publish(5, &origin(), Pmt::U64(v));
         }
-        topic.publish(6, Pmt::U64(99));
-        topic.publish(7, Pmt::U64(70));
+        topic.publish(6, &origin(), Pmt::U64(99));
+        topic.publish(7, &origin(), Pmt::U64(70));
         assert_eq!(take_all(&topic, sub, 1, &mut false), [70]);
         topic.commit_publisher(5);
         topic.commit_publisher(5);
@@ -546,16 +572,16 @@ mod tests {
             "the newest held"
         );
         topic.withdraw_publisher(6);
-        topic.publish(6, Pmt::U64(98));
+        topic.publish(6, &origin(), Pmt::U64(98));
         topic.withdraw_publisher(8);
-        topic.publish(8, Pmt::U64(80));
+        topic.publish(8, &origin(), Pmt::U64(80));
         assert_eq!(
             take_all(&topic, sub, 1, &mut false),
             [80],
             "only the withdrawn is dropped"
         );
         topic.publisher_finished(6);
-        topic.publish(6, Pmt::U64(97));
+        topic.publish(6, &origin(), Pmt::U64(97));
         assert_eq!(take_all(&topic, sub, 1, &mut false), [97]);
     }
 
@@ -566,18 +592,18 @@ mod tests {
         let mut tap = Tap::new(topic.clone(), "fg.port".into());
         topic.set_reader(a, 1);
         topic.set_reader(b, 2);
-        topic.publish(9, Pmt::U64(0));
+        topic.publish(9, &origin(), Pmt::U64(0));
         topic.select(b, Hold::Discard);
-        topic.publish(9, Pmt::U64(1));
+        topic.publish(9, &origin(), Pmt::U64(1));
         assert!(take_all(&topic, a, 1, &mut false).is_empty(), "discarded");
         assert_eq!(take_all(&topic, b, 2, &mut false), [0, 1]);
         topic.park(b, Hold::Keep);
-        topic.publish(9, Pmt::U64(2));
+        topic.publish(9, &origin(), Pmt::U64(2));
         topic.unpark(a);
-        topic.publish(9, Pmt::U64(3));
+        topic.publish(9, &origin(), Pmt::U64(3));
         topic.select(a, Hold::Keep);
         topic.park(a, Hold::Discard);
-        topic.publish(9, Pmt::U64(4));
+        topic.publish(9, &origin(), Pmt::U64(4));
         assert!(take_all(&topic, a, 1, &mut false).is_empty());
         assert!(take_all(&topic, b, 2, &mut false).is_empty());
         let got: Vec<Pmt> = std::iter::from_fn(|| tap.try_recv()).collect();
@@ -585,8 +611,12 @@ mod tests {
         assert_eq!(tap.stats(), (0, 0));
         assert!(format!("{tap:?}").contains("fg.port"));
 
+        topic.publish(9, &Arc::from("other"), Pmt::U64(6));
+        let (from, pmt) = tap.try_recv_from().unwrap();
+        assert_eq!((&*from, pmt), ("other", Pmt::U64(6)));
+
         // Closed: what is queued is still taken, then the end.
-        topic.publish(9, Pmt::U64(5));
+        topic.publish(9, &origin(), Pmt::U64(5));
         topic.close();
         assert_eq!(futuresdr::runtime::block_on(tap.recv()), Some(Pmt::U64(5)));
         assert_eq!(futuresdr::runtime::block_on(tap.recv()), None);

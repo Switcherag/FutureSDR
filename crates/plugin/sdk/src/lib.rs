@@ -176,6 +176,12 @@ impl Sdk {
         let copy = |from: &Path| -> Result<PathBuf> {
             let to = deps.join(from.file_name().unwrap());
             fs::copy(from, &to).with_context(|| format!("copying {}", from.display()))?;
+            // The same build packed again is the same SDK (see `build_id`).
+            let modified = fs::metadata(from)?.modified()?;
+            fs::File::options()
+                .write(true)
+                .open(&to)?
+                .set_modified(modified)?;
             Ok(to)
         };
 
@@ -222,6 +228,26 @@ impl Sdk {
         };
         sdk.write_manifest(out)?;
         Ok(sdk)
+    }
+
+    /// Tells builds of the shared library apart: its size and modification
+    /// time, and those of its metadata. Plugins are compiled with it, so
+    /// that Cargo rebuilds them for another build at the same path.
+    pub fn build_id(&self) -> String {
+        let mut id = String::new();
+        for file in std::iter::once(&self.rt).chain(&self.rt_metadata) {
+            // A missing file fails the build that asks, with a better message.
+            let (len, modified) = fs::metadata(file)
+                .and_then(|m| Ok((m.len(), m.modified()?)))
+                .map(|(len, t)| {
+                    let t = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    (len, t.as_nanos())
+                })
+                .unwrap_or_default();
+            id += &format!("{len:x}.{modified:x}.");
+        }
+        id.pop();
+        id
     }
 
     /// Open an SDK directory written by [`Sdk::pack`].
@@ -388,6 +414,12 @@ impl Sdk {
             format!("{RT_CRATE}={}", self.rt.display()),
             "-C".to_string(),
             "prefer-dynamic".to_string(),
+            // Unused by the code; part of what Cargo compares to decide
+            // whether to rebuild.
+            "--cfg".to_string(),
+            format!("fsdr_sdk=\"{}\"", self.build_id()),
+            "--check-cfg".to_string(),
+            "cfg(fsdr_sdk,values(any()))".to_string(),
         ];
         if let Some(meta) = &self.rt_metadata {
             flags.push("--extern".to_string());

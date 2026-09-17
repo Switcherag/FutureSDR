@@ -196,9 +196,11 @@ stage_sdk() {
     release_sdk
     mkdir -p "$CI/e2e/plugins"
     fsdr_plugin info --sdk "$CI/e2e/sdk"
-    fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/basic --target-dir "$CI/e2e/target" \
-        --deny-warnings >/dev/null
-    cp "$CI/e2e/target/release/libfsdr_blocks_basic.so" "$CI/e2e/plugins/"
+    for plugin in basic wlan zigbee radio; do
+        fsdr_plugin build --sdk "$CI/e2e/sdk" "blocks/$plugin" --target-dir "$CI/e2e/target" \
+            --deny-warnings >/dev/null
+        cp "$CI/e2e/target/release/libfsdr_blocks_$plugin.so" "$CI/e2e/plugins/"
+    done
 
     step "sdk: examples against the plugins"
     example swap_receivers --plugins "$CI/e2e/plugins" --hold keep
@@ -209,6 +211,10 @@ stage_sdk() {
                 --mode "$mode" --driver "$driver" --rate 100000
         done
     done
+
+    step "sdk: HaLow and ZigBee receivers taking turns"
+    example ziglow_replay --plugins "$CI/e2e/plugins" --mode all --frames 20 \
+        --ifs-start 2 --ifs-stop 2 --workers 4 --retune-us 200
 }
 
 # check <what> <file> <max bytes>
@@ -224,16 +230,18 @@ stage_size() {
     release_sdk
     rm -rf "$CI/size"
     tiny_plugin "$CI/size/tiny"
-    local tiny basic wlan zigbee
+    local tiny basic wlan zigbee radio
     tiny=$(fsdr_plugin build --sdk "$CI/e2e/sdk" "$CI/size/tiny" --target-dir "$CI/size/target")
     basic=$(fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/basic --target-dir "$CI/size/target")
     wlan=$(fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/wlan --target-dir "$CI/size/target")
     zigbee=$(fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/zigbee --target-dir "$CI/size/target")
+    radio=$(fsdr_plugin build --sdk "$CI/e2e/sdk" blocks/radio --target-dir "$CI/size/target")
     check_size "shared library" "$RT" 6000000
     check_size "one-block plugin" "$tiny" 150000
     check_size "basic plugin (74 block types)" "$basic" 2000000
     check_size "wlan plugin (802.11a and ah)" "$wlan" 500000
     check_size "zigbee plugin" "$zigbee" 500000
+    check_size "radio plugin" "$radio" 500000
     check_size "swap_bench" "$ROOT/target/release/examples/swap_bench" 2000000
 
     step "no local-domain code in plugins of non-blocking blocks"

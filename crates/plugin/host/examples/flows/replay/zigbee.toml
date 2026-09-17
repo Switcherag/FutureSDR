@@ -1,0 +1,35 @@
+# 802.15.4 (ZigBee, O-QPSK at 4 MSps) receiver: examples/zigbee, in the
+# zigbee plugin. Posts the frames its MAC accepts on `frames`.
+name = "zigbee"
+connections = """
+demod > clock > decoder
+decoder.out | rx.mac
+mac > snk
+"""
+
+[blocks.demod]
+type = "ZigbeeDemod"
+
+[blocks.clock]
+type = "ClockRecoveryMm"
+
+[blocks.decoder]
+type = "ZigbeeDecoder"
+
+[blocks.mac]
+type = "ZigbeeMac"
+
+# The MAC's output carries what it transmits; nothing is sent here.
+[blocks.snk]
+type = "NullSink<u8>"
+
+[inputs]
+samples = { port = "demod.input", type = "c32" }
+
+[message_outputs]
+frames = "mac.rxed"
+
+# Channel 11.
+[radio]
+frequency = 2405e6
+sample_rate = 4e6

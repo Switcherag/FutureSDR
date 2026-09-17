@@ -1,0 +1,27 @@
+# 802.11ah (HaLow, S1G 2 MHz at 4 MSps) receiver: the dyn branch's v6, in
+# the wlan plugin. Posts the frames it decodes on `frames`.
+name = "halow"
+connections = "sync > long > eq > dec"
+
+[blocks.sync]
+type = "WlanSync<Ah>"
+
+[blocks.long]
+type = "WlanSyncLong<Ah>"
+
+[blocks.eq]
+type = "WlanEqualizer<Ah>"
+
+[blocks.dec]
+type = "WlanDecoder<Ah>"
+
+[inputs]
+samples = { port = "sync.input", type = "c32" }
+
+[message_outputs]
+frames = "dec.rx_frames"
+
+# S1G channel 34, 2 MHz.
+[radio]
+frequency = 919.0e6
+sample_rate = 4e6

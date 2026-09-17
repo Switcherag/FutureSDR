@@ -960,10 +960,13 @@ impl Controller {
             });
         }
         let mut message_outputs = Vec::new();
+        let origin: Arc<str> = Arc::from(desc.name.as_deref().unwrap_or(name));
         for port in &desc.message_outputs {
             let topic = self.output_topic(&key(&port.name))?;
             let generation = next_generation();
-            let bridge = fg.add(TopicSink::new(topic.clone(), generation))?.id();
+            let bridge = fg
+                .add(TopicSink::new(topic.clone(), generation, origin.clone()))?
+                .id();
             fg.message(block(&port.block), port.port.as_str(), bridge, "in")
                 .with_context(|| {
                     format!(

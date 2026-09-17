@@ -29,6 +29,14 @@ fn a_packed_sdk_builds_loadable_plugins() -> anyhow::Result<()> {
     let sdk = Sdk::open(&dir.join("sdk"))?;
     // Opened SDKs have absolute paths, which plugin builds need.
     assert_eq!(sdk.rt, packed.rt.canonicalize()?);
+    let id = Sdk::of_this_process()?.build_id();
+    assert_eq!(sdk.build_id(), id, "the same build, packed");
+    Sdk::of_this_process()?.pack(&dir.join("sdk"))?;
+    assert_eq!(
+        Sdk::open(&dir.join("sdk"))?.build_id(),
+        id,
+        "and packed again"
+    );
     assert_eq!(
         sdk.crates()?,
         Sdk::of_this_process()?.crates()?,

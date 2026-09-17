@@ -14,6 +14,14 @@ futuresdr.workspace = true
 futuresdr-plugin-api.workspace = true
 rustfft.workspace = true
 
+[features]
+default = ["radio"]
+# FutureSDR's seify blocks, with the dummy driver (about 0.2 MB).
+radio = ["futuresdr/seify", "futuresdr/seify_dummy"]
+# Hardware through SoapySDR, which must be installed. An SDK packed from a
+# library built with it builds plugins that use it.
+soapy = ["radio", "futuresdr/soapy"]
+
 [package.metadata.cargo-machete]
 # Used under its library name, `plugin_api`.
 ignored = ["futuresdr-plugin-api"]

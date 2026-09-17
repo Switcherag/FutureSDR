@@ -434,6 +434,31 @@ fn messages_cross_flowgraphs_through_replacements() {
     sleep(Duration::from_millis(30));
     assert!(tap.try_recv().is_none(), "nothing of the dropped standby");
 
+    // Messages say which flowgraph posted them: its description's name, or
+    // the name it runs under.
+    let mut named = numbers_source(2000, 1, 0);
+    named.name = Some("numbers v2".into());
+    ctrl.replace("tx", named, Hold::Keep).unwrap();
+    ctrl.wait("tx").unwrap();
+    ctrl.spawn("tx", numbers_source(3000, 1, 0)).unwrap();
+    ctrl.wait("tx").unwrap();
+    let since = Instant::now();
+    let mut from = Vec::new();
+    while from.len() < 2 {
+        assert!(since.elapsed() < Duration::from_secs(10));
+        match tap.try_recv_from() {
+            Some((origin, pmt)) => from.push((origin.to_string(), pmt)),
+            None => sleep(Duration::from_millis(1)),
+        }
+    }
+    assert_eq!(
+        from,
+        [
+            ("numbers v2".to_string(), Pmt::U64(2000)),
+            ("tx".to_string(), Pmt::U64(3000)),
+        ]
+    );
+
     // The tap ends with the controller.
     let waiting = std::thread::spawn(move || futuresdr::runtime::block_on(tap.recv()));
     sleep(Duration::from_millis(20));
