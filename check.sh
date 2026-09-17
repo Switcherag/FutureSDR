@@ -148,3 +148,7 @@ cd ${SCRIPTPATH}/perf/perf && cargo test --all-features
 
 # examples
 cd ${SCRIPTPATH}/examples/wlan && cargo test
+
+# plugin add-on: fmt, clippy, tests, SDK end to end, size budgets
+# (`crates/plugin/ci.sh all` runs every stage)
+cd ${SCRIPTPATH}/crates/plugin && ./ci.sh

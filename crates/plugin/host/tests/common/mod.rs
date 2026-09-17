@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use plugin_host::Registry;
+
+#[path = "../../src/test_rng.rs"]
+pub mod test_rng;
 use plugin_sdk::Sdk;
 
 fn workspace() -> PathBuf {

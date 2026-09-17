@@ -1,0 +1,72 @@
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # The randomized tests draw other cases each week.
+    - cron: "0 3 * * 1"
+
+name: Plugin add-on
+
+# Every job runs stages of crates/plugin/ci.sh, which also runs locally.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  checks:
+    name: Fmt, lints, docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: crates/plugin/ci.sh fmt lint
+
+  test:
+    name: Tests, debug and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: crates/plugin/ci.sh test release
+
+  sdk:
+    name: SDK end to end, size budgets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: crates/plugin/ci.sh sdk size
+
+  core:
+    name: Core changes, vendored vmcircbuffer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: crates/plugin/ci.sh core vendor
+
+  deep:
+    name: Miri, stress, coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src, llvm-tools
+      - name: Seed the randomized tests from the run
+        run: echo "PLUGIN_TEST_SEED_BASE=${{ github.run_id }}" >> "$GITHUB_ENV"
+      - run: crates/plugin/ci.sh miri stress coverage
+        env:
+          CI_SCALE: 20
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: crates/plugin/target/ci/coverage/html
+          if-no-files-found: ignore

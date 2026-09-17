@@ -14,6 +14,9 @@ this workspace through `[patch.crates-io]`:
 Creating and dropping a 32768-item buffer after 100 ms idle: 187 + 13 us
 before, 5.6 + 0.7 us after.
 
+`tests/pool.rs` is the pool's test from the same commits (the other upstream
+tests need dev-dependencies and are left out).
+
 The same two commits, rebased on upstream `main` (0.0.16), are meant for
 upstream. Once a release contains them and FutureSDR depends on it, delete
 this directory and the `[patch.crates-io]` entry.

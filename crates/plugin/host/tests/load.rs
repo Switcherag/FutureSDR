@@ -120,3 +120,55 @@ fn settings_errors_name_the_block() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("Head<u8>"), "{err:#}");
 }
+
+#[test]
+fn a_plugin_directory_loads_the_plugins_in_it() {
+    let dir = common::scratch("plugin-dir");
+    let plugin = dir.join("libfsdr_blocks_basic.so");
+    std::fs::copy(common::basic_plugin(), &plugin).unwrap();
+    // Not plugins, by name.
+    for name in ["README.txt", "libstd-0123.so", "libfuturesdr_plugin_rt.so"] {
+        std::fs::write(dir.join(name), "").unwrap();
+    }
+    let mut registry = plugin_host::Registry::new();
+    assert_eq!(registry.load_dir(&dir).unwrap(), [plugin]);
+    assert!(registry.get("Head<f32>").is_some());
+
+    std::fs::write(dir.join("libbroken.so"), "not a library").unwrap();
+    let err = plugin_host::Registry::new().load_dir(&dir).unwrap_err();
+    assert!(format!("{err:#}").contains("libbroken.so"), "{err:#}");
+    assert!(
+        plugin_host::Registry::new()
+            .load_dir(&dir.join("missing"))
+            .is_err()
+    );
+    assert!(
+        plugin_host::Registry::new()
+            .load(&dir.join("libmissing.so"))
+            .is_err()
+    );
+}
+
+#[test]
+fn unknown_types_name_the_available_ones() {
+    let registry = common::registry();
+    let mut fg = Flowgraph::new();
+    let err = format!(
+        "{:#}",
+        registry
+            .add(&mut fg, "Head<u128>", &settings("h", &[]))
+            .unwrap_err()
+    );
+    assert!(err.contains("unknown block type 'Head<u128>'"), "{err}");
+    assert!(err.contains("Head<f32>"), "{err}");
+    let err = format!(
+        "{:#}",
+        registry
+            .add(&mut fg, "Nope", &settings("n", &[]))
+            .unwrap_err()
+    );
+    assert!(
+        err.contains("'Nope'") && !err.contains("available"),
+        "{err}"
+    );
+}

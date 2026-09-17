@@ -3,6 +3,7 @@
 //! ```text
 //! fsdr-plugin pack  --from <libfuturesdr_plugin_rt.so> --out <dir>
 //! fsdr-plugin build --sdk <dir> <plugin crate dir> [--target-dir <dir>]
+//!                   [--clippy] [--deny-warnings]
 //! fsdr-plugin info  --sdk <dir>
 //! ```
 //!
@@ -13,12 +14,14 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use anyhow::bail;
+use plugin_sdk::BuildOptions;
 use plugin_sdk::Sdk;
 
 const USAGE: &str = "\
 usage:
   fsdr-plugin pack  --from <libfuturesdr_plugin_rt.so> --out <dir>
   fsdr-plugin build --sdk <dir> <plugin crate dir> [--target-dir <dir>]
+                    [--clippy] [--deny-warnings]
   fsdr-plugin info  --sdk <dir>";
 
 fn main() -> Result<()> {
@@ -26,10 +29,15 @@ fn main() -> Result<()> {
     let Some(command) = args.next() else {
         bail!("{USAGE}");
     };
+    if command == "-h" || command == "--help" {
+        println!("{USAGE}");
+        return Ok(());
+    }
     let mut out = None;
     let mut sdk = None;
     let mut from = None;
     let mut target_dir = None;
+    let mut options = BuildOptions::default();
     let mut positional = Vec::new();
     while let Some(arg) = args.next() {
         let mut value = || {
@@ -41,6 +49,8 @@ fn main() -> Result<()> {
             "--sdk" => sdk = Some(PathBuf::from(value()?)),
             "--from" => from = Some(PathBuf::from(value()?)),
             "--target-dir" => target_dir = Some(PathBuf::from(value()?)),
+            "--clippy" => options.clippy = true,
+            "--deny-warnings" => options.deny_warnings = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -69,7 +79,8 @@ fn main() -> Result<()> {
             };
             let sdk = Sdk::open(&dir)?;
             let target_dir = target_dir.unwrap_or_else(|| crate_dir.join("target"));
-            let library = sdk.build_plugin(&crate_dir.join("Cargo.toml"), &target_dir)?;
+            let library =
+                sdk.build_plugin_with(&crate_dir.join("Cargo.toml"), &target_dir, &options)?;
             println!("{}", library.display());
         }
         "info" => {

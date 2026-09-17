@@ -102,6 +102,10 @@ struct Token {
     column: usize,
 }
 
+fn is_name_start(c: char) -> bool {
+    c.is_alphabetic() || c == '_'
+}
+
 fn tokenize(text: &str) -> Result<Vec<Token>, ParseError> {
     let mut tokens = Vec::new();
     for (line_no, line) in text.lines().enumerate() {
@@ -161,23 +165,19 @@ fn tokenize(text: &str) -> Result<Vec<Token>, ParseError> {
                     push(&mut tokens, Tok::Index(index));
                     i = end + 1;
                 }
-                c if c.is_alphabetic() || c == '_' => {
-                    let start = i;
-                    while i < chars.len()
-                        && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '#')
+                c if is_name_start(c) => {
+                    // `r#name`, as in Rust; any other `#` starts a comment.
+                    if c == 'r'
+                        && chars.get(i + 1) == Some(&'#')
+                        && chars.get(i + 2).is_some_and(|c| is_name_start(*c))
                     {
+                        i += 2;
+                    }
+                    let start = i;
+                    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
                         i += 1;
                     }
-                    let word: String = chars[start..i].iter().collect();
-                    let word = word.strip_prefix("r#").unwrap_or(&word).to_string();
-                    if word.contains('#') {
-                        return Err(ParseError {
-                            line: line_no,
-                            column,
-                            message: format!("invalid name `{word}`"),
-                        });
-                    }
-                    push(&mut tokens, Tok::Ident(word));
+                    push(&mut tokens, Tok::Ident(chars[start..i].iter().collect()));
                 }
                 other => {
                     return Err(ParseError {
@@ -479,5 +479,190 @@ mod tests {
         assert_eq!((err.line, err.column), (1, 3));
         assert!(parse("> a").is_err());
         assert!(parse("a > ").is_err());
+    }
+
+    #[test]
+    fn comments_may_follow_names_directly() {
+        assert_eq!(links("src > snk# note"), ["src.output > input.snk"]);
+        assert_eq!(links("r#in > r#out//x"), ["in.output > input.out"]);
+        // `r#` without a name after it is the block `r`, then a comment.
+        assert_eq!(links("a > r# x"), ["a.output > input.r"]);
+    }
+
+    use crate::test_rng::Rng;
+    use crate::test_rng::for_each_seed;
+
+    const NAMES: &[&str] = &["src", "snk", "a", "b_2", "_x", "in", "out", "sel", "é9"];
+
+    fn name(rng: &mut Rng) -> String {
+        rng.pick(NAMES).to_string()
+    }
+
+    fn port(rng: &mut Rng) -> String {
+        let name = name(rng);
+        if rng.chance(25) {
+            format!("{name}[{}]", rng.below(12))
+        } else {
+            name
+        }
+    }
+
+    fn kind(rng: &mut Rng) -> (Kind, &'static str, &'static str, &'static str) {
+        if rng.chance(50) {
+            (Kind::Stream, ">", "output", "input")
+        } else {
+            (Kind::Message, "|", "out", "in")
+        }
+    }
+
+    #[test]
+    fn written_links_parse_back() {
+        for_each_seed(500, |rng| {
+            let links: Vec<Link> = (0..rng.range(1, 6))
+                .map(|i| Link {
+                    kind: kind(rng).0,
+                    src: name(rng),
+                    src_port: port(rng),
+                    dst: name(rng),
+                    dst_port: port(rng),
+                    line: i + 1,
+                })
+                .collect();
+            let text: Vec<String> = links.iter().map(ToString::to_string).collect();
+            let text = text.join("\n");
+            let parsed = parse(&text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+            assert_eq!(parsed.links, links, "{text:?}");
+        });
+    }
+
+    #[test]
+    fn written_chains_parse_back() {
+        for_each_seed(500, |rng| {
+            let (mut text, mut line, mut expected) = (String::new(), 1, Vec::new());
+            for _ in 0..rng.range(1, 4) {
+                let first_line = line;
+                let mut block = name(rng);
+                let mut out = rng.chance(40).then(|| port(rng));
+                text += &block;
+                if let Some(out) = &out {
+                    text += &format!(".{out}");
+                }
+                for _ in 0..rng.range(1, 4) {
+                    let (kind, op, default_out, default_in) = kind(rng);
+                    // An operator may end or start a line.
+                    match rng.below(3) {
+                        0 => text += &format!(" {op} "),
+                        1 => {
+                            text += &format!(" {op}\n  ");
+                            line += 1;
+                        }
+                        _ => {
+                            text += &format!("\n  {op} ");
+                            line += 1;
+                        }
+                    }
+                    let dst = name(rng);
+                    let input = rng.chance(40).then(|| port(rng));
+                    let next_out = rng.chance(40).then(|| port(rng));
+                    // After an operator, `x.y` is input `x` of block `y`: a
+                    // block with an output port needs its input written out.
+                    let written_input = input
+                        .clone()
+                        .or_else(|| next_out.as_ref().map(|_| default_in.to_string()));
+                    if let Some(input) = &written_input {
+                        text += &format!("{input}.");
+                    }
+                    text += &dst;
+                    if let Some(next_out) = &next_out {
+                        text += &format!(".{next_out}");
+                    }
+                    expected.push(Link {
+                        kind,
+                        src: block,
+                        src_port: out.unwrap_or_else(|| default_out.into()),
+                        dst: dst.clone(),
+                        dst_port: input.unwrap_or_else(|| default_in.into()),
+                        line: first_line,
+                    });
+                    block = dst;
+                    out = next_out;
+                }
+                match rng.below(4) {
+                    0 => text += "; ",
+                    1 => {
+                        text += " # a comment\n\n";
+                        line += 2;
+                    }
+                    2 => {
+                        text += "// another\n";
+                        line += 1;
+                    }
+                    _ => {
+                        text += "\n";
+                        line += 1;
+                    }
+                }
+            }
+            let parsed = parse(&text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+            assert_eq!(parsed.links, expected, "{text:?}");
+        });
+    }
+
+    #[test]
+    fn any_text_is_parsed_or_refused() {
+        const PIECES: &[&str] = &[
+            "a",
+            "blk",
+            "r",
+            "r#",
+            "r#in",
+            "#",
+            "//",
+            "/",
+            ".",
+            ">",
+            "~>",
+            "~",
+            "|",
+            ";",
+            "[",
+            "]",
+            "[1]",
+            "[x]",
+            "[ 2 ]",
+            "[99999999999999999999]",
+            "0",
+            "_",
+            " ",
+            "\t",
+            "\n",
+            "\r\n",
+            "é",
+            "💥",
+            "in",
+            "out[2]",
+            "\u{0}",
+        ];
+        for_each_seed(3000, |rng| {
+            let text: String = (0..rng.range(0, 30)).map(|_| *rng.pick(PIECES)).collect();
+            let lines = text.lines().count().max(1);
+            match parse(&text) {
+                Ok(parsed) => {
+                    for link in &parsed.links {
+                        for name in [&link.src, &link.src_port, &link.dst, &link.dst_port] {
+                            assert!(!name.is_empty(), "{text:?}: empty name in {link:?}");
+                        }
+                        assert!(parsed.blocks.contains(&link.src), "{text:?}");
+                        assert!(parsed.blocks.contains(&link.dst), "{text:?}");
+                        assert!((1..=lines).contains(&link.line), "{text:?}");
+                    }
+                }
+                Err(e) => {
+                    assert!(e.column >= 1, "{text:?}: {e}");
+                    assert!((1..=lines + 1).contains(&e.line), "{text:?}: {e}");
+                    assert!(!e.message.is_empty());
+                }
+            }
+        });
     }
 }

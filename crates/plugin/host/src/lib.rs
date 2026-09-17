@@ -16,6 +16,8 @@ mod controller;
 mod description;
 mod items;
 mod registry;
+#[cfg(test)]
+mod test_rng;
 
 pub use bridge::ChannelStats;
 pub use builder::Blocks;

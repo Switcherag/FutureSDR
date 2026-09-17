@@ -12,3 +12,7 @@ crate-type = ["dylib"]
 [dependencies]
 futuresdr.workspace = true
 futuresdr-plugin-api.workspace = true
+
+[package.metadata.cargo-machete]
+# Used under its library name, `plugin_api`.
+ignored = ["futuresdr-plugin-api"]

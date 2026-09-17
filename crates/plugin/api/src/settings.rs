@@ -234,4 +234,34 @@ mod tests {
         assert_eq!(s.get::<Complex32>("r").unwrap(), Complex32::new(3.0, 0.0));
         assert!(s.get::<f64>("bad").is_err());
     }
+
+    #[test]
+    fn other_value_kinds() {
+        let s = settings(&[
+            ("u", Pmt::Usize(5)),
+            ("u32", Pmt::U32(6)),
+            ("u64", Pmt::U64(u64::MAX)),
+            ("f", Pmt::F32(0.5)),
+            ("on", Pmt::Bool(true)),
+            ("name", Pmt::String("x".into())),
+            ("vf", Pmt::VecF32(vec![1.0, 2.0])),
+            ("vu", Pmt::VecU64(vec![3, 4])),
+            ("blob", Pmt::Blob(vec![7, 8])),
+        ]);
+        assert_eq!(s.get::<u8>("u").unwrap(), 5);
+        assert_eq!(s.get::<i64>("u32").unwrap(), 6);
+        assert_eq!(s.get::<u64>("u64").unwrap(), u64::MAX);
+        assert!(s.get::<i64>("u64").is_err(), "out of range");
+        assert_eq!(s.get::<f64>("f").unwrap(), 0.5);
+        assert!(s.get::<bool>("on").unwrap());
+        assert_eq!(s.get::<String>("name").unwrap(), "x");
+        assert!(s.get::<String>("on").is_err());
+        assert_eq!(s.get::<Vec<f64>>("vf").unwrap(), [1.0, 2.0]);
+        assert_eq!(s.get::<Vec<u16>>("vu").unwrap(), [3, 4]);
+        assert_eq!(s.get::<Vec<u8>>("blob").unwrap(), [7, 8]);
+        assert!(s.get::<Vec<u8>>("on").is_err());
+        assert_eq!(s.get::<Pmt>("on").unwrap(), Pmt::Bool(true));
+        let err = s.get::<bool>("name").unwrap_err().to_string();
+        assert!(err.contains("true or false"), "{err}");
+    }
 }

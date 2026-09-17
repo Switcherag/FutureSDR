@@ -272,6 +272,9 @@ fn ports(value: Option<&Value>, key: &str, blocks: &[BlockDecl]) -> Result<Vec<P
     entries
         .iter()
         .map(|(name, entry)| {
+            if !is_ident(name) {
+                bail!("{key}: port name '{name}' must be an identifier (letters, digits, `_`)");
+            }
             let (target, item) = match entry {
                 Value::String(target) => (target.as_str(), None),
                 Value::Table(fields) => {
@@ -293,6 +296,7 @@ fn ports(value: Option<&Value>, key: &str, blocks: &[BlockDecl]) -> Result<Vec<P
             };
             let (block, port) = target
                 .split_once('.')
+                .filter(|(_, port)| !port.is_empty())
                 .ok_or_else(|| anyhow!("{key}.{name}: '{target}' is not \"block.port\""))?;
             let decl = blocks
                 .iter()
@@ -428,10 +432,211 @@ mod tests {
                 "[blocks.a]\ntype='Head<u8>'\n[inputs]\nx = 'a.input'\n[outputs]\nx = 'a.output'",
                 "twice",
             ),
+            (
+                "[blocks.a]\ntype='Head<u8>'\n[inputs]\nx = 'a.'",
+                "not \"block.port\"",
+            ),
+            (
+                "[blocks.a]\ntype='Head<u8>'\n[inputs]\n'x.y' = 'a.input'",
+                "must be an identifier",
+            ),
         ];
         for (text, expected) in cases {
             let err = format!("{:#}", Description::from_toml(text).unwrap_err());
             assert!(err.contains(expected), "{text:?}: {err}");
         }
+    }
+
+    use crate::test_rng::Rng;
+    use crate::test_rng::for_each_seed;
+
+    /// Invariants of any description that parsed.
+    fn check(text: &str, d: &Description) {
+        let declared: Vec<&str> = d.blocks.iter().map(|b| b.name.as_str()).collect();
+        for link in &d.links {
+            assert!(declared.contains(&link.src.as_str()), "{text}");
+            assert!(declared.contains(&link.dst.as_str()), "{text}");
+        }
+        let mut names = HashSet::new();
+        for port in d.inputs.iter().chain(&d.outputs) {
+            assert!(declared.contains(&port.block.as_str()), "{text}");
+            assert!(is_ident(&port.name) && !port.port.is_empty(), "{text}");
+            assert!(names.insert(port.name.as_str()), "{text}");
+            assert_eq!(d.port(&port.name), Some(port), "{text}");
+        }
+        for block in &d.blocks {
+            assert!(is_ident(&block.name), "{text}");
+            for key in block.settings.keys() {
+                let _ = block.settings.raw(key);
+            }
+        }
+    }
+
+    const STRINGS: &[&str] = &[
+        "a > b",
+        "a > b > c",
+        "a | b",
+        "a.output > input.b",
+        "a > ",
+        "x > y",
+        "a ~> b",
+        "Copy<f32>",
+        "Head<u8>",
+        "Mix",
+        "VectorSink<c32>",
+        "X<",
+        "",
+        "a.input",
+        "b.output",
+        "c.in",
+        "a.",
+        ".input",
+        "a.b.c",
+        "zz",
+        "f32",
+        "c32",
+        "u9",
+        "é",
+        "\\n",
+        "\\\"",
+    ];
+    const NAMES: &[&str] = &["a", "b", "c", "a-b", "é", "_", "\"x.y\"", "in", "\"\""];
+
+    fn string(rng: &mut Rng) -> String {
+        format!("\"{}\"", rng.pick(STRINGS))
+    }
+
+    fn value(rng: &mut Rng, depth: usize) -> String {
+        match rng.below(if depth > 1 { 8 } else { 11 }) {
+            0 => format!("{}", rng.next_u64() as i64),
+            1 => rng
+                .pick(&["3.5", "-0.0", "nan", "-inf", "1e308"])
+                .to_string(),
+            2 => rng.pick(&["true", "false"]).to_string(),
+            3 => "1979-05-27T07:32:00Z".into(),
+            4..8 => string(rng),
+            8 => {
+                let items: Vec<String> = (0..rng.below(4)).map(|_| value(rng, depth + 1)).collect();
+                format!("[{}]", items.join(", "))
+            }
+            _ => {
+                let mut fields = Vec::new();
+                if rng.chance(80) {
+                    fields.push(format!("port = {}", value(rng, depth + 1)));
+                }
+                if rng.chance(50) {
+                    fields.push(format!("type = {}", value(rng, depth + 1)));
+                }
+                format!("{{ {} }}", fields.join(", "))
+            }
+        }
+    }
+
+    /// Mostly well-formed documents, with random values here and there.
+    fn document(rng: &mut Rng) -> String {
+        let mut text = String::new();
+        let mut blocks = vec!["a", "b", "c"];
+        rng.shuffle(&mut blocks);
+        let blocks = &blocks[..rng.range(1, 3)];
+        let good = |rng: &mut Rng, good: String| {
+            if rng.chance(80) { good } else { value(rng, 0) }
+        };
+        if rng.chance(50) {
+            text += &format!("name = {}\n", good(rng, "\"fg\"".into()));
+        }
+        if rng.chance(30) {
+            text += &format!("plugins = {}\n", good(rng, "[\"lib.so\"]".into()));
+        }
+        if rng.chance(70) {
+            let chain = format!("\"{}\"", blocks.join(" > "));
+            text += &format!("connections = {}\n", good(rng, chain));
+        }
+        if rng.chance(5) {
+            text += &format!("unknown = {}\n", value(rng, 0));
+        }
+        for block in blocks {
+            let block = if rng.chance(90) {
+                block
+            } else {
+                rng.pick(NAMES)
+            };
+            text += &format!("[blocks.{block}]\n");
+            if rng.chance(95) {
+                let ty = format!(
+                    "\"{}\"",
+                    rng.pick(&["Copy<f32>", "Head<u8>", "Mix", "Sink<c32>"])
+                );
+                text += &format!("type = {}\n", good(rng, ty));
+            }
+            for _ in 0..rng.below(3) {
+                text += &format!(
+                    "{} = {}\n",
+                    rng.pick(&["n", "items", "rate"]),
+                    value(rng, 0)
+                );
+            }
+        }
+        for (table, port) in [("inputs", "input"), ("outputs", "output")] {
+            if rng.chance(60) {
+                text += &format!("[{table}]\n");
+                for name in ["x", "y", "z"].iter().take(rng.below(3)) {
+                    let name = if rng.chance(90) {
+                        name
+                    } else {
+                        rng.pick(NAMES)
+                    };
+                    let target = format!("\"{}.{port}\"", rng.pick(blocks));
+                    text += &format!("{name} = {}\n", good(rng, target));
+                }
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn random_documents_are_parsed_or_refused() {
+        let (mut all, mut parsed) = (0, 0);
+        for_each_seed(3000, |rng| {
+            let text = document(rng);
+            all += 1;
+            if let Ok(d) = Description::from_toml(&text) {
+                parsed += 1;
+                check(&text, &d);
+            }
+        });
+        assert!(all < 100 || parsed * 20 > all, "{parsed} of {all} parsed");
+    }
+
+    #[test]
+    fn damaged_documents_are_parsed_or_refused() {
+        let (mut all, mut parsed) = (0, 0);
+        for_each_seed(3000, |rng| {
+            let mut text: Vec<char> = CHAIN.chars().collect();
+            for _ in 0..rng.range(1, 4) {
+                let at = rng.below(text.len() + 1);
+                match rng.below(3) {
+                    0 if at < text.len() => {
+                        let end = (at + rng.range(1, 8)).min(text.len());
+                        text.drain(at..end);
+                    }
+                    1 => {
+                        let piece = rng.pick(&["\"", "'", "[", "]", "=", "\n", ".", ">", "{", ","]);
+                        text.splice(at..at, piece.chars());
+                    }
+                    _ => {
+                        let end = (at + rng.range(1, 20)).min(text.len());
+                        let copy: Vec<char> = text[at..end].to_vec();
+                        text.splice(at..at, copy);
+                    }
+                }
+            }
+            let text: String = text.into_iter().collect();
+            all += 1;
+            if let Ok(d) = Description::from_toml(&text) {
+                parsed += 1;
+                check(&text, &d);
+            }
+        });
+        assert!(all < 100 || parsed * 20 > all, "{parsed} of {all} parsed");
     }
 }

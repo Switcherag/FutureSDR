@@ -38,6 +38,15 @@ pub const RUSTC: &str = env!("PLUGIN_SDK_RUSTC");
 /// rustup toolchain this crate was built with, if known.
 pub const TOOLCHAIN: &str = env!("PLUGIN_SDK_TOOLCHAIN");
 
+/// How [`Sdk::build_plugin_with`] builds a plugin.
+#[derive(Debug, Clone, Default)]
+pub struct BuildOptions {
+    /// Run Clippy's lints as well (`clippy-driver` must be installed).
+    pub clippy: bool,
+    /// Turn warnings into errors.
+    pub deny_warnings: bool,
+}
+
 /// Cargo profile of an SDK build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
@@ -260,7 +269,20 @@ impl Sdk {
     /// exported symbols stay), for small and fast plugins, unless the crate's
     /// `[profile.release]` sets `codegen-units` or `strip`.
     pub fn build_plugin(&self, manifest: &Path, target_dir: &Path) -> Result<PathBuf> {
+        self.build_plugin_with(manifest, target_dir, &BuildOptions::default())
+    }
+
+    /// [`build_plugin`](Self::build_plugin), with `options`.
+    pub fn build_plugin_with(
+        &self,
+        manifest: &Path,
+        target_dir: &Path,
+        options: &BuildOptions,
+    ) -> Result<PathBuf> {
         let mut cargo = Command::new(cargo_bin());
+        if options.clippy {
+            cargo.env("RUSTC_WORKSPACE_WRAPPER", "clippy-driver");
+        }
         if self.profile == Profile::Release {
             let text = fs::read_to_string(manifest)
                 .with_context(|| format!("reading {}", manifest.display()))?;
@@ -301,6 +323,9 @@ impl Sdk {
         }
         for dir in &self.deps {
             cargo.arg("-L").arg(format!("dependency={}", dir.display()));
+        }
+        if options.deny_warnings {
+            cargo.args(["-D", "warnings"]);
         }
         if !self.toolchain.is_empty() {
             cargo.env("RUSTUP_TOOLCHAIN", &self.toolchain);

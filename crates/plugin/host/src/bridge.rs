@@ -305,6 +305,10 @@ impl<T: CpuSample> Pipe for Channel<T> {
         let mut st = self.lock();
         remove(&mut st.standby_writers, generation);
         remove(&mut st.finished_early, generation);
+        // It no longer waits: its bridge drops what it writes.
+        let waiting = std::mem::take(&mut st.writers_waiting);
+        drop(st);
+        wake(waiting);
     }
 
     fn stats(&self) -> ChannelStats {
@@ -615,6 +619,449 @@ mod tests {
         assert!(!ch.stats().closed);
         ch.writer_finished(3);
         assert!(ch.stats().closed);
+    }
+}
+
+/// The channel against a reference model, under random operations: same
+/// results, same statistics, same readiness, and no lost wake-up.
+#[cfg(test)]
+mod model {
+    use std::collections::BTreeMap;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicBool;
+
+    use super::*;
+    use crate::test_rng::Rng;
+    use crate::test_rng::for_each_seed;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum W {
+        Standby,
+        StandbyEnded,
+        Committed,
+        Done,
+        Withdrawn,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Outcome {
+        Items(Vec<i32>),
+        Empty,
+        End,
+    }
+
+    #[derive(Default)]
+    struct Model {
+        capacity: usize,
+        writers: BTreeMap<u64, W>,
+        /// Committed writers that have not finished, in commit order; the
+        /// first one writes.
+        turns: VecDeque<u64>,
+        queue: VecDeque<i32>,
+        reader: u64,
+        closed: bool,
+        dropped: u64,
+    }
+
+    impl Model {
+        fn state(&self, g: u64) -> Option<W> {
+            self.writers.get(&g).copied()
+        }
+
+        fn commit(&mut self, g: u64) {
+            match self.state(g) {
+                Some(W::Standby) => {
+                    self.writers.insert(g, W::Committed);
+                    if self.turns.is_empty() {
+                        self.closed = false;
+                    }
+                    self.turns.push_back(g);
+                }
+                Some(W::StandbyEnded) => {
+                    self.writers.insert(g, W::Done);
+                    if self.turns.is_empty() {
+                        self.closed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn withdraw(&mut self, g: u64) {
+            if matches!(self.state(g), Some(W::Standby | W::StandbyEnded)) {
+                self.writers.insert(g, W::Withdrawn);
+            }
+        }
+
+        fn finished(&mut self, g: u64) {
+            match self.state(g) {
+                Some(W::Standby) => {
+                    self.writers.insert(g, W::StandbyEnded);
+                }
+                Some(W::Committed) => {
+                    self.writers.insert(g, W::Done);
+                    let was_writing = self.turns.front() == Some(&g);
+                    self.turns.retain(|t| *t != g);
+                    if was_writing && self.turns.is_empty() {
+                        self.closed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn waiting(&self, g: u64) -> bool {
+            match self.state(g) {
+                Some(W::Standby) => true,
+                Some(W::Committed) => self.turns.front() != Some(&g),
+                _ => false,
+            }
+        }
+
+        /// Whether the items were taken (queued or dropped).
+        fn write(&mut self, g: u64, items: &[i32]) -> bool {
+            if self.turns.front() != Some(&g) {
+                return !self.waiting(g);
+            }
+            self.queue.extend(items);
+            while self.queue.len() > self.capacity {
+                self.queue.pop_front();
+                self.dropped += 1;
+            }
+            true
+        }
+
+        fn read(&mut self, r: u64, max: usize, active: &mut bool) -> Outcome {
+            if self.reader != r {
+                return if *active {
+                    Outcome::End
+                } else {
+                    Outcome::Empty
+                };
+            }
+            *active = true;
+            if self.queue.is_empty() {
+                return if self.closed {
+                    Outcome::End
+                } else {
+                    Outcome::Empty
+                };
+            }
+            let n = max.min(self.queue.len());
+            Outcome::Items(self.queue.drain(..n).collect())
+        }
+
+        fn reader_ready(&self, r: u64, was_reader: bool) -> bool {
+            let is_reader = self.reader == r;
+            is_reader != was_reader || (is_reader && (!self.queue.is_empty() || self.closed))
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum Op {
+        Standby(u64),
+        Commit(u64),
+        Withdraw(u64),
+        Finished(u64),
+        Write(u64, usize),
+        SetReader(u64),
+        RestartReader(u64),
+        Read(u64, usize),
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    enum Waiter {
+        Writer(u64),
+        Reader(u64, bool),
+    }
+
+    struct Flag(AtomicBool);
+
+    impl std::task::Wake for Flag {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn poll(ch: &Channel<i32>, waiter: Waiter, flag: &Arc<Flag>) -> bool {
+        let waker = Waker::from(flag.clone());
+        let mut cx = Context::from_waker(&waker);
+        let ready = match waiter {
+            Waiter::Writer(g) => ch.writer_ready(g, &mut cx),
+            Waiter::Reader(r, was) => ch.reader_ready(r, was, &mut cx),
+        };
+        ready.is_ready()
+    }
+
+    fn op(rng: &mut Rng, next_gen: &mut u64, writers: &[u64], finished: &[u64]) -> Op {
+        let live: Vec<u64> = writers
+            .iter()
+            .copied()
+            .filter(|g| !finished.contains(g))
+            .collect();
+        let any = |rng: &mut Rng| *rng.pick(writers);
+        let reader = |rng: &mut Rng| 100 + rng.below(3) as u64;
+        match rng.below(100) {
+            _ if writers.is_empty() => {
+                *next_gen += 1;
+                Op::Standby(*next_gen)
+            }
+            0..10 => {
+                *next_gen += 1;
+                Op::Standby(*next_gen)
+            }
+            10..25 => Op::Commit(any(rng)),
+            25..30 => Op::Withdraw(any(rng)),
+            30..40 => Op::Finished(any(rng)),
+            40..65 if !live.is_empty() => Op::Write(*rng.pick(&live), rng.range(0, 6)),
+            65..70 => Op::SetReader(reader(rng)),
+            70..73 => Op::RestartReader(reader(rng)),
+            _ => Op::Read(reader(rng), rng.range(1, 8)),
+        }
+    }
+
+    #[test]
+    fn channel_matches_its_model() {
+        for_each_seed(300, |rng| {
+            let capacity = rng.range(1, 12);
+            let ch = Channel::<i32>::new(ItemType::I32, capacity);
+            let mut model = Model {
+                capacity,
+                reader: NOBODY,
+                ..Model::default()
+            };
+            let (mut next_gen, mut next_item) = (0u64, 0i32);
+            let (mut writers, mut finished) = (Vec::new(), Vec::new());
+            // Items a writer still has to write after being told to wait.
+            let mut unsent: HashMap<u64, Vec<i32>> = HashMap::new();
+            let mut active: HashMap<u64, bool> = HashMap::new();
+            let mut waiting: Vec<(Waiter, Arc<Flag>)> = Vec::new();
+
+            for step in 0..200 {
+                let op = op(rng, &mut next_gen, &writers, &finished);
+                let at = format!("step {step}: {op:?}");
+                if let Op::Finished(g) = op {
+                    // A finished bridge waits no more.
+                    waiting.retain(|(w, _)| *w != Waiter::Writer(g));
+                }
+                match op {
+                    Op::Standby(g) => {
+                        writers.push(g);
+                        model.writers.insert(g, W::Standby);
+                        ch.standby_writer(g);
+                    }
+                    Op::Commit(g) => {
+                        model.commit(g);
+                        ch.commit_writer(g);
+                    }
+                    Op::Withdraw(g) => {
+                        model.withdraw(g);
+                        ch.withdraw_writer(g);
+                    }
+                    Op::Finished(g) => {
+                        finished.push(g);
+                        model.finished(g);
+                        ch.writer_finished(g);
+                    }
+                    Op::Write(g, n) => {
+                        let items = unsent.entry(g).or_default();
+                        items.extend(next_item..next_item + n as i32);
+                        next_item += n as i32;
+                        let taken = model.write(g, items);
+                        let real = ch.write(g, items);
+                        assert_eq!(matches!(real, Write::Taken), taken, "{at}");
+                        if taken {
+                            items.clear();
+                        }
+                    }
+                    Op::SetReader(r) => {
+                        model.reader = r;
+                        ch.set_reader(r);
+                    }
+                    Op::RestartReader(r) => {
+                        model.reader = r;
+                        model.queue.clear();
+                        ch.restart_reader(r);
+                    }
+                    Op::Read(r, max) => {
+                        let mut model_active = *active.get(&r).unwrap_or(&false);
+                        let expected = model.read(r, max, &mut model_active);
+                        let real_active = active.entry(r).or_default();
+                        let mut out = vec![0; max];
+                        let got = match ch.read(r, &mut out, real_active) {
+                            Read::Items(n) => Outcome::Items(out[..n].to_vec()),
+                            Read::Empty => Outcome::Empty,
+                            Read::End => Outcome::End,
+                        };
+                        assert_eq!(got, expected, "{at}");
+                        assert_eq!(*real_active, model_active, "{at}");
+                    }
+                }
+                let stats = ch.stats();
+                assert_eq!(
+                    (stats.queued, stats.dropped, stats.closed),
+                    (model.queue.len(), model.dropped, model.closed),
+                    "{at}"
+                );
+
+                // Whoever waited and may go on now must have been woken.
+                for (waiter, flag) in waiting.drain(..) {
+                    let ready = match waiter {
+                        Waiter::Writer(g) => !model.waiting(g),
+                        Waiter::Reader(r, was) => model.reader_ready(r, was),
+                    };
+                    assert!(
+                        !ready || flag.0.load(Ordering::SeqCst),
+                        "{at}: {waiter:?} was not woken"
+                    );
+                }
+                // Everyone waits again, where the model says so.
+                let mut waiters: Vec<Waiter> = writers
+                    .iter()
+                    .filter(|g| !finished.contains(g))
+                    .map(|g| Waiter::Writer(*g))
+                    .collect();
+                waiters
+                    .extend((100..103).map(|r| Waiter::Reader(r, active.get(&r) == Some(&true))));
+                for waiter in waiters {
+                    let flag = Arc::new(Flag(AtomicBool::new(false)));
+                    let expected = match waiter {
+                        Waiter::Writer(g) => !model.waiting(g),
+                        Waiter::Reader(r, was) => model.reader_ready(r, was),
+                    };
+                    assert_eq!(poll(&ch, waiter, &flag), expected, "{at}: {waiter:?}");
+                    if !expected {
+                        waiting.push((waiter, flag));
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Writer and reader threads that go through a series of commits: every
+/// committed writer's items arrive, in commit order, a withdrawn writer's
+/// never do, and nobody hangs.
+#[cfg(test)]
+mod threads {
+    use std::collections::HashMap;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use futuresdr::runtime::block_on;
+
+    use super::*;
+    use crate::test_rng::for_each_seed;
+
+    fn write_all(ch: &Arc<Channel<i32>>, g: u64, items: &[i32], chunk: usize) {
+        for chunk in items.chunks(chunk) {
+            while let Write::Wait = ch.write(g, chunk) {
+                block_on(WriterReady {
+                    channel: ch.clone(),
+                    generation: g,
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn writers_hand_over_without_loss_or_hang() {
+        for_each_seed(40, |rng| {
+            let ch = Channel::<i32>::new(ItemType::I32, usize::MAX);
+            let n_writers = rng.range(1, 5);
+            let (reader, withdrawn, ended) = (100, 50, 51);
+            let mut order: Vec<u64> = (1..=n_writers as u64).collect();
+            rng.shuffle(&mut order);
+            // A writer that finished on standby, committed while another one
+            // writes (committed first, it would end the stream at once).
+            let at = rng.range(1, order.len());
+            order.insert(at, ended);
+
+            let mut threads = Vec::new();
+            let mut may_finish = HashMap::new();
+            let mut expected: Vec<i32> = Vec::new();
+            for &g in &order {
+                ch.standby_writer(g);
+                if g == ended {
+                    ch.writer_finished(g);
+                    continue;
+                }
+                let items: Vec<i32> = (0..rng.range(0, 3000) as i32)
+                    .map(|i| g as i32 * 1_000_000 + i)
+                    .collect();
+                expected.extend(&items);
+                let (tx, rx) = mpsc::channel::<()>();
+                may_finish.insert(g, tx);
+                let (ch, chunk) = (ch.clone(), rng.range(1, 64));
+                threads.push(std::thread::spawn(move || {
+                    write_all(&ch, g, &items, chunk);
+                    rx.recv().unwrap();
+                    ch.writer_finished(g);
+                }));
+            }
+            ch.standby_writer(withdrawn);
+            let lost = ch.clone();
+            threads.push(std::thread::spawn(move || {
+                write_all(&lost, withdrawn, &[-1; 100], 7);
+                lost.writer_finished(withdrawn);
+            }));
+
+            let (done_tx, done_rx) = mpsc::channel();
+            let reads = ch.clone();
+            let reader_thread = std::thread::spawn(move || {
+                let (mut got, mut active, mut out) = (Vec::<i32>::new(), false, [0; 97]);
+                loop {
+                    match reads.read(reader, &mut out, &mut active) {
+                        Read::Items(n) => got.extend(&out[..n]),
+                        Read::Empty => block_on(ReaderReady {
+                            channel: reads.clone(),
+                            generation: reader,
+                            was_reader: active,
+                        }),
+                        Read::End => break,
+                    }
+                }
+                done_tx.send(got).unwrap();
+            });
+
+            // Commit in order, with pauses; a writer may finish once the next
+            // one that writes is committed (make before break).
+            let reader_at = rng.below(order.len());
+            let withdraw_at = rng.below(order.len());
+            let mut previous: Option<u64> = None;
+            for (i, &g) in order.iter().enumerate() {
+                if i == reader_at {
+                    ch.set_reader(reader);
+                }
+                if i == withdraw_at {
+                    ch.withdraw_writer(withdrawn);
+                }
+                std::thread::sleep(Duration::from_micros(rng.range(0, 300) as u64));
+                ch.commit_writer(g);
+                if g != ended
+                    && let Some(p) = previous.replace(g)
+                {
+                    may_finish[&p].send(()).unwrap();
+                }
+            }
+            if let Some(p) = previous {
+                may_finish[&p].send(()).unwrap();
+            }
+
+            let got = done_rx
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the reader hangs");
+            reader_thread.join().unwrap();
+            for t in threads {
+                t.join().unwrap();
+            }
+            assert!(
+                got == expected,
+                "{} items, expected {}",
+                got.len(),
+                expected.len()
+            );
+        });
     }
 }
 

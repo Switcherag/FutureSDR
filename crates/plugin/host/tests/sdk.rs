@@ -10,6 +10,7 @@ use futuresdr::blocks::VectorSink;
 use futuresdr::prelude::*;
 use plugin_host::Registry;
 use plugin_host::Settings;
+use plugin_sdk::Profile;
 use plugin_sdk::Sdk;
 
 fn workspace() -> &'static Path {
@@ -27,6 +28,11 @@ fn a_packed_sdk_builds_loadable_plugins() -> anyhow::Result<()> {
 
     let sdk = Sdk::open(&dir.join("sdk"))?;
     assert_eq!(sdk.rt, packed.rt);
+    assert_eq!(
+        sdk.crates()?,
+        Sdk::of_this_process()?.crates()?,
+        "the packed SDK has the same crates, with the same hashes"
+    );
     let files = std::fs::read_dir(&sdk.deps[0])?.count();
     assert!(
         files < 400,
@@ -92,5 +98,73 @@ fn a_plugin_built_against_another_build_is_refused() -> anyhow::Result<()> {
         msg.contains("was it built against this program's SDK") && msg.contains("undefined symbol"),
         "{msg}"
     );
+    Ok(())
+}
+
+const TINY: &str = r#"
+extern crate futuresdr_plugin_rt as futuresdr;
+
+use futuresdr::prelude::*;
+
+export_plugin! {
+    name: "tiny",
+    blocks: [
+        {
+            name: "Tiny",
+            types: [u8],
+            description: "Copy.",
+            add: |_s| blocks::Copy::<T>::new(),
+        },
+    ]
+}
+"#;
+
+/// A plugin crate named `name` in `dir`, with `profile` appended to its
+/// manifest.
+fn tiny_plugin(dir: &Path, name: &str, profile: &str) -> std::path::PathBuf {
+    let dir = dir.join(name);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [lib]\ncrate-type = [\"dylib\"]\n\n[workspace]\n\n{profile}"
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/lib.rs"), TINY).unwrap();
+    dir.join("Cargo.toml")
+}
+
+/// Whether the ELF file has a symbol table (the dynamic one aside).
+fn has_symtab(path: &Path) -> bool {
+    const SHT_SYMTAB: u32 = 2;
+    let elf = std::fs::read(path).unwrap();
+    assert_eq!(&elf[..4], b"\x7fELF");
+    let u16_at = |at: usize| u16::from_le_bytes(elf[at..at + 2].try_into().unwrap()) as usize;
+    let u32_at = |at: usize| u32::from_le_bytes(elf[at..at + 4].try_into().unwrap());
+    let shoff = u64::from_le_bytes(elf[0x28..0x30].try_into().unwrap()) as usize;
+    let (entry, count) = (u16_at(0x3a), u16_at(0x3c));
+    (0..count).any(|i| u32_at(shoff + i * entry + 4) == SHT_SYMTAB)
+}
+
+/// Release plugins are built small unless their manifest says otherwise;
+/// debug plugins as the manifest says.
+#[test]
+fn plugin_profile_defaults() -> anyhow::Result<()> {
+    let dir = common::scratch("profile");
+    let sdk = Sdk::of_this_process()?;
+    let plain = sdk.build_plugin(&tiny_plugin(&dir, "tiny_plain", ""), &dir.join("target"))?;
+    let kept = sdk.build_plugin(
+        &tiny_plugin(&dir, "tiny_kept", "[profile.release]\nstrip = false\n"),
+        &dir.join("target"),
+    )?;
+    let release = sdk.profile == Profile::Release;
+    assert_eq!(has_symtab(&plain), !release, "{}", plain.display());
+    assert!(has_symtab(&kept), "{}", kept.display());
+
+    let mut registry = Registry::new();
+    registry.load(&plain)?;
+    assert!(registry.get("Tiny<u8>").is_some());
     Ok(())
 }

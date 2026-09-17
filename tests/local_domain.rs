@@ -890,3 +890,13 @@ fn local_streams_reject_different_domains() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn derive_sets_is_blocking() {
+    use futuresdr::runtime::__private::KernelInterface;
+
+    assert!(<BlockingNoop as KernelInterface>::IS_BLOCKING);
+    assert!(<BlockingNoop as KernelInterface>::is_blocking());
+    assert!(!<NonSendLocalSource as KernelInterface>::IS_BLOCKING);
+    assert!(!<NullSink<u8> as KernelInterface>::is_blocking());
+}
