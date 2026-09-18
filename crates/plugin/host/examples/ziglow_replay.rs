@@ -797,8 +797,8 @@ fn main() -> Result<()> {
                 mode.name(),
                 r.received[0],
                 r.received[1],
-                sw.len(),
                 r.impossible,
+                sw.len(),
                 1e3 * median_of(&r.latency),
                 r.cpu * 1e3,
                 ms(r.wall)
