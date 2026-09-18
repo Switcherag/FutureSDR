@@ -159,14 +159,23 @@ cargo run --release --example ziglow_replay -- --mode all
 `ziglow_replay` replays recorded 802.11ah and 802.15.4 frames, alternating,
 and switches receivers after every frame, for inter-frame spacings from
 4 ms down to 0 (`dyn`'s `ziglow_replay`). With 256-sample chunks and 4
-workers, 100 frames per spacing:
+workers, 200 frames per spacing:
 
-| Mode | Switch (median) | PER at 1 ms | PER at 0 ms |
-|------|-----------------|-------------|-------------|
-| `select` (both run, links selected) | 3 µs | 0 % | 2 % |
-| `standby` (prepared, committed) | 5 µs | 0 % | 8 % |
-| `replace` (on demand, as `dyn`) | 0.14 ms | 0 % | 50 % |
+| Mode | Switch (median) | PER at 0.5 ms | PER at 0 ms |
+|------|-----------------|---------------|-------------|
+| `select` (both run, links selected) | 3 µs | 0 % | 0 % |
+| `standby` (prepared, committed) | 5 µs | 0 % | 7–10 % |
+| `replace` (on demand, as `dyn`) | 0.13 ms | 1 % | 50–53 % |
 | `both` (no switching) | – | 0 % | 0 % |
+
+A receiver that is switched away from keeps the samples it already holds,
+and a replaced one drains in the background, so both can still post frames
+after a switch. Each frame is therefore matched to the transmission it
+decodes — by the time it arrives, since decoding takes about 40 µs — and
+counted only if its receiver was listening while that transmission was on
+the air. What a radio would never have delivered, because the transmitter
+had already moved to the other PHY, is reported as `impossible` and left
+out; it stays at 0 except for a frame or two at the tightest spacings.
 
 `--retune-us N` makes the replay a front end that takes N µs to change
 frequency, which the receivers ask for.

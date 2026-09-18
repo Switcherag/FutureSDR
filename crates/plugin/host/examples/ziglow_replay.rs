@@ -9,8 +9,18 @@
 //! 802.11ah (H) and 802.15.4 (Z) frames, alternating and separated by IFS, is
 //! replayed at its sample rate. Each time a receiver posts a frame, the
 //! controller switches to the other PHY, so the switch must be done before
-//! the next frame starts. Every copy of a frame is the same, so PER is
-//! `1 - received / sent` per PHY.
+//! the next frame starts. Every copy of a frame is the same recording, so
+//! PER is `1 - received / sent` per PHY.
+//!
+//! A receiver that is switched away from keeps what it already holds, and a
+//! replaced one drains in the background, so both can still post frames
+//! after the switch. Those are frames of what was sent *before* it, which a
+//! radio would have received too. To make sure none of them is a frame the
+//! transmitter sent after moving to the other PHY, each frame is matched to
+//! the transmission it decodes (by the time it arrives, decoding takes about
+//! 40 µs) and counted only if its receiver was listening while that
+//! transmission was on the air. The rest are reported as `impossible` and
+//! left out.
 //!
 //! Switching modes (`--mode`, `all` runs each):
 //!
@@ -73,6 +83,9 @@ const LEAD_IN: Duration = Duration::from_millis(50);
 
 /// The streams to replay, by step; the `Replay` block takes its `step`.
 static STREAMS: Mutex<Vec<Arc<Vec<Complex32>>>> = Mutex::new(Vec::new());
+/// When the replay of the current step emitted its first sample, so that a
+/// frame can be attributed to the transmission it comes from.
+static STARTED: Mutex<Option<Instant>> = Mutex::new(None);
 /// Samples the replay emits at once, as a front end delivers them.
 static CHUNK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1024);
 
@@ -103,7 +116,11 @@ impl Kernel for Replay {
         _mo: &mut MessageOutputs,
         _meta: &BlockMeta,
     ) -> Result<()> {
-        let start = *self.start.get_or_insert_with(Instant::now);
+        let start = *self.start.get_or_insert_with(|| {
+            let now = Instant::now();
+            *STARTED.lock().unwrap() = Some(now);
+            now
+        });
         let chunk = CHUNK.load(std::sync::atomic::Ordering::Relaxed);
         let len = self.samples.len();
         let due = ((start.elapsed().as_secs_f64() * RATE) as usize).min(len);
@@ -305,23 +322,41 @@ impl Gap {
     }
 }
 
-/// `frames` frames, H Z H Z ..., `ifs` apart, after the lead-in.
+/// One transmitted frame: which PHY sent it, and when it began and ended,
+/// in seconds from the first replayed sample.
+#[derive(Debug, Clone, Copy)]
+struct Sent {
+    phy: usize,
+    start: f64,
+    end: f64,
+}
+
+/// `frames` frames, H Z H Z ..., `ifs` apart, after the lead-in, and what
+/// was sent when.
 fn stream(
     halow: &[Complex32],
     zigbee: &[Complex32],
     frames: usize,
     ifs: Duration,
     gap: &mut Gap,
-) -> Vec<Complex32> {
+) -> (Vec<Complex32>, Vec<Sent>) {
     let n_ifs = (ifs.as_secs_f64() * RATE).round() as usize;
     let n_lead = (LEAD_IN.as_secs_f64() * RATE) as usize;
     let mut out = Vec::new();
+    let mut sent = Vec::new();
     gap.fill(&mut out, n_lead);
     for i in 0..frames {
-        out.extend_from_slice(if i % 2 == 0 { halow } else { zigbee });
+        let phy = i % 2;
+        let start = out.len();
+        out.extend_from_slice(if phy == 0 { halow } else { zigbee });
+        sent.push(Sent {
+            phy,
+            start: start as f64 / RATE,
+            end: out.len() as f64 / RATE,
+        });
         gap.fill(&mut out, if i + 1 == frames { n_lead } else { n_ifs });
     }
-    out
+    (out, sent)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -401,8 +436,15 @@ fn cpu_time() -> f64 {
 }
 
 struct StepResult {
-    received_h: usize,
-    received_z: usize,
+    /// Frames from a receiver that was listening when they were sent.
+    received: [usize; 2],
+    /// Frames from a receiver that was listening for none of what it
+    /// decoded: what this replay could deliver but a radio never would,
+    /// since the transmitter had moved to the other PHY. Not counted as
+    /// received.
+    impossible: usize,
+    /// How long after a frame was sent it was posted, in seconds.
+    latency: Vec<f64>,
     switches: Vec<Duration>,
     cpu: f64,
     wall: Duration,
@@ -434,10 +476,12 @@ async fn run_step(
     step: usize,
     retune: Option<u64>,
     phys: &[Description; 2],
+    sent: &[Sent],
 ) -> Result<StepResult> {
     let names = ["halow", "zigbee"];
     let cpu = cpu_time();
     let t0 = Instant::now();
+    *STARTED.lock().unwrap() = None;
     // The replay first: its stream ended in the previous step, and a
     // receiver that starts on an ended stream ends at once.
     ctrl.spawn_async("replay", head(step, retune)?).await?;
@@ -458,7 +502,11 @@ async fn run_step(
             standby = Some(ctrl.prepare_async("rx", phys[1].clone()).await?);
         }
     }
-    let (mut received_h, mut received_z) = (0, 0);
+    let mut received = [0usize; 2];
+    let mut impossible = 0;
+    let mut latency = Vec::new();
+    // Which PHY the receivers were listening for, from a given time on.
+    let mut listening: Vec<(f64, usize)> = vec![(0.0, 0)];
     let mut switches = Vec::new();
     let mut active = 0;
     let mut quiet_since: Option<Instant> = None;
@@ -477,11 +525,34 @@ async fn run_step(
         };
         quiet_since = None;
         let phy = names.iter().position(|n| *n == origin).unwrap();
-        if phy == 0 {
-            received_h += 1;
-        } else {
-            received_z += 1;
+
+        // Which frame this is: the last one of its PHY sent before it
+        // arrived. Every copy is the same recording, so only the time it
+        // was sent tells them apart.
+        let at = STARTED
+            .lock()
+            .unwrap()
+            .map_or(0.0, |start| start.elapsed().as_secs_f64());
+        let sent_frame = sent.iter().rfind(|s| s.phy == phy && s.end <= at);
+        // A receiver only ever gets what was sent while it was listening.
+        // The recordings begin with a little silence, so listening for
+        // part of a frame is enough; for none of it, a radio would have
+        // given it nothing to decode.
+        let listened = sent_frame.is_some_and(|f| {
+            listening.iter().enumerate().any(|(k, (from, p))| {
+                let until = listening.get(k + 1).map_or(f64::INFINITY, |(t, _)| *t);
+                *p == phy && *from < f.end && until > f.start
+            })
+        });
+        if let Some(f) = sent_frame {
+            latency.push(at - f.end);
         }
+        if mode == Mode::Both || listened {
+            received[phy] += 1;
+        } else {
+            impossible += 1;
+        }
+
         if phy != active || mode == Mode::Both {
             continue;
         }
@@ -505,6 +576,11 @@ async fn run_step(
         }
         switches.push(t.elapsed());
         active = next;
+        let at = STARTED
+            .lock()
+            .unwrap()
+            .map_or(0.0, |start| start.elapsed().as_secs_f64());
+        listening.push((at, next));
         if mode == Mode::Standby {
             standby = Some(ctrl.prepare_async("rx", phys[active ^ 1].clone()).await?);
         }
@@ -519,12 +595,20 @@ async fn run_step(
         ctrl.stop_async(&name).await?;
     }
     Ok(StepResult {
-        received_h,
-        received_z,
+        received,
+        impossible,
+        latency,
         switches,
         cpu,
         wall,
     })
+}
+
+/// Median of `v`, or zero.
+fn median_of(v: &[f64]) -> f64 {
+    let mut v = v.to_vec();
+    v.sort_by(f64::total_cmp);
+    v.get(v.len() / 2).copied().unwrap_or(0.0)
 }
 
 fn ms(d: Duration) -> f64 {
@@ -618,6 +702,7 @@ fn main() -> Result<()> {
         }
         (true, None) => Gap::Gaussian(Rng(1), 10f32.powf(-54.4 / 20.0) / 2f32.sqrt()),
     };
+    let mut sent_per_step: Vec<Vec<Sent>> = Vec::new();
     let mut ifs = Vec::new();
     let mut v = ifs_start;
     while (ifs_step > 0.0 && ifs_start >= ifs_stop && v >= ifs_stop - 1e-9)
@@ -634,7 +719,9 @@ fn main() -> Result<()> {
         let mut streams = STREAMS.lock().unwrap();
         for ms in &ifs {
             let ifs = Duration::from_secs_f64(ms / 1e3);
-            streams.push(Arc::new(stream(&halow, &zigbee, frames, ifs, &mut gap)));
+            let (samples, manifest) = stream(&halow, &zigbee, frames, ifs, &mut gap);
+            streams.push(Arc::new(samples));
+            sent_per_step.push(manifest);
         }
     }
     let phys = [
@@ -654,11 +741,14 @@ fn main() -> Result<()> {
     );
 
     let mut table = String::from(
-        "mode,ifs_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,switches,switch_median_ms,switch_max_ms,cpu_ms,wall_ms\n",
+        "mode,ifs_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,impossible,switches,\
+         switch_median_ms,switch_max_ms,decode_median_ms,cpu_ms,wall_ms\n",
     );
     for mode in modes {
         println!("\n{}", mode.name());
-        println!("  IFS ms   PER H    PER Z   switch median / max ms   CPU ms");
+        println!(
+            "  IFS ms   PER H    PER Z   switch median / max ms   decode ms   CPU ms   impossible"
+        );
         // A controller per mode, with the links it uses.
         let mut ctrl = match workers {
             Some(n) => Controller::with_runtime(
@@ -675,34 +765,41 @@ fn main() -> Result<()> {
         }
         let ifs = ifs.clone();
         let phys = phys.clone();
+        let sent = sent_per_step.clone();
         let rows = ctrl.run(move |mut ctrl| async move {
             let mut rows = Vec::new();
             for (step, ms) in ifs.iter().enumerate() {
-                let r = run_step(&mut ctrl, mode, step, retune, &phys).await?;
+                let r = run_step(&mut ctrl, mode, step, retune, &phys, &sent[step]).await?;
                 rows.push((*ms, r));
             }
             anyhow::Ok(rows)
         })?;
         for (ifs, r) in rows {
-            let per_h = 1.0 - r.received_h as f64 / sent_h as f64;
-            let per_z = 1.0 - r.received_z as f64 / sent_z as f64;
+            let per_h = 1.0 - r.received[0] as f64 / sent_h as f64;
+            let per_z = 1.0 - r.received[1] as f64 / sent_z as f64;
             let mut sw: Vec<f64> = r.switches.iter().map(|d| ms(*d)).collect();
             sw.sort_by(f64::total_cmp);
             let median = sw.get(sw.len() / 2).copied().unwrap_or(0.0);
             let max = sw.last().copied().unwrap_or(0.0);
             println!(
-                "  {ifs:6.2}  {:6.1}%  {:6.1}%   {median:8.3} / {max:8.3}   {:7.0}",
+                "  {ifs:6.2}  {:6.1}%  {:6.1}%   {median:8.3} / {max:8.3}   {:9.3}   {:7.0}   \
+                 {:10}",
                 100.0 * per_h,
                 100.0 * per_z,
-                r.cpu * 1e3
+                1e3 * median_of(&r.latency),
+                r.cpu * 1e3,
+                r.impossible,
             );
             writeln!(
                 table,
-                "{},{ifs},{sent_h},{},{sent_z},{},{per_h:.4},{per_z:.4},{},{median:.4},{max:.4},{:.0},{:.0}",
+                "{},{ifs},{sent_h},{},{sent_z},{},{per_h:.4},{per_z:.4},{},{},{median:.4},\
+                 {max:.4},{:.4},{:.0},{:.0}",
                 mode.name(),
-                r.received_h,
-                r.received_z,
+                r.received[0],
+                r.received[1],
                 sw.len(),
+                r.impossible,
+                1e3 * median_of(&r.latency),
                 r.cpu * 1e3,
                 ms(r.wall)
             )?;
