@@ -2,6 +2,11 @@
 //!
 //! Generic blocks are exported for `u8, i16, i32, f32, f64, Complex32`
 //! (`types: default`), as `Head<f32>`, `Copy<Complex32>`, ...
+//!
+//! FutureSDR's own blocks take their stream ports as type parameters, which
+//! default to its buffer; they are named here, since a flowgraph the
+//! controller builds uses the buffer whose ring is kept (`ReuseCpu*`, what
+//! the plugin prelude's `DefaultCpu*` are).
 
 extern crate futuresdr_plugin_rt as futuresdr;
 
@@ -141,61 +146,61 @@ export_plugin! {
             name: "NullSource",
             types: default,
             description: "Endless stream of default values.",
-            add: |_s| blocks::NullSource::<T>::new(),
+            add: |_s| blocks::NullSource::<T, ReuseCpuWriter<T>>::new(),
         },
         {
             name: "NullSink",
             types: default,
             description: "Consume and drop the input.",
-            add: |_s| blocks::NullSink::<T>::new(),
+            add: |_s| blocks::NullSink::<T, ReuseCpuReader<T>>::new(),
         },
         {
             name: "Head",
             types: default,
             description: "Forward the first `n_items` items, then finish.",
-            add: |s| blocks::Head::<T>::new(s.get("n_items")?),
+            add: |s| blocks::Head::<T, ReuseCpuReader<T>, ReuseCpuWriter<T>>::new(s.get("n_items")?),
         },
         {
             name: "Copy",
             types: default,
             description: "Forward the input unchanged.",
-            add: |_s| blocks::Copy::<T>::new(),
+            add: |_s| blocks::Copy::<T, ReuseCpuReader<T>, ReuseCpuWriter<T>>::new(),
         },
         {
             name: "Delay",
             types: default,
             description: "Delay (positive `n`) or skip (negative `n`) items.",
-            add: |s| blocks::Delay::<T>::new(s.get("n")?),
+            add: |s| blocks::Delay::<T, ReuseCpuReader<T>, ReuseCpuWriter<T>>::new(s.get("n")?),
         },
         {
             name: "Throttle",
             types: default,
             description: "Forward at most `rate` items per second.",
-            add: |s| blocks::Throttle::<T>::new(s.get("rate")?),
+            add: |s| blocks::Throttle::<T, ReuseCpuReader<T>, ReuseCpuWriter<T>>::new(s.get("rate")?),
         },
         {
             name: "VectorSource",
             types: default,
             description: "Emit `items`, then finish.",
-            add: |s| blocks::VectorSource::<T>::new(s.get("items")?),
+            add: |s| blocks::VectorSource::<T, ReuseCpuWriter<T>>::new(s.get("items")?),
         },
         {
             name: "VectorSink",
             types: default,
             description: "Collect the input; read it with `items()` after the run.",
-            add: |s| blocks::VectorSink::<T>::new(s.get_or("capacity", 1024)?),
+            add: |s| blocks::VectorSink::<T, ReuseCpuReader<T>>::new(s.get_or("capacity", 1024)?),
         },
         {
             name: "Selector1x2",
             types: default,
             description: "Route one input to one of two outputs (`output_index`).",
-            add: |s| blocks::Selector::<T, 1, 2>::new(drop_policy(s)?),
+            add: |s| blocks::Selector::<T, 1, 2, ReuseCpuReader<T>, ReuseCpuWriter<T>>::with_buffers(drop_policy(s)?),
         },
         {
             name: "Selector2x1",
             types: default,
             description: "Route one of two inputs (`input_index`) to the output.",
-            add: |s| blocks::Selector::<T, 2, 1>::new(drop_policy(s)?),
+            add: |s| blocks::Selector::<T, 2, 1, ReuseCpuReader<T>, ReuseCpuWriter<T>>::with_buffers(drop_policy(s)?),
         },
         {
             name: "Counter",

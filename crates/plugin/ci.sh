@@ -6,8 +6,8 @@
 #   ./ci.sh <stage>...       the given stages, in that order
 #
 # Stages
-#   fmt       rustfmt: this workspace, the plugin crates in blocks/, the
-#             vendored crate and the core files the add-on changed
+#   fmt       rustfmt: this workspace, the plugin crates in blocks/ and the
+#             core files the add-on changed
 #   lint      clippy -D warnings; the plugin crates through the SDK with
 #             --clippy --deny-warnings; rustdoc warnings; unused dependencies
 #             (if cargo-machete is installed)
@@ -22,7 +22,6 @@
 #   size      size budgets, and no local-domain code in plugins of
 #             non-blocking blocks
 #   core      FutureSDR tests of what the add-on changed in the core
-#   vendor    tests of vendor/vmcircbuffer, plain and with AddressSanitizer
 #   miri      the plugin API's unit tests under Miri
 #   stress    randomized tests with CI_SCALE (default 20) times the cases,
 #             then the controller and link tests CI_REPEAT (default 5) times
@@ -135,7 +134,6 @@ stage_fmt() {
     for plugin in "${PLUGINS[@]}"; do
         cargo fmt --check --manifest-path "$plugin/Cargo.toml"
     done
-    cargo fmt --check --manifest-path vendor/vmcircbuffer/Cargo.toml
     (cd "$CORE" && rustfmt --edition 2024 --check \
         src/runtime/flowgraph.rs src/runtime/kernel_interface.rs \
         crates/macros/src/lib.rs tests/local_domain.rs)
@@ -260,24 +258,11 @@ stage_core() {
         cargo test -q --manifest-path crates/macros/Cargo.toml)
 }
 
-stage_vendor() {
-    local manifest="$ROOT/vendor/vmcircbuffer/Cargo.toml"
-    step "vendored vmcircbuffer"
-    cargo test -q --manifest-path "$manifest" --features sync,async,nonblocking,lockfree \
-        --target-dir "$CI/vendor"
-    step "vendored vmcircbuffer, AddressSanitizer"
-    RUSTFLAGS="-Zsanitizer=address" RUSTDOCFLAGS="-Zsanitizer=address" \
-        cargo test -q --manifest-path "$manifest" --features sync,async,nonblocking,lockfree \
-        --target "$HOST" --target-dir "$CI/vendor-asan" --lib --tests
-    rm -f "$ROOT/vendor/vmcircbuffer/Cargo.lock"
-}
-
 stage_miri() {
     step "Miri: plugin API"
     # Miri cannot build dylibs, so crates that link the shared library (the
-    # host) are out of its reach; they have no unsafe code. The vendored
-    # crate's unsafe mapping code, which Miri cannot emulate either, runs
-    # under AddressSanitizer (stage vendor).
+    # host and rt, whose buffer keeps vmcircbuffer's mappings) are out of
+    # its reach; they have no unsafe code.
     cargo miri test -q -p futuresdr-plugin-api --lib
 }
 
@@ -346,7 +331,7 @@ stage_coverage() {
     echo "line coverage $lines% (at least $min%)"
 }
 
-ALL=(fmt lint test plugins release sdk size core vendor miri stress coverage)
+ALL=(fmt lint test plugins release sdk size core miri stress coverage)
 DEFAULT=(fmt lint test plugins sdk size)
 
 if [ $# -eq 0 ]; then

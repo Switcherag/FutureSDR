@@ -26,8 +26,9 @@
 //! Options: `--iterations N` (replacements per receiver), `--rate R` (source
 //! bytes per second), `--hold keep|discard`, `--settle-ms MS` (pause between
 //! replacements), `--mode on-demand|standby`, `--driver task|thread`,
-//! `--workers N` (runtime threads, one per core by default), `--plugins DIR`,
-//! `--csv FILE`.
+//! `--workers N` (runtime threads, one per core by default), `--pool-limit
+//! BYTES` (buffer rings kept between flowgraphs; 0 maps every buffer anew),
+//! `--plugins DIR`, `--csv FILE`.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -256,10 +257,13 @@ fn main() -> Result<()> {
             ("--driver", Some(v)) if v == "thread" => driver = Driver::Thread,
             ("--plugins", Some(v)) => plugins = Some(v.into()),
             ("--csv", Some(v)) => csv = Some(v.into()),
+            ("--pool-limit", Some(v)) => {
+                futuresdr_plugin_rt::buffer::set_pool_limit(v.parse()?);
+            }
             _ => bail!(
                 "usage: swap_bench [--iterations N] [--rate R] [--hold keep|discard] \
                  [--settle-ms MS] [--mode on-demand|standby] [--driver task|thread] [--workers N] \
-                 [--plugins DIR] [--csv FILE]"
+                 [--pool-limit BYTES] [--plugins DIR] [--csv FILE]"
             ),
         }
     }

@@ -18,6 +18,8 @@
 
 pub use futuresdr::*;
 pub use plugin_api;
+
+pub mod buffer;
 /// FFT plans of the library FutureSDR's `Fft` block uses, `rustfft`, made
 /// by this library: planning in a plugin would compile all of `rustfft`'s
 /// algorithms into it.
@@ -40,6 +42,17 @@ pub mod fft {
 /// Everything a plugin crate usually needs. Replaces FutureSDR's own
 /// application prelude for plugin crates.
 pub mod prelude {
+    pub use crate::buffer::ReuseCpuReader;
+    /// The stream ports of a plugin's blocks, in place of FutureSDR's own
+    /// alias of the same name: the same circular buffer, with the ring kept
+    /// for the next flowgraph (see [`crate::buffer`]). A host that replaces
+    /// flowgraphs pays no mapping for a buffer it has had before. Blocks
+    /// that take their buffers as type parameters, as FutureSDR's do, are
+    /// given `ReuseCpuReader`/`ReuseCpuWriter` explicitly: their defaults
+    /// are FutureSDR's buffer, which does not connect to this one.
+    pub use crate::buffer::ReuseCpuReader as DefaultCpuReader;
+    pub use crate::buffer::ReuseCpuWriter;
+    pub use crate::buffer::ReuseCpuWriter as DefaultCpuWriter;
     pub use futuresdr::blocks;
     pub use futuresdr::num_complex::Complex64;
     pub use futuresdr::runtime::dev::prelude::*;

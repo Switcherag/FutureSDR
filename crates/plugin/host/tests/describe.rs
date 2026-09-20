@@ -3,13 +3,17 @@
 mod common;
 
 use futuresdr::blocks::MessageSink;
-use futuresdr::blocks::VectorSink;
 use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use futuresdr::runtime::dev::CpuSample;
 use plugin_host::Description;
 use plugin_host::ItemType;
+use plugin_host::ReuseCpuReader;
 use plugin_host::build;
+
+/// The sinks the registry builds: FutureSDR's, on the buffer the plugins
+/// are compiled with.
+type VectorSink<T> = futuresdr::blocks::VectorSink<T, ReuseCpuReader<T>>;
 
 /// What `Counter<T>` emits for index `i`.
 trait Index: CpuSample + PartialEq {

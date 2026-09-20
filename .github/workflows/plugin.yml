@@ -44,12 +44,12 @@ jobs:
       - run: crates/plugin/ci.sh sdk size
 
   core:
-    name: Core changes, vendored vmcircbuffer
+    name: Core changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
-      - run: crates/plugin/ci.sh core vendor
+      - run: crates/plugin/ci.sh core
 
   deep:
     name: Miri, stress, coverage

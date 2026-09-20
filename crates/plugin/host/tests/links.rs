@@ -8,7 +8,6 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
 
-use futuresdr::blocks::VectorSink;
 use futuresdr::runtime::Timer;
 use futuresdr::runtime::dev::prelude::*;
 use plugin_api::BlockType;
@@ -18,7 +17,13 @@ use plugin_host::Controller;
 use plugin_host::Description;
 use plugin_host::Finished;
 use plugin_host::Hold;
+use plugin_host::ReuseCpuReader;
+use plugin_host::ReuseCpuWriter;
 use plugin_host::Tap;
+
+/// The sinks the registry builds: FutureSDR's, on the buffer the plugins
+/// are compiled with.
+type VectorSink<T> = futuresdr::blocks::VectorSink<T, ReuseCpuReader<T>>;
 
 const N: u64 = 200_000;
 
@@ -85,7 +90,7 @@ impl Kernel for Collect {}
 #[message_inputs(freq)]
 struct Tuner {
     #[output]
-    output: DefaultCpuWriter<f32>,
+    output: ReuseCpuWriter<f32>,
     freq: f32,
     calls: usize,
     timer: Option<Timer>,
@@ -165,7 +170,7 @@ fn controller() -> Controller {
                         add_kernel(
                             fg,
                             Tuner {
-                                output: DefaultCpuWriter::default(),
+                                output: ReuseCpuWriter::default(),
                                 freq: s.get_or("freq", 0.0)?,
                                 calls: 0,
                                 timer: None,

@@ -16,7 +16,7 @@ cargo-features = ["profile-rustflags"]
 [workspace]
 resolver = "3"
 members = ["api", "rt", "host", "sdk"]
-exclude = ["blocks", "vendor"]
+exclude = ["blocks"]
 
 [workspace.package]
 version = "0.8.0"
@@ -37,11 +37,6 @@ anyhow = "1.0"
 # The FFT FutureSDR uses, for plugins that transform inside a block.
 rustfft = "6.4"
 toml = { version = "0.9", features = ["preserve_order"] }
-
-# Circular buffers that reuse their memory mappings, so that starting
-# flowgraphs over and over stays cheap (see vendor/vmcircbuffer/PATCHED.md).
-[patch.crates-io]
-vmcircbuffer = { path = "vendor/vmcircbuffer" }
 
 # Rust dylibs need the standard library as a shared library too, or it would
 # be linked into every plugin and into the host once more.

@@ -13,6 +13,7 @@ crate-type = ["dylib"]
 futuresdr.workspace = true
 futuresdr-plugin-api.workspace = true
 rustfft.workspace = true
+vmcircbuffer = "0.0.15"
 
 [features]
 default = ["radio"]

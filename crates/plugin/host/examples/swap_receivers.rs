@@ -32,14 +32,18 @@ use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::bail;
-use futuresdr::blocks::VectorSink;
 use futuresdr::runtime::Timer;
 use plugin_host::Controller;
 use plugin_host::Description;
 use plugin_host::Finished;
 use plugin_host::Hold;
 use plugin_host::Registry;
+use plugin_host::ReuseCpuReader;
 use plugin_sdk::Sdk;
+
+/// The sinks the registry builds: FutureSDR's, on the buffer the plugins
+/// are compiled with.
+type VectorSink<T> = futuresdr::blocks::VectorSink<T, ReuseCpuReader<T>>;
 
 fn samples(done: &Finished) -> Result<Vec<f32>> {
     Ok(done.block::<VectorSink<f32>>("snk")?.items().clone())

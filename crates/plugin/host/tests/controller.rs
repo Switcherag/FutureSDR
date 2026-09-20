@@ -6,8 +6,6 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use futuresdr::blocks::MessageSink;
-use futuresdr::blocks::NullSink;
-use futuresdr::blocks::VectorSink;
 use futuresdr::futures::FutureExt;
 use futuresdr::runtime::Timer;
 use futuresdr::runtime::dev::prelude::*;
@@ -18,6 +16,13 @@ use plugin_host::Controller;
 use plugin_host::Description;
 use plugin_host::Finished;
 use plugin_host::Hold;
+use plugin_host::ReuseCpuReader;
+use plugin_host::ReuseCpuWriter;
+
+/// The sinks the registry builds: FutureSDR's, on the buffer the plugins
+/// are compiled with.
+type VectorSink<T> = futuresdr::blocks::VectorSink<T, ReuseCpuReader<T>>;
+type NullSink<T> = futuresdr::blocks::NullSink<T, ReuseCpuReader<T>>;
 
 const N: u64 = 200_000;
 
@@ -293,17 +298,17 @@ fn the_controller_runs_as_a_task_of_its_runtime() {
 #[derive(Block)]
 struct Gate {
     #[input]
-    input: DefaultCpuReader<f32>,
+    input: ReuseCpuReader<f32>,
     #[output]
-    output: DefaultCpuWriter<f32>,
+    output: ReuseCpuWriter<f32>,
     fail: bool,
 }
 
 impl Gate {
     fn new(fail: bool) -> Self {
         Self {
-            input: DefaultCpuReader::default(),
-            output: DefaultCpuWriter::default(),
+            input: ReuseCpuReader::default(),
+            output: ReuseCpuWriter::default(),
             fail,
         }
     }

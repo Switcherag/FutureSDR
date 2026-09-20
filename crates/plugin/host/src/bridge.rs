@@ -26,6 +26,8 @@ use std::task::Poll;
 use std::task::Waker;
 
 use futuresdr::runtime::dev::prelude::*;
+use futuresdr_plugin_rt::buffer::ReuseCpuReader;
+use futuresdr_plugin_rt::buffer::ReuseCpuWriter;
 
 use crate::Hold;
 use crate::items::ItemType;
@@ -500,7 +502,7 @@ impl<T: CpuSample> Future for WriterReady<T> {
 #[derive(Block)]
 pub(crate) struct BridgeSource<T: CpuSample> {
     #[output]
-    output: DefaultCpuWriter<T>,
+    output: ReuseCpuWriter<T>,
     channel: Arc<Channel<T>>,
     sub: u64,
     generation: u64,
@@ -511,7 +513,7 @@ pub(crate) struct BridgeSource<T: CpuSample> {
 impl<T: CpuSample> BridgeSource<T> {
     pub(crate) fn new(channel: Arc<Channel<T>>, sub: u64, generation: u64) -> Self {
         Self {
-            output: DefaultCpuWriter::default(),
+            output: ReuseCpuWriter::default(),
             channel,
             sub,
             generation,
@@ -566,7 +568,7 @@ impl<T: CpuSample> Kernel for BridgeSource<T> {
 #[derive(Block)]
 pub(crate) struct BridgeSink<T: CpuSample> {
     #[input]
-    input: DefaultCpuReader<T>,
+    input: ReuseCpuReader<T>,
     channel: Arc<Channel<T>>,
     generation: u64,
     wait: Option<WriterReady<T>>,
@@ -575,7 +577,7 @@ pub(crate) struct BridgeSink<T: CpuSample> {
 impl<T: CpuSample> BridgeSink<T> {
     pub(crate) fn new(channel: Arc<Channel<T>>, generation: u64) -> Self {
         Self {
-            input: DefaultCpuReader::default(),
+            input: ReuseCpuReader::default(),
             channel,
             generation,
             wait: None,
@@ -1454,8 +1456,6 @@ mod throughput {
     use std::time::Duration;
     use std::time::Instant;
 
-    use futuresdr::blocks::NullSink;
-    use futuresdr::blocks::NullSource;
     use futuresdr::num_complex::Complex32;
     use futuresdr::runtime::BlockRef;
     use futuresdr::runtime::Flowgraph;
@@ -1463,6 +1463,10 @@ mod throughput {
     use futuresdr::runtime::block_on;
 
     use super::*;
+
+    /// FutureSDR's blocks, on the buffer the bridges use.
+    type NullSink<T> = futuresdr::blocks::NullSink<T, ReuseCpuReader<T>>;
+    type NullSource<T> = futuresdr::blocks::NullSource<T, ReuseCpuWriter<T>>;
 
     const RUN: Duration = Duration::from_secs(3);
 

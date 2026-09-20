@@ -2,7 +2,8 @@
 //!
 //! The blocks are those of `examples/zigbee`, compiled from its sources as
 //! they are, plus the receiver's demodulator, which the example writes as a
-//! closure:
+//! closure, and the modulator, which the example makes of a FutureSDR block
+//! on FutureSDR's own buffer:
 //!
 //! ```text
 //! ZigbeeDemod > ClockRecoveryMm > ZigbeeDecoder | rx.ZigbeeMac    receive
@@ -22,14 +23,17 @@ mod decoder;
 mod iq_delay;
 #[path = "../../../../../examples/zigbee/src/mac.rs"]
 mod mac;
+// The example's modulator, which ours must match.
+#[cfg(test)]
 #[path = "../../../../../examples/zigbee/src/modulator.rs"]
 mod modulator;
 
-// With their default stream buffers.
-pub type ClockRecoveryMm = clock_recovery_mm::ClockRecoveryMm;
-pub type Decoder = decoder::Decoder;
-pub type IqDelay = iq_delay::IqDelay;
-pub type Mac = mac::Mac;
+// On the plugins' buffer; the example's defaults are FutureSDR's.
+pub type ClockRecoveryMm =
+    clock_recovery_mm::ClockRecoveryMm<ReuseCpuReader<f32>, ReuseCpuWriter<f32>>;
+pub type Decoder = decoder::Decoder<ReuseCpuReader<f32>>;
+pub type IqDelay = iq_delay::IqDelay<ReuseCpuReader<Complex32>, ReuseCpuWriter<Complex32>>;
+pub type Mac = mac::Mac<ReuseCpuWriter<u8>>;
 
 /// Phase-difference demodulator with DC removal: the front end of
 /// `examples/zigbee/src/bin/rx.rs`. `alpha` is the weight of the DC
@@ -82,6 +86,61 @@ impl Kernel for Demod {
     }
 }
 
+/// The chips of the first nibble value, as O-QPSK symbols (I, Q).
+const CHIPS: [(f32, f32); 16] = [
+    (1.0, 1.0),
+    (-1.0, 1.0),
+    (1.0, -1.0),
+    (-1.0, 1.0),
+    (1.0, 1.0),
+    (-1.0, -1.0),
+    (-1.0, -1.0),
+    (1.0, 1.0),
+    (-1.0, 1.0),
+    (-1.0, 1.0),
+    (-1.0, -1.0),
+    (1.0, -1.0),
+    (-1.0, -1.0),
+    (1.0, -1.0),
+    (1.0, 1.0),
+    (1.0, -1.0),
+];
+
+/// Half-sine pulse shape over the four samples of a symbol.
+const SHAPE: [f32; 4] = [0.0, 0.707_106_77, 1.0, 0.707_106_77];
+
+/// The 64 samples of nibble `n`: the symbols of 0 turned right by two
+/// symbols (four chips) per step of `n % 8`, with Q inverted from 8 on
+/// (IEEE 802.15.4 O-QPSK spreading, in the order of `examples/zigbee`'s
+/// table), each shaped over four samples.
+fn nibble(n: u8) -> impl Iterator<Item = Complex32> + Send {
+    let turn = 16 - 2 * (n as usize % 8);
+    let q = if n < 8 { 1.0 } else { -1.0 };
+    (0..16)
+        .flat_map(move |k| {
+            let (i, qk) = CHIPS[(k + turn) % 16];
+            [Complex32::new(i, q * qk); 4]
+        })
+        .zip(SHAPE.iter().cycle())
+        .map(|(x, y)| x * y)
+}
+
+/// Adds `examples/zigbee`'s modulator to `fg`: bytes to symbols, low
+/// nibble first.
+pub async fn modulator(fg: &mut Flowgraph) -> Result<BlockId> {
+    let chips = |b: &u8| nibble(b & 0x0F).chain(nibble(b >> 4));
+    Ok(fg
+        .add_async(blocks::ApplyIntoIter::<
+            _,
+            _,
+            _,
+            ReuseCpuReader<u8>,
+            ReuseCpuWriter<Complex32>,
+        >::with_buffers(chips))
+        .await?
+        .into())
+}
+
 export_plugin! {
     name: "zigbee",
     blocks: [
@@ -114,7 +173,7 @@ export_plugin! {
         {
             name: "ZigbeeModulator",
             description: "O-QPSK chips from the MAC's bytes.",
-            build: |fg, _s| Ok(Added::untyped(block_on(modulator::modulator(fg))?)),
+            build: |fg, _s| Ok(Added::untyped(block_on(modulator(fg))?)),
         },
         {
             name: "IqDelay",
@@ -172,7 +231,7 @@ mod tests {
         let decoder = fg.add(decoder)?;
         let mac = Mac::new();
         let mac = fg.add(mac)?;
-        let snk = fg.add(NullSink::<u8>::new())?;
+        let snk = fg.add(NullSink::<u8, ReuseCpuReader<u8>>::new())?;
         let (tx, rx) = mpsc::channel(16);
         let pipe = fg.add(MessagePipe::new(tx))?;
         fg.stream_dyn(src, "output", demod.id(), "input")?;
@@ -214,7 +273,7 @@ mod tests {
         samples.extend(vec![Complex32::new(0.0, 0.0); 4000]);
 
         let mut fg = Flowgraph::new();
-        let src: VectorSource<Complex32> = VectorSource::new(samples);
+        let src: VectorSource<Complex32, ReuseCpuWriter<Complex32>> = VectorSource::new(samples);
         let src = fg.add(src)?;
         let rx = receiver(&mut fg, src.id())?;
         let frames = run_until(fg, &rx, 1)?;
@@ -228,7 +287,7 @@ mod tests {
         let mut fg = Flowgraph::new();
         let mac = Mac::new();
         let mac = fg.add(mac)?;
-        let modulator = block_on(modulator::modulator(&mut fg))?;
+        let modulator = block_on(super::modulator(&mut fg))?;
         let delay = IqDelay::new();
         let delay = fg.add(delay)?;
         fg.stream_dyn(mac.id(), "output", modulator, "input")?;
@@ -246,6 +305,46 @@ mod tests {
 
         let got: Vec<&[u8]> = frames.iter().map(|f| &f[9..f.len() - 2]).collect();
         assert_eq!(got, payloads.iter().map(Vec::as_slice).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    /// Every byte gives the symbols the example's modulator gives.
+    #[test]
+    fn the_modulator_is_the_examples() -> Result<()> {
+        use futuresdr::blocks::VectorSink;
+
+        let bytes: Vec<u8> = (0..=255).collect();
+        let symbols = |ours: bool| -> Result<Vec<Complex32>> {
+            let mut fg = Flowgraph::new();
+            if ours {
+                let src = fg.add(VectorSource::<u8, ReuseCpuWriter<u8>>::new(bytes.clone()))?;
+                let modulator = block_on(super::modulator(&mut fg))?;
+                let snk = fg.add(VectorSink::<Complex32, ReuseCpuReader<Complex32>>::new(
+                    8192,
+                ))?;
+                fg.stream_dyn(src.id(), "output", modulator, "input")?;
+                fg.stream_dyn(modulator, "output", snk.id(), "input")?;
+                let done = Runtime::new().run(fg)?;
+                Ok(done.block(&snk)?.items().clone())
+            } else {
+                // FutureSDR's own blocks and buffer, as in the example.
+                let src = fg.add(VectorSource::<u8>::new(bytes.clone()))?;
+                let modulator = block_on(modulator::modulator(&mut fg))?;
+                let snk = fg.add(VectorSink::<Complex32>::new(32768))?;
+                fg.stream_dyn(src.id(), "output", modulator, "input")?;
+                fg.stream_dyn(modulator, "output", snk.id(), "input")?;
+                let done = Runtime::new().run(fg)?;
+                Ok(done.block(&snk)?.items().clone())
+            }
+        };
+        let ours = symbols(true)?;
+        assert_eq!(ours.len(), 256 * 2 * 64);
+        let theirs = symbols(false)?;
+        let first = ours.iter().zip(&theirs).position(|(a, b)| a != b);
+        assert!(
+            first.is_none() && ours.len() == theirs.len(),
+            "first difference at {first:?}"
+        );
         Ok(())
     }
 }

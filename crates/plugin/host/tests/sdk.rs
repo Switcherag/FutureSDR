@@ -6,12 +6,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use futuresdr::blocks::VectorSink;
 use futuresdr::prelude::*;
 use plugin_host::Registry;
+use plugin_host::ReuseCpuReader;
 use plugin_host::Settings;
 use plugin_sdk::Profile;
 use plugin_sdk::Sdk;
+
+/// The sinks the registry builds: FutureSDR's, on the buffer the plugins
+/// are compiled with.
+type VectorSink<T> = futuresdr::blocks::VectorSink<T, ReuseCpuReader<T>>;
 
 fn workspace() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))

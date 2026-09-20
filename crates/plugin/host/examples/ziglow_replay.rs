@@ -73,6 +73,8 @@ use plugin_host::Controller;
 use plugin_host::Description;
 use plugin_host::Hold;
 use plugin_host::Registry;
+use plugin_host::ReuseCpuReader;
+use plugin_host::ReuseCpuWriter;
 use plugin_host::Standby;
 use plugin_host::Tap;
 use plugin_sdk::Sdk;
@@ -94,7 +96,7 @@ static CHUNK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::n
 #[derive(Block)]
 struct Replay {
     #[output]
-    output: DefaultCpuWriter<Complex32>,
+    output: ReuseCpuWriter<Complex32>,
     samples: Arc<Vec<Complex32>>,
     pos: usize,
     start: Option<Instant>,
@@ -162,9 +164,9 @@ impl Kernel for Replay {
 #[message_inputs(freq)]
 struct Tune {
     #[input]
-    input: DefaultCpuReader<Complex32>,
+    input: ReuseCpuReader<Complex32>,
     #[output]
-    output: DefaultCpuWriter<Complex32>,
+    output: ReuseCpuWriter<Complex32>,
     delay: Duration,
     freq: f64,
     drop: bool,
@@ -231,7 +233,7 @@ fn replay_blocks() -> Plugin {
                     add_kernel(
                         fg,
                         Replay {
-                            output: DefaultCpuWriter::default(),
+                            output: ReuseCpuWriter::default(),
                             samples,
                             pos: 0,
                             start: None,
@@ -248,8 +250,8 @@ fn replay_blocks() -> Plugin {
                     add_kernel(
                         fg,
                         Tune {
-                            input: DefaultCpuReader::default(),
-                            output: DefaultCpuWriter::default(),
+                            input: ReuseCpuReader::default(),
+                            output: ReuseCpuWriter::default(),
                             delay: Duration::from_micros(s.get("delay_us")?),
                             freq: f64::NAN,
                             drop: false,

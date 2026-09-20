@@ -12,14 +12,13 @@ keeps plugins of non-blocking blocks from compiling the local-domain code.
 | Crate | What it is |
 |-------|------------|
 | `api` | What plugins export: `export_plugin!`, block settings. |
-| `rt` | `futuresdr-plugin-rt`: one shared copy of FutureSDR and the API, which hosts and plugins link. Feature `radio` (default) adds seify with the dummy driver, `soapy` adds SoapySDR. |
+| `rt` | `futuresdr-plugin-rt`: one shared copy of FutureSDR and the API, which hosts and plugins link, and the stream buffer they use. Feature `radio` (default) adds seify with the dummy driver, `soapy` adds SoapySDR. |
 | `sdk` | `fsdr-plugin`: packs an SDK from a build of `rt`, builds and tests plugins against it. |
 | `host` | `plugin_host`: registry, descriptions, controller. |
 | `blocks/basic` | Generic blocks (`Head<f32>`, `Copy<u8>`, …), 74 block types. |
 | `blocks/wlan` | 802.11a and 802.11ah (HaLow) receiver. |
 | `blocks/zigbee` | 802.15.4 transceiver blocks. |
 | `blocks/radio` | `SeifySource`, `SeifySink`. |
-| `vendor/vmcircbuffer` | vmcircbuffer 0.0.15 with a mapping pool (see its `PATCHED.md`). |
 
 ## Plugins
 
@@ -54,6 +53,28 @@ SDK carries that build's metadata, and the registry refuses anything else.
 Plugins are rebuilt when the SDK holds another build, even at the same path.
 FFT plans come from `futuresdr::fft` (planning through `rustfft` would
 compile all its algorithms into the plugin).
+
+## Buffers
+
+`rt/src/buffer` holds `circular_reuse`: FutureSDR's circular buffer, whose
+ring is double-mapped into memory, with one change. When a flowgraph is
+dropped its rings go to a pool (by item type and size, 64 MB by default,
+`futuresdr::buffer::set_pool_limit`) rather than being unmapped, and the
+next connection of that size takes one. Starting and stopping flowgraphs
+then costs no mapping, no page faults on first use and no TLB flush on
+release. A ring is kept only once its writer and all its readers are gone,
+and a new reader starts where the writer is, so nothing of the previous
+flowgraph shows.
+
+All ports of a connection must use the same buffer. The plugin prelude's
+`DefaultCpuReader`/`DefaultCpuWriter` are this buffer (`ReuseCpuReader`,
+`ReuseCpuWriter`), so a plugin's own blocks use it without naming it.
+Blocks that take their buffers as type parameters — FutureSDR's, and the
+examples' blocks that `blocks/zigbee` compiles — default to FutureSDR's
+buffer and are given this one: `blocks::Copy::<T, ReuseCpuReader<T>,
+ReuseCpuWriter<T>>`. The host names it too, to read a block back:
+`VectorSink<f32, ReuseCpuReader<f32>>`. A mismatch is refused when the
+flowgraph starts ("dyn BufferReader has wrong type").
 
 ## Flowgraph descriptions
 
@@ -146,7 +167,8 @@ and the 112 frames v6 decodes from a one-second HaLow recording. On that
 recording it runs at 76 MSps on one core; v6 ran at 49 MSps on about three.
 
 `blocks/zigbee` compiles `examples/zigbee`'s blocks and adds the receiver's
-demodulator.
+demodulator, and a modulator that gives the example's samples (checked
+against it) on this buffer.
 
 ## Examples
 
@@ -185,8 +207,7 @@ frequency, which the receivers ask for.
 `./ci.sh` runs the pipeline CI runs (`.github/workflows/plugin.yml`):
 formatting, lints, unit and integration tests, the plugin crates' tests
 against their recordings, an SDK packed, moved and used end to end, size
-budgets, the core change's tests, the vendored crate under AddressSanitizer,
-Miri, randomized tests at 20 times their cases, the controller tests under
+budgets, the core change's tests, Miri, randomized tests at 20 times their cases, the controller tests under
 load, and line coverage (at least 90 %). `./ci.sh all` runs every stage;
 failing randomized tests print the `PLUGIN_TEST_SEED` that replays them.
 

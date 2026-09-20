@@ -4,9 +4,13 @@ mod common;
 
 use std::collections::HashMap;
 
-use futuresdr::blocks::VectorSink;
 use futuresdr::prelude::*;
+use plugin_host::ReuseCpuReader;
 use plugin_host::Settings;
+
+/// The sinks the registry builds: FutureSDR's, on the buffer the plugins
+/// are compiled with.
+type VectorSink<T> = futuresdr::blocks::VectorSink<T, ReuseCpuReader<T>>;
 
 fn settings(block: &str, pairs: &[(&str, Pmt)]) -> Settings {
     let values: HashMap<String, Pmt> = pairs

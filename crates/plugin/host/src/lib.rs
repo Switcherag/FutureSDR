@@ -7,6 +7,11 @@
 //!   output to several inputs, streams and messages), replaces them while the
 //!   rest keeps running, parks and selects links, sets the controls they
 //!   ask for, and taps their messages.
+//!
+//! The flowgraphs it builds stream through [`ReuseCpuReader`] and
+//! [`ReuseCpuWriter`], the buffer whose ring outlives the flowgraph that
+//! used it, which is what plugins are compiled with. FutureSDR's own blocks
+//! take these as type parameters: `VectorSink<i32, ReuseCpuReader<i32>>`.
 
 // Make sure FutureSDR comes from the shared library plugins link against.
 use futuresdr_plugin_rt as _;
@@ -38,6 +43,8 @@ pub use description::Description;
 pub use description::MessagePortDecl;
 pub use description::PortDecl;
 pub use description::to_pmt;
+pub use futuresdr_plugin_rt::buffer::ReuseCpuReader;
+pub use futuresdr_plugin_rt::buffer::ReuseCpuWriter;
 pub use items::ItemType;
 pub use plugin_api::Added;
 pub use plugin_api::Settings;
