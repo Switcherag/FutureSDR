@@ -1,0 +1,37 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "real-device-swap"
+description = "A receiver that changes PHY (802.11ah / 802.15.4) after every frame, on a bladeRF or on replayed frames."
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+[features]
+default = ["bladerf"]
+# The bladeRF source, through libbladeRF (which must be installed) for
+# quick tune. Without it only `--source replay` is available.
+bladerf = ["dep:bladerf"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+futuresdr-plugin-api = { path = "../../crates/plugin/api" }
+# FutureSDR as plugins see it: the shared library they are built against.
+futuresdr-plugin-rt = { path = "../../crates/plugin/rt" }
+futuresdr-plugin-host = { path = "../../crates/plugin/host" }
+futuresdr-plugin-sdk = { path = "../../crates/plugin/sdk" }
+# libbladeRF bindings, as the dyn branch's quick-tune examples use them
+# (examples/freq_swap/bladerfbindings/seify-bladerf there).
+bladerf = { git = "https://github.com/MerchGuardian/seify-bladerf", rev = "d367441af3ff1cbcd5f125634dd3ac116ec8cd87", optional = true }
+
+# As in crates/plugin: the standard library as a shared library, which the
+# plugins link too.
+[profile.dev]
+rustflags = ["-C", "prefer-dynamic"]
+
+[profile.release]
+rustflags = ["-C", "prefer-dynamic"]
+codegen-units = 1

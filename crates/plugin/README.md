@@ -202,6 +202,11 @@ out; it stays at 0 except for a frame or two at the tightest spacings.
 `--retune-us N` makes the replay a front end that takes N µs to change
 frequency, which the receivers ask for.
 
+`examples/real_device_swap` (outside this workspace) does the same swap on
+a bladeRF retuned by quick tune, the `dyn` branch's `real_device_swap`, and
+replays frames with a separate spacing after each PHY to test it without
+one.
+
 ## Tests
 
 `./ci.sh` runs the pipeline CI runs (`.github/workflows/plugin.yml`):
