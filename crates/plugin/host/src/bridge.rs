@@ -45,10 +45,43 @@ pub(crate) fn next_generation() -> u64 {
 struct Subscription<T> {
     id: u64,
     queue: VecDeque<T>,
+    /// Position in the stream of the first queued item.
+    head: u64,
+    /// Tags of queued items, by position in the stream, in order.
+    tags: VecDeque<(u64, Tag)>,
     reader: u64,
     parked: bool,
     dropped: u64,
     readers_waiting: Vec<Waker>,
+}
+
+impl<T> Subscription<T> {
+    fn new(id: u64, parked: bool) -> Self {
+        Self {
+            id,
+            queue: VecDeque::new(),
+            head: 0,
+            tags: VecDeque::new(),
+            reader: NOBODY,
+            parked,
+            dropped: 0,
+            readers_waiting: Vec::new(),
+        }
+    }
+
+    /// Drop the first `n` queued items, and their tags.
+    fn drop_front(&mut self, n: usize) {
+        self.queue.drain(..n);
+        self.head += n as u64;
+        while self.tags.front().is_some_and(|(at, _)| *at < self.head) {
+            self.tags.pop_front();
+        }
+    }
+
+    /// Drop every queued item, and their tags.
+    fn clear(&mut self) {
+        self.drop_front(self.queue.len());
+    }
 }
 
 struct State<T> {
@@ -127,6 +160,11 @@ impl<T: CpuSample> Channel<T> {
     }
 
     pub(crate) fn write(&self, generation: u64, items: &[T]) -> Write {
+        self.write_tagged(generation, items, &[])
+    }
+
+    /// [`write`](Self::write) `items` with their `tags`, indexed in `items`.
+    pub(crate) fn write_tagged(&self, generation: u64, items: &[T], tags: &[ItemTag]) -> Write {
         let mut st = self.lock();
         if st.writer != generation {
             return if st.waiting_writer(generation) {
@@ -147,9 +185,13 @@ impl<T: CpuSample> Channel<T> {
         for sub in st.subscriptions.iter_mut().filter(|s| !s.parked) {
             let excess = (sub.queue.len() + items.len()).saturating_sub(self.capacity);
             if excess > 0 {
-                sub.queue.drain(..excess);
+                sub.drop_front(excess);
             }
             sub.dropped += (skip + excess) as u64;
+            let base = sub.head + sub.queue.len() as u64;
+            for t in tags.iter().filter(|t| t.index >= skip) {
+                sub.tags.push_back((base + (t.index - skip) as u64, t.tag.clone()));
+            }
             sub.queue.extend(items);
             gather(&mut waiting, &mut sub.readers_waiting);
         }
@@ -161,6 +203,20 @@ impl<T: CpuSample> Channel<T> {
     /// Take items of subscription `sub` into `out` for the reader
     /// `generation`. `active` records whether this reader ever had its turn.
     pub(crate) fn read(&self, sub: u64, generation: u64, out: &mut [T], active: &mut bool) -> Read {
+        self.read_tagged(sub, generation, out, &mut Vec::new(), active)
+    }
+
+    /// [`read`](Self::read), and the tags of the items read into `tags`,
+    /// indexed in `out`.
+    pub(crate) fn read_tagged(
+        &self,
+        sub: u64,
+        generation: u64,
+        out: &mut [T],
+        tags: &mut Vec<ItemTag>,
+        active: &mut bool,
+    ) -> Read {
+        tags.clear();
         let mut st = self.lock();
         let closed = st.closed;
         let Some(s) = st.subscription(sub) else {
@@ -180,7 +236,15 @@ impl<T: CpuSample> Channel<T> {
         let k = first.len().min(n);
         out[..k].copy_from_slice(&first[..k]);
         out[k..n].copy_from_slice(&second[..n - k]);
-        s.queue.drain(..n);
+        let end = s.head + n as u64;
+        while s.tags.front().is_some_and(|(at, _)| *at < end) {
+            let (at, tag) = s.tags.pop_front().unwrap();
+            tags.push(ItemTag {
+                index: (at - s.head) as usize,
+                tag,
+            });
+        }
+        s.drop_front(n);
         Read::Items(n)
     }
 
@@ -338,14 +402,7 @@ impl<T: CpuSample> Pipe for Channel<T> {
 
     fn subscribe(&self, parked: bool) -> u64 {
         let id = next_generation();
-        self.lock().subscriptions.push(Subscription {
-            id,
-            queue: VecDeque::new(),
-            reader: NOBODY,
-            parked,
-            dropped: 0,
-            readers_waiting: Vec::new(),
-        });
+        self.lock().subscriptions.push(Subscription::new(id, parked));
         id
     }
 
@@ -366,7 +423,7 @@ impl<T: CpuSample> Pipe for Channel<T> {
     fn restart_reader(&self, sub: u64, generation: u64) {
         self.with_subscription(sub, |s| {
             s.reader = generation;
-            s.queue.clear();
+            s.clear();
         });
     }
 
@@ -374,7 +431,7 @@ impl<T: CpuSample> Pipe for Channel<T> {
         self.with_subscription(sub, |s| {
             s.parked = true;
             if hold == Hold::Discard {
-                s.queue.clear();
+                s.clear();
             }
         });
     }
@@ -389,7 +446,7 @@ impl<T: CpuSample> Pipe for Channel<T> {
         for s in &mut st.subscriptions {
             s.parked = s.id != sub;
             if (s.parked && hold == Hold::Discard) || (!s.parked && restart) {
-                s.queue.clear();
+                s.clear();
             }
             gather(&mut waiting, &mut s.readers_waiting);
         }
@@ -508,6 +565,8 @@ pub(crate) struct BridgeSource<T: CpuSample> {
     generation: u64,
     active: bool,
     wait: Option<ReaderReady<T>>,
+    /// Tags of the items read, to add to the output.
+    tags: Vec<ItemTag>,
 }
 
 impl<T: CpuSample> BridgeSource<T> {
@@ -519,6 +578,7 @@ impl<T: CpuSample> BridgeSource<T> {
             generation,
             active: false,
             wait: None,
+            tags: Vec::new(),
         }
     }
 }
@@ -536,16 +596,19 @@ impl<T: CpuSample> Kernel for BridgeSource<T> {
         _mo: &mut MessageOutputs,
         _meta: &BlockMeta,
     ) -> Result<()> {
-        let out = self.output.slice();
+        let (out, mut out_tags) = self.output.slice_with_tags();
         if out.is_empty() {
             self.wait = None;
             return Ok(());
         }
         match self
             .channel
-            .read(self.sub, self.generation, out, &mut self.active)
+            .read_tagged(self.sub, self.generation, out, &mut self.tags, &mut self.active)
         {
             Read::Items(n) => {
+                for t in self.tags.drain(..) {
+                    out_tags.add_tag(t.index, t.tag);
+                }
                 self.output.produce(n);
                 self.wait = None;
                 io.call_again = true;
@@ -598,9 +661,9 @@ impl<T: CpuSample> Kernel for BridgeSink<T> {
         _mo: &mut MessageOutputs,
         _meta: &BlockMeta,
     ) -> Result<()> {
-        let items = self.input.slice();
+        let (items, tags) = self.input.slice_with_tags();
         let n = items.len();
-        match self.channel.write(self.generation, items) {
+        match self.channel.write_tagged(self.generation, items, tags) {
             Write::Taken => {
                 self.wait = None;
                 self.input.consume(n);
@@ -643,6 +706,60 @@ mod tests {
 
     fn stats(ch: &Channel<u8>) -> ChannelStats {
         ch.stats(None).unwrap()
+    }
+
+    /// Items, each tagged with its own value, in `n`-item reads: the
+    /// tags must come out on the items they were put on.
+    fn read_tagged(ch: &Channel<u8>, sub: u64, generation: u64, n: usize) -> Vec<(u8, u64)> {
+        let mut active = false;
+        let mut got = Vec::new();
+        let mut out = vec![0; n];
+        let mut tags = Vec::new();
+        while let Read::Items(k) = ch.read_tagged(sub, generation, &mut out, &mut tags, &mut active)
+        {
+            for t in &tags {
+                let Tag::Id(id) = t.tag else { panic!() };
+                assert!(t.index < k);
+                got.push((out[t.index], id));
+            }
+        }
+        got
+    }
+
+    fn tagged(items: &[u8]) -> Vec<ItemTag> {
+        items
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| *v % 3 == 0)
+            .map(|(k, v)| ItemTag {
+                index: k,
+                tag: Tag::Id(*v as u64),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tags_stay_on_their_items() {
+        let ch = Channel::<u8>::new(ItemType::U8, 8);
+        let s = ch.subscribe(false);
+        writer(&ch, 1);
+        ch.set_reader(s, 2);
+        // Across writes and reads of other sizes.
+        let items: Vec<u8> = (1..=7).collect();
+        let _ = ch.write_tagged(1, &items, &tagged(&items));
+        assert_eq!(read_tagged(&ch, s, 2, 2), [(3, 3), (6, 6)]);
+        // The queue full: the oldest items go, with their tags.
+        let items: Vec<u8> = (10..=21).collect();
+        let _ = ch.write_tagged(1, &items[..6], &tagged(&items[..6]));
+        let _ = ch.write_tagged(1, &items[6..], &tagged(&items[6..]));
+        assert_eq!(read_tagged(&ch, s, 2, 3), [(15, 15), (18, 18), (21, 21)]);
+        // Dropped items take their tags along.
+        let items: Vec<u8> = (30..=33).collect();
+        let _ = ch.write_tagged(1, &items, &tagged(&items));
+        ch.restart_reader(s, 3);
+        let items: Vec<u8> = (40..=42).collect();
+        let _ = ch.write_tagged(1, &items, &tagged(&items));
+        assert_eq!(read_tagged(&ch, s, 3, 16), [(42, 42)]);
     }
 
     #[test]
