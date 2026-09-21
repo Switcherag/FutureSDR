@@ -18,6 +18,8 @@ bladerf = ["dep:bladerf"]
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
+# Setting the process's CPU affinity (--cpus).
+libc = "0.2"
 futuresdr-plugin-api = { path = "../../crates/plugin/api" }
 # FutureSDR as plugins see it: the shared library they are built against.
 futuresdr-plugin-rt = { path = "../../crates/plugin/rt" }

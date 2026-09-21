@@ -81,6 +81,33 @@ pub fn read_cf32(path: &Path) -> Result<Vec<Complex32>> {
         .collect())
 }
 
+/// Where the frame is in a recording: from the first to the last sample
+/// whose power, averaged over 8 µs, is within 6 dB of the frame's (its 90th
+/// percentile). The recordings are cut with some silence around the frame,
+/// which would otherwise add to every IFS.
+pub fn burst(recording: &[Complex32]) -> std::ops::Range<usize> {
+    let power: Vec<f64> = recording.iter().map(|x| x.norm_sqr() as f64).collect();
+    let mut sorted = power.clone();
+    sorted.sort_by(f64::total_cmp);
+    let reference = sorted[sorted.len() * 9 / 10];
+    let w = (8e-6 * RATE) as usize;
+    // Centred moving average, as numpy's convolve(..., "same").
+    let mut prefix = vec![0.0; power.len() + 1];
+    for (k, p) in power.iter().enumerate() {
+        prefix[k + 1] = prefix[k] + p;
+    }
+    let above = |k: usize| {
+        let lo = (k + w / 2).saturating_sub(w - 1);
+        let hi = (k + w / 2 + 1).min(power.len());
+        (prefix[hi] - prefix[lo]) / w as f64 > reference * 10f64.powf(-0.6)
+    };
+    let start = (0..power.len()).find(|&k| above(k)).unwrap_or(0);
+    let end = (0..power.len())
+        .rfind(|&k| above(k))
+        .map_or(power.len(), |k| k + 1);
+    start..end
+}
+
 /// Prepare the streams: `frames` frames per step, `recordings[0]` (of PHY
 /// `phys[0]`) first, then `recordings[1]`, in turn; after the first ones
 /// the step's IFS from `ifs_ms`, after the second ones `ifs_after_second_ms`

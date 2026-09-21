@@ -59,7 +59,7 @@ for name, label, color, marker in SERIES:
     if not (HERE / name).exists():
         continue
     ifs, per, swap = load(name)
-    style = dict(color=color, linewidth=2, marker=marker, markersize=6,
+    style = dict(color=color, linewidth=2, marker=marker, markersize=5,
                  markeredgecolor=SURFACE, markeredgewidth=1.2, label=label)
     ax_per.plot(ifs, per, **style)
     ax_swap.plot(ifs, swap, **style)
@@ -69,7 +69,7 @@ ax_per.set_ylabel("Packet error rate (%)", color=INK2, fontsize=11)
 ax_per.set_ylim(-2, 65)
 ax_swap.set_ylabel("Swap time, median (ms)", color=INK2, fontsize=11)
 ax_swap.set_ylim(0, None)
-ax_swap.set_xlabel("Inter-frame spacing (ms)", color=INK2, fontsize=11)
+ax_swap.set_xlabel("Inter-frame spacing, frame end to next frame start (ms)", color=INK2, fontsize=11)
 ax_swap.set_xlim(-0.02, XMAX + 0.02)
 
 # Direct labels at the right end of the swap-time lines, spread apart.
@@ -87,8 +87,9 @@ ax_per.legend(loc="upper right", frameon=False, fontsize=10, labelcolor=INK2)
 fig.suptitle("Receiver replaced after every frame, no radio (software IFS)",
              x=0.07, y=0.985, ha="left", color=INK, fontsize=14, fontweight="bold")
 fig.text(0.07, 0.945,
-         "Recorded 802.15.4 and 802.11ah frames replayed at 4 MSps, 200 per spacing,\n"
-         "Controller::replace, 4 runtime threads. Above 1 ms no swap loses a frame.",
+         "Recorded 802.15.4 and 802.11ah frames cut to the frame, replayed at 4 MSps, "
+         "400 per spacing; IFS from the end\nof a frame to the start of the next. "
+         "Controller::replace, 4 runtime threads pinned to performance cores.",
          ha="left", va="top", color=MUTED, fontsize=10, linespacing=1.4)
 fig.tight_layout(rect=(0, 0, 0.86, 0.90))
 out = HERE / "software_ifs.png"

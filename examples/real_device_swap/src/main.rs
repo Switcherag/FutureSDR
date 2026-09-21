@@ -94,9 +94,17 @@ struct Args {
     /// Plugin libraries to load, instead of building crates/plugin/blocks.
     #[arg(long)]
     plugins: Option<PathBuf>,
-    /// Runtime threads (one per core by default).
+    /// Runtime threads (one per core by default; one per CPU of --cpus).
     #[arg(long)]
     workers: Option<usize>,
+    /// Run on these CPUs only, a runtime thread pinned to each: a list, e.g.
+    /// `8,10,2,4`, of CPUs on different physical cores (see `lscpu -e`: two
+    /// hardware threads of one core share it), or `auto`: one CPU of each of
+    /// the fastest physical cores, as many as --workers (4 by default). On a
+    /// hybrid Intel CPU that is performance cores; on a Raspberry Pi 5, CPUs
+    /// 0 to 3.
+    #[arg(long)]
+    cpus: Option<String>,
     /// The HaLow receiver's description, relative to flows/:
     /// wlan_simple.toml (the wlan plugin's fused blocks) or
     /// wlan_granular.toml (examples/wlan's blocks, one by one). With the
@@ -164,6 +172,11 @@ struct Args {
     /// Time the replayed front end takes to retune, µs.
     #[arg(long, default_value_t = 300)]
     retune_us: u64,
+    /// Replay the recordings whole, silence around the frames included, as
+    /// the dyn branch's generator does; the IFS is then the gap between
+    /// recordings, not between frames.
+    #[arg(long)]
+    no_trim: bool,
     /// Samples the replay delivers at once.
     #[arg(long, default_value_t = 256)]
     chunk: usize,
@@ -219,14 +232,97 @@ fn receivers(halow: &str) -> Result<[Description; 2]> {
     ])
 }
 
-fn controller(args: &Args, registry: Registry) -> Controller {
-    match args.workers {
+fn controller(args: &Args, cpus: &[usize], registry: Registry) -> Controller {
+    let pinned = !cpus.is_empty();
+    match args.workers.or(pinned.then_some(cpus.len())) {
+        // Pinned in turn to the CPUs the process may use: those of --cpus.
         Some(n) => Controller::with_runtime(
-            Runtime::with_scheduler(SmolScheduler::with_config(n, false)),
+            Runtime::with_scheduler(SmolScheduler::with_config(n, pinned)),
             registry,
         ),
         None => Controller::new(registry),
     }
+}
+
+/// The CPUs `--cpus` names.
+fn parse_cpus(spec: &str, workers: Option<usize>) -> Result<Vec<usize>> {
+    if spec != "auto" {
+        return spec
+            .split(',')
+            .map(|c| Ok(c.trim().parse::<usize>()?))
+            .collect();
+    }
+    let sys = |cpu: usize, file: &str| {
+        std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{cpu}/{file}"))
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+    };
+    // (max frequency, package, core) of each online CPU.
+    let mut cores: Vec<(u64, u64, u64, usize)> = Vec::new();
+    let n = std::thread::available_parallelism().map_or(1, |n| n.get());
+    for cpu in 0..n.max(256) {
+        let Some(core) = sys(cpu, "topology/core_id") else {
+            continue;
+        };
+        let package = sys(cpu, "topology/physical_package_id").unwrap_or(0);
+        let freq = sys(cpu, "cpufreq/cpuinfo_max_freq").unwrap_or(0);
+        if !cores.iter().any(|&(_, p, c, _)| p == package && c == core) {
+            cores.push((freq, package, core, cpu));
+        }
+    }
+    // Fastest first; among equals, in CPU order.
+    cores.sort_by_key(|&(freq, _, _, cpu)| (std::cmp::Reverse(freq), cpu));
+    let want = workers.unwrap_or(4);
+    if cores.len() < want {
+        bail!(
+            "--cpus auto: {} physical cores, {want} asked for",
+            cores.len()
+        );
+    }
+    Ok(cores[..want].iter().map(|c| c.3).collect())
+}
+
+/// Restrict this process to `cpus`; threads started afterwards inherit it.
+fn set_cpus(cpus: &[usize]) -> Result<()> {
+    // SAFETY: a zeroed cpu_set_t is an empty set; the calls only read and
+    // write the set passed.
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        for &cpu in cpus {
+            libc::CPU_SET(cpu, &mut set);
+        }
+        if libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) != 0 {
+            bail!(
+                "setting the CPU affinity to {cpus:?}: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Governor and frequencies of `cpus`, to check they run at full speed.
+fn describe_cpus(cpus: &[usize]) -> String {
+    let read = |cpu: usize, file: &str| {
+        std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{cpu}/cpufreq/{file}"))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "?".into())
+    };
+    cpus.iter()
+        .map(|&c| {
+            format!(
+                "cpu{c} {} max {} of {} MHz",
+                read(c, "scaling_governor"),
+                read(c, "scaling_max_freq")
+                    .parse::<u64>()
+                    .map_or(0, |k| k / 1000),
+                read(c, "cpuinfo_max_freq")
+                    .parse::<u64>()
+                    .map_or(0, |k| k / 1000),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The next frame of `tap` and the description that posted it, or `None`
@@ -296,7 +392,7 @@ fn parse_seq(frame: &[u8]) -> Option<u16> {
 // ── bladeRF ──────────────────────────────────────────────────────────────
 
 #[cfg(feature = "bladerf")]
-fn run_bladerf(args: &Args, registry: Registry) -> Result<()> {
+fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     use std::sync::Arc;
 
     use bladerf_source::BladeRfSource;
@@ -395,7 +491,7 @@ fn run_bladerf(args: &Args, registry: Registry) -> Result<()> {
     let (duration, max_frames) = (Duration::from_secs_f64(args.duration), args.frames);
     let timeout = Duration::from_millis(args.rx_timeout_ms);
 
-    let mut ctrl = controller(args, registry);
+    let mut ctrl = controller(args, cpus, registry);
     ctrl.link("radio.samples", "rx.samples")?;
     let (swaps, retunes, counts) = ctrl.run(move |mut ctrl| async move {
         ctrl.spawn_async("radio", head).await?;
@@ -480,7 +576,7 @@ fn run_bladerf(args: &Args, registry: Registry) -> Result<()> {
 }
 
 #[cfg(not(feature = "bladerf"))]
-fn run_bladerf(_args: &Args, _registry: Registry) -> Result<()> {
+fn run_bladerf(_args: &Args, _cpus: &[usize], _registry: Registry) -> Result<()> {
     bail!("built without the `bladerf` feature; use --source replay")
 }
 
@@ -589,14 +685,33 @@ async fn replay_step(
     })
 }
 
-fn run_replay(args: &Args, mut registry: Registry) -> Result<()> {
+fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()> {
     registry.register(replay::blocks())?;
     replay::CHUNK.store(args.chunk.max(1), std::sync::atomic::Ordering::Relaxed);
     let testdata = workspace().join("blocks/testdata");
-    let recordings = [
+    let mut recordings = [
         replay::read_cf32(&testdata.join("halow_frame.cf32"))?,
         replay::read_cf32(&testdata.join("zigbee_frame.cf32"))?,
     ];
+    for (recording, name) in recordings.iter_mut().zip(PHYS) {
+        let us = |n: usize| n as f64 / replay::RATE * 1e6;
+        let burst = replay::burst(recording);
+        println!(
+            "{name}: recording {:.0} µs, frame {:.1} µs, silence {:.1} µs before and {:.1} after{}",
+            us(recording.len()),
+            us(burst.len()),
+            us(burst.start),
+            us(recording.len() - burst.end),
+            if args.no_trim {
+                ""
+            } else {
+                ": cut to the frame"
+            },
+        );
+        if !args.no_trim {
+            *recording = recording[burst].to_vec();
+        }
+    }
     if args.first.is_some() {
         bail!("--first does not apply to the replay: the first receiver of the pair starts");
     }
@@ -657,7 +772,7 @@ fn run_replay(args: &Args, mut registry: Registry) -> Result<()> {
             "  IFS ms    PER H    PER Z    PER   swap median (→{first:.5} / →{second:.5}) / max ms   \
              retune ms   impossible"
         );
-        let mut ctrl = controller(args, registry.clone());
+        let mut ctrl = controller(args, cpus, registry.clone());
         ctrl.link("radio.samples", "rx.samples")?;
         let retune_us = args.retune_us;
         let per_step = steps.sent.clone();
@@ -725,10 +840,19 @@ fn run_replay(args: &Args, mut registry: Registry) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    // Plugins build with every CPU; the runs then use those asked for.
     let registry = registry(&args)?;
+    let cpus = match &args.cpus {
+        Some(spec) => parse_cpus(spec, args.workers)?,
+        None => Vec::new(),
+    };
+    if !cpus.is_empty() {
+        set_cpus(&cpus)?;
+        println!("pinned to {}", describe_cpus(&cpus));
+    }
     match args.source {
-        Source::Bladerf => run_bladerf(&args, registry),
-        Source::Replay => run_replay(&args, registry),
+        Source::Bladerf => run_bladerf(&args, &cpus, registry),
+        Source::Replay => run_replay(&args, &cpus, registry),
     }
 }
 

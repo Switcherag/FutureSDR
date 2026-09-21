@@ -64,14 +64,35 @@ after each ZigBee frame is `--ifs-z2h`. The replayed front end takes
 is matched to the transmission it decodes and counted only if the receiver
 was listening while it was on the air.
 
+The recordings are cut with some silence around the frame. The replay cuts
+them to the frame (where the power, averaged over 8 µs, is within 6 dB of
+the frame's), so the IFS is from the end of a frame to the start of the next:
+
+| Recording | Length | Frame | Silence before / after |
+|-----------|--------|-------|------------------------|
+| `halow_frame.cf32` | 730 µs | 683 µs (802.11ah PPDU: 680 µs) | 12 / 35 µs |
+| `zigbee_frame.cf32` | 1410 µs | 1374 µs (43 bytes: 1376 µs) | 17 / 20 µs |
+
+The `dyn` branch's generator put its gaps between whole recordings, so its
+IFS was short of the real one by 32 to 52 µs (its metadata gives the ZigBee
+frame as 1344 µs and 66 µs of silence; the frame is 1374 µs, and 37 µs of
+silence). `--no-trim` replays the recordings whole, as it did.
+
 `--swap A,B` replays any two receivers in turn, including one replaced by
 itself (`--swap zigbee.toml,zigbee.toml`); the IFS after B's frames is the
 swept one unless `--ifs-z2h` sets it. `--retune-us 0` leaves out the front
 end: the receivers' `[radio]` demands go nowhere, and only the software swap
 is measured, as the `dyn` branch's software-IFS replay does.
 
+`--cpus auto` runs on one CPU of each of the fastest physical cores (as
+many as `--workers`, 4 by default), a runtime thread pinned to each: on a
+hybrid Intel CPU, performance cores; on a Raspberry Pi 5, CPUs 0 to 3.
+`--cpus 8,10,0,2` names them. It prints each CPU's governor and maximum
+frequency, which should be `performance` and the hardware's.
+
 It writes `real_device_replay.csv`, a row per IFS. With 100 frames per IFS,
-`--ifs-z2h 1`, a 300 µs retune and 4 runtime threads:
+`--ifs-z2h 1`, a 300 µs retune and 4 runtime threads (before the
+recordings were cut to the frame: add about 0.05 ms to the IFS):
 
 | IFS after H | PER H | PER Z | swap (median) | of which retune |
 |-------------|-------|-------|---------------|-----------------|
@@ -121,24 +142,26 @@ by several points).
 ## Software IFS
 
 `figures/software_ifs.png`: PER and the median swap time against the IFS,
-with no radio (`--retune-us 0`), 200 frames per spacing, for four swaps.
-`figures/*.csv` are the runs and `figures/plot_software_ifs.py` draws them.
+from the end of a frame to the start of the next (the recordings cut to the
+frame), with no radio (`--retune-us 0`), 400 frames per spacing, 4 runtime
+threads pinned to performance cores, for four swaps. `figures/*.csv` are the
+runs and `figures/plot_software_ifs.py` draws them.
 
 ```text
-cargo run --release -- --source replay --retune-us 0 --frames-per-step 200 \
-    --ifs 2,1.5,1,0.8,0.6,0.5,0.4,0.35,0.3,0.25,0.2,0.15,0.1,0.05,0 \
-    --swap zigbee.toml,zigbee.toml --csv figures/zz.csv
+cargo run --release -- --source replay --cpus auto --retune-us 0 --frames-per-step 400 \
+    --ifs 0,0.02,0.04,...,0.5,0.6,0.8,1 --swap zigbee.toml,zigbee.toml --csv figures/zz.csv
 ```
 
-| Swap | Swap time (median) | PER |
-|------|--------------------|-----|
-| ZigBee → ZigBee | 0.05 ms | ≤ 1.5 % down to 0 |
-| HaLow simple → simple | 0.15 ms | 0 % down to 0.35 ms, 50 % from 0.05 ms |
-| HaLow granular → granular | 0.19 ms | ≤ 1 % down to 0.4 ms, 50 % from 0.1 ms |
-| ZigBee ⇄ HaLow simple | 0.05 ms to ZigBee, 0.16 ms to HaLow | ≤ 2 % down to 0.25 ms, 50 % from 0.05 ms |
+| Swap | Swap time (median) | PER 50 % up to | PER ≤ 3 % from |
+|------|--------------------|----------------|----------------|
+| ZigBee → ZigBee | 0.04 ms | – | 0 (1–4 % below 0.2 ms) |
+| HaLow simple → simple | 0.14 ms | 0.10 ms | 0.24 ms |
+| HaLow granular → granular | 0.18 ms | 0.18 ms | 0.26 ms |
+| ZigBee ⇄ HaLow simple | 0.04 ms to ZigBee, 0.15 ms to HaLow | 0.08 ms | 0.22 ms |
 
-A swap starts when the receiver posts the frame, after it has decoded it,
-so the time available is the IFS less the decoding delay, plus the silence
-each recording keeps around its frame (about 0.07 ms for ZigBee, 0.05 ms for
-HaLow). ZigBee's 0.05 ms swap fits in that silence alone. Near the knee, PER
-moves by several points from run to run.
+A swap starts when the receiver posts the frame it decoded, so a frame is
+lost when the IFS is shorter than the decoding delay plus the swap. The
+granular HaLow receiver's 0.04 ms longer swap moves its edge by about as
+much. Two things are not explained yet: ZigBee → ZigBee loses 1–4 % of
+frames below 0.2 ms although its swap takes 0.04 ms, and ZigBee ⇄ HaLow
+loses 2–4 % from 0.5 to 1 ms, where every swap is done in time.
