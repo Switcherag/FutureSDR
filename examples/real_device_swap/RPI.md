@@ -32,7 +32,8 @@ is for the figures.
 
 ## 3. More swap (4 GB Pi only)
 
-The release build of FutureSDR's shared library uses about 3 GB at its peak:
+The release build of FutureSDR's shared library (one codegen unit, link-time
+work on one large crate) can need more memory than a 4 GB Pi has free:
 
 ```sh
 sudo dphys-swapfile swapoff
