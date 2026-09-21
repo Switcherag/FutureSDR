@@ -216,10 +216,23 @@ pub fn burst(recording: &[Complex32]) -> std::ops::Range<usize> {
     start..end
 }
 
-/// Prepare the streams: `frames` frames per step, `recordings[0]` (of PHY
+/// How to make the stream of each step.
+struct Plan {
+    recordings: [Arc<Vec<Complex32>>; 2],
+    frames: usize,
+    lead: usize,
+    /// Samples of silence after each recording, by step.
+    gaps: Vec<[usize; 2]>,
+}
+
+static PLAN: Mutex<Option<Plan>> = Mutex::new(None);
+
+/// Plan the streams: `frames` frames per step, `recordings[0]` (of PHY
 /// `phys[0]`) first, then `recordings[1]`, in turn; after the first ones
 /// the step's IFS from `ifs_ms`, after the second ones `ifs_after_second_ms`
-/// (the step's IFS too if `None`).
+/// (the step's IFS too if `None`). A step's stream is made by [`load`] just
+/// before it runs: all of them at once would not fit in memory (4 ms apart,
+/// 400 frames are 50 MB).
 pub fn prepare(
     recordings: [&[Complex32]; 2],
     phys: [usize; 2],
@@ -228,36 +241,75 @@ pub fn prepare(
     ifs_after_second_ms: Option<f64>,
 ) -> Steps {
     let samples = |ms: f64| (ms.max(0.0) / 1e3 * RATE).round() as usize;
-    let n_lead = samples(LEAD.as_secs_f64() * 1e3);
-    let mut streams = STREAMS.lock().unwrap();
-    streams.clear();
+    let lead = samples(LEAD.as_secs_f64() * 1e3);
     let mut sent_per_step = Vec::new();
     let mut after_second = Vec::new();
+    let mut gaps_per_step = Vec::new();
     for &ifs in &ifs_ms {
         let second = ifs_after_second_ms.unwrap_or(ifs);
         after_second.push(second);
         let gaps = [samples(ifs), samples(second)];
-        let mut out = vec![Complex32::default(); n_lead];
+        // Where each frame goes, as `load` puts it.
+        let mut at = lead;
         let mut sent = Vec::new();
         for i in 0..frames {
             let k = i % 2;
-            let start = out.len();
-            out.extend_from_slice(recordings[k]);
+            let start = at;
+            at += recordings[k].len();
             sent.push(Sent {
                 phy: phys[k],
                 start: start as f64 / RATE,
-                end: out.len() as f64 / RATE,
+                end: at as f64 / RATE,
             });
-            let gap = if i + 1 == frames { n_lead } else { gaps[k] };
-            out.resize(out.len() + gap, Complex32::default());
+            at += if i + 1 == frames { lead } else { gaps[k] };
         }
-        streams.push(Arc::new(out));
         sent_per_step.push(sent);
+        gaps_per_step.push(gaps);
     }
+    *PLAN.lock().unwrap() = Some(Plan {
+        recordings: [
+            Arc::new(recordings[0].to_vec()),
+            Arc::new(recordings[1].to_vec()),
+        ],
+        frames,
+        lead,
+        gaps: gaps_per_step,
+    });
+    STREAMS.lock().unwrap().clear();
     Steps {
         ifs_ms,
         ifs_after_second_ms: after_second,
         sent: sent_per_step,
+    }
+}
+
+/// Make the stream of step `step`, for its `Replay` block.
+pub fn load(step: usize) {
+    let plan = PLAN.lock().unwrap();
+    let plan = plan.as_ref().expect("prepared");
+    let gaps = plan.gaps[step];
+    let mut out = vec![Complex32::default(); plan.lead];
+    for i in 0..plan.frames {
+        let k = i % 2;
+        out.extend_from_slice(&plan.recordings[k]);
+        let gap = if i + 1 == plan.frames {
+            plan.lead
+        } else {
+            gaps[k]
+        };
+        out.resize(out.len() + gap, Complex32::default());
+    }
+    let mut streams = STREAMS.lock().unwrap();
+    if streams.len() <= step {
+        streams.resize(step + 1, Arc::new(Vec::new()));
+    }
+    streams[step] = Arc::new(out);
+}
+
+/// Free the stream of step `step`.
+pub fn unload(step: usize) {
+    if let Some(stream) = STREAMS.lock().unwrap().get_mut(step) {
+        *stream = Arc::new(Vec::new());
     }
 }
 

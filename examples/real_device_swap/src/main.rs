@@ -646,6 +646,7 @@ async fn replay_step(
     let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
     *replay::STARTED.lock().unwrap() = None;
     replay::LATE_CHUNKS.lock().unwrap().clear();
+    replay::load(step);
     // The radio first: a receiver that starts on an ended stream ends.
     ctrl.spawn_async(
         "radio",
@@ -728,6 +729,7 @@ async fn replay_step(
         log.push((frame.map_or(f64::NAN, |f| f.end), at, done, waiting));
     }
     stop_all(ctrl).await?;
+    replay::unload(step);
     if std::env::var_os("REPLAY_LOSSES").is_some() {
         let slow = latency.iter().filter(|l| **l > 3e-4).count();
         let worst = latency.iter().copied().fold(0.0, f64::max);

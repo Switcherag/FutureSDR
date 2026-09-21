@@ -174,6 +174,45 @@ Optional:
 
 ## 9. Tests without the radio
 
+### The benchmark
+
+`bench.sh` runs the five swaps against the software IFS, 0 to 4 ms every
+0.01 ms (401 spacings), 400 frames per spacing, and draws them:
+
+| Key | Swap |
+|-----|------|
+| `zz` | ZigBee → ZigBee |
+| `ss` | HaLow simple → HaLow simple |
+| `sz` | HaLow simple ⇄ ZigBee |
+| `gg` | HaLow granular → HaLow granular (the whole receiver) |
+| `gd` | HaLow granular, decoder only: inverse ⇄ Viterbi (`wlan_granular_hard.toml`, `wlan_granular_viterbi.toml`) |
+
+```sh
+cd ~/dynv4/examples/real_device_swap
+./bench.sh
+```
+
+It writes into `results/<host>-<date>/`: a CSV and a log per swap,
+`system.txt` (the Pi's model, CPU settings, governors, commit, temperature
+and throttling before and after each swap), `bench.png` (PER over 0–4 ms,
+PER over 0–0.6 ms, swap time) and `summary.md` (per swap: median swap time,
+the IFS from which PER stays at or below 1 %, mean PER above 1 ms).
+
+At about 1.5 s per spacing it takes some ten minutes per swap on a laptop,
+more on the Pi: leave it running (in `tmux` or `screen`, so that an SSH
+disconnection does not stop it). Settings, as environment variables:
+`FRAMES` (400), `CPUS` (`1,2,3`), `EXTRA` (e.g. `--keep-awake`), `ONLY`
+(e.g. `"zz gd"`), `STEP` (0.01), `MAX` (4), `OUT`. A quick check first:
+
+```sh
+STEP=0.5 MAX=1 FRAMES=40 ./bench.sh
+```
+
+To redraw from a results directory: `python3 figures/plot_bench.py
+results/<dir>`. Copy the directory back to the laptop to compare.
+
+### Single runs
+
 Each run writes a CSV (`--csv`), a row per IFS, and prints a table. The
 Pi has fewer and slower cores than the laptop, so expect the swaps to take
 longer and the edges of the PER curves to move to larger IFS.
@@ -191,13 +230,13 @@ The four swaps of `figures/software_ifs.png`, every 0.02 ms from 0 to
 0.5 ms:
 
 ```sh
-IFS=$(python3 -c "print(','.join([f'{x/100:.2f}' for x in range(0,52,2)]+['0.6','0.8','1']))")
+IFS_LIST=$(python3 -c "print(','.join([f'{x/100:.2f}' for x in range(0,52,2)]+['0.6','0.8','1']))")
 for pair in zz:zigbee.toml,zigbee.toml \
             hh_simple:wlan_simple.toml,wlan_simple.toml \
             hh_granular:wlan_granular.toml,wlan_granular.toml \
             zh_simple:zigbee.toml,wlan_simple.toml; do
     cargo run --release -- --source replay --cpus 1,2,3 --retune-us 0 \
-        --swap "${pair#*:}" --ifs "$IFS" --frames-per-step 400 \
+        --swap "${pair#*:}" --ifs "$IFS_LIST" --frames-per-step 400 \
         --csv "rpi_${pair%%:*}.csv"
 done
 ```
@@ -207,7 +246,7 @@ Replacing only the decoder (`figures/block_swap.png`):
 ```sh
 cargo run --release -- --source replay --cpus 1,2,3 --retune-us 0 \
     --swap wlan_granular_viterbi.toml,wlan_granular_hard.toml \
-    --ifs "$IFS" --frames-per-step 400 --csv rpi_hh_granular_decoder.csv
+    --ifs "$IFS_LIST" --frames-per-step 400 --csv rpi_hh_granular_decoder.csv
 ```
 
 With a retune time, as quick tune would take (300 µs):
