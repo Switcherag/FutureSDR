@@ -2,7 +2,7 @@
 # builds its receiver, block by block: the delay line, |x|², x·conj(delayed),
 # the two moving sums and their ratio feed the short training field
 # detector, and the FFT is a block of its own. It sees the same frames as
-# halow.toml, whose WlanSync and WlanEqualizer fuse these (checked by the
+# wlan_simple.toml, whose WlanSync and WlanEqualizer fuse these (checked by the
 # wlan plugin's tests); it is here to measure what the fusion saves.
 name = "halow"
 connections = """

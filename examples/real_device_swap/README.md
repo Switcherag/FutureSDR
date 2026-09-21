@@ -10,10 +10,10 @@ by quick tune. This is the `dyn` branch's `real_device_swap` example
 radio ──samples──▶ rx: HaLow ⇄ ZigBee   (Controller::replace after each frame)
 ```
 
-The receivers are `flows/halow.toml` (the wlan plugin's `Ah` receiver) and
-`flows/zigbee.toml` (examples/zigbee in the zigbee plugin). `--halow
-wlan_granular.toml` uses the same HaLow receiver built as `examples/wlan`
-builds its receiver (see below). Each asks for its
+The receivers are `flows/wlan_simple.toml` (the wlan plugin's `Ah`
+receiver, fused blocks) and `flows/zigbee.toml` (examples/zigbee in the
+zigbee plugin). `--halow wlan_granular.toml` uses the same HaLow receiver
+built as `examples/wlan` builds its receiver (see below). Each asks for its
 channel in its `[radio]` section, and the controller sets it on the radio
 before the new receiver gets samples. The plugins are built at start against
 the shared library this program runs (in `target/plugins`), or loaded from
@@ -80,26 +80,34 @@ lost as often as ZigBee ones although their IFS does not change: the
 receiver only changes on a frame, so after a missed ZigBee frame it is still
 a ZigBee receiver when the next HaLow frame arrives.
 
-## Fused or granular HaLow receiver
+## Simple or granular HaLow receiver
 
-`flows/halow.toml` has four blocks: `WlanSync` includes the delay line,
-the |x|² and x·conj(delayed) products, the two moving sums and their ratio
-that feed `examples/wlan`'s short training field detector, and
+`flows/wlan_simple.toml` has four blocks: `WlanSync` includes the delay
+line, the |x|² and x·conj(delayed) products, the two moving sums and their
+ratio that feed `examples/wlan`'s short training field detector, and
 `WlanEqualizer` includes the FFT. `flows/wlan_granular.toml` has them as
 separate blocks, as `examples/wlan` connects them: 13 blocks and 15
 connections. Both see the same frames (the wlan plugin's tests check this on
 the 802.11a recordings and the HaLow frame, and on the one-second HaLow
 recording, 112 frames).
 
-| | `halow.toml` | `wlan_granular.toml` |
-|-|--------------|----------------------|
+With the replay, `--halow` takes several descriptions, run one after the
+other, and the table splits the swap time by direction: a swap to HaLow is
+the one that builds the HaLow receiver.
+
+```text
+cargo run --release -- --source replay --halow wlan_simple.toml,wlan_granular.toml
+```
+
+| | `wlan_simple.toml` | `wlan_granular.toml` |
+|-|--------------------|----------------------|
 | Blocks | 4 | 13 |
 | One-second HaLow recording (release) | 76 MSps, 100 ms of CPU | 62 MSps, 260 ms of CPU |
-| Replay: swap (median), both directions | 0.44 ms | 0.48 ms |
-| Replay: PER at 0.3 / 0.2 ms after H | 0–2 % / 14–46 % | 2 % / 36–44 % |
+| Replay: swap to HaLow (median) | 0.46–0.48 ms | 0.49–0.53 ms |
+| Replay: swap to ZigBee (median) | 0.35 ms | 0.35 ms |
 
-The fusion saves about 60 % of the CPU. At a swap, building and starting
-nine more blocks costs about 0.08 ms more per HaLow receiver; the PER curve
-of this sweep does not move, since the gap swept is the one before ZigBee
-frames, where the ZigBee receiver is built. (PER near the knee varies from
-run to run by more than the difference.)
+The fusion saves about 60 % of the CPU, and building and starting nine
+more blocks costs about 0.04 ms per HaLow receiver. The PER curve of this
+sweep does not move: the gap swept is the one before ZigBee frames, where
+the ZigBee receiver is built (and PER near the knee varies from run to run
+by several points).

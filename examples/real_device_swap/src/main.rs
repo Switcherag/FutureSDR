@@ -97,9 +97,12 @@ struct Args {
     /// Runtime threads (one per core by default).
     #[arg(long)]
     workers: Option<usize>,
-    /// The HaLow receiver's description, relative to flows/: halow.toml
-    /// (fused blocks) or wlan_granular.toml (examples/wlan's blocks).
-    #[arg(long, default_value = "halow.toml")]
+    /// The HaLow receiver's description, relative to flows/:
+    /// wlan_simple.toml (the wlan plugin's fused blocks) or
+    /// wlan_granular.toml (examples/wlan's blocks, one by one). With the
+    /// replay, several separated by commas are run one after the other and
+    /// compared.
+    #[arg(long, default_value = "wlan_simple.toml")]
     halow: String,
     /// Output CSV (default: real_device_swap.csv or real_device_replay.csv).
     #[arg(long)]
@@ -294,6 +297,9 @@ fn run_bladerf(args: &Args, registry: Registry) -> Result<()> {
     use plugin_api::Plugin;
     use plugin_api::add_kernel;
 
+    if args.halow.contains(',') {
+        bail!("--halow takes one description with a radio");
+    }
     let phys = receivers(&args.halow)?;
     let channels: Vec<u64> = phys
         .iter()
@@ -479,7 +485,8 @@ struct StepResult {
     /// Frames a radio could not have given: its receiver was listening for
     /// none of the transmission it decoded. Not counted as received.
     impossible: usize,
-    swaps: Vec<f64>,
+    /// Swap times, by the PHY swapped to: the swap builds its receiver.
+    swaps: [Vec<f64>; 2],
     retunes: Vec<f64>,
 }
 
@@ -503,7 +510,7 @@ async fn replay_step(
 
     let mut received = [0usize; 2];
     let mut impossible = 0;
-    let (mut swaps, mut retunes) = (Vec::new(), Vec::new());
+    let (mut swaps, mut retunes) = ([Vec::new(), Vec::new()], Vec::new());
     // Which PHY the receiver listened for, from a given time on.
     let mut listening: Vec<(f64, usize)> = vec![(0.0, first)];
     let mut active = first;
@@ -547,7 +554,7 @@ async fn replay_step(
         let replacement = ctrl
             .replace_async("rx", phys[next].clone(), Hold::Discard)
             .await?;
-        swaps.push(ms(t.elapsed()));
+        swaps[next].push(ms(t.elapsed()));
         retunes.push(ms(replacement.timings.controls));
         active = next;
         listening.push((replay::now(), next));
@@ -591,45 +598,53 @@ fn run_replay(args: &Args, mut registry: Registry) -> Result<()> {
         args.retune_us,
         args.chunk,
     );
-    println!("  IFS H→Z ms   PER H    PER Z   swap median / max ms   retune ms   impossible");
-
-    let phys = receivers(&args.halow)?;
-    let mut ctrl = controller(args, registry);
-    ctrl.link("radio.samples", "rx.samples")?;
-    let retune_us = args.retune_us;
-    let sent = steps.sent.clone();
-    let n_steps = steps.ifs_h2z_ms.len();
-    let results = ctrl.run(move |mut ctrl| async move {
-        let mut results = Vec::new();
-        for (step, sent) in sent.iter().enumerate().take(n_steps) {
-            results.push(replay_step(&mut ctrl, step, retune_us, &phys, sent, 0).await?);
-        }
-        anyhow::Ok(results)
-    })?;
 
     let mut table = String::from(
-        "ifs_h2z_ms,ifs_z2h_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,impossible,swaps,\
-         swap_median_ms,swap_max_ms,retune_median_ms\n",
+        "halow,ifs_h2z_ms,ifs_z2h_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,impossible,swaps,\
+         swap_median_ms,swap_to_h_median_ms,swap_to_z_median_ms,swap_max_ms,retune_median_ms\n",
     );
-    for (ifs, mut r) in steps.ifs_h2z_ms.iter().zip(results) {
-        let per_h = 1.0 - r.received[0] as f64 / sent_h as f64;
-        let per_z = 1.0 - r.received[1] as f64 / sent_z as f64;
-        let n = r.swaps.len();
-        let swap = median(&mut r.swaps);
-        let max = r.swaps.last().copied().unwrap_or(f64::NAN);
-        let retune = median(&mut r.retunes);
+    for halow_desc in args.halow.split(',').map(str::trim) {
+        println!("\nHaLow receiver: flows/{halow_desc}");
         println!(
-            "  {ifs:9.2}  {:6.1}%  {:6.1}%   {swap:8.3} / {max:8.3}   {retune:9.3}   {:10}",
-            100.0 * per_h,
-            100.0 * per_z,
-            r.impossible,
+            "  IFS H→Z ms   PER H    PER Z   swap median (→H / →Z) / max ms   retune ms   impossible"
         );
-        writeln!(
-            table,
-            "{ifs},{},{sent_h},{},{sent_z},{},{per_h:.4},{per_z:.4},{},{n},{swap:.4},{max:.4},\
-             {retune:.4}",
-            steps.ifs_z2h_ms, r.received[0], r.received[1], r.impossible,
-        )?;
+        let phys = receivers(halow_desc)?;
+        let mut ctrl = controller(args, registry.clone());
+        ctrl.link("radio.samples", "rx.samples")?;
+        let retune_us = args.retune_us;
+        let sent = steps.sent.clone();
+        let results = ctrl.run(move |mut ctrl| async move {
+            let mut results = Vec::new();
+            for (step, sent) in sent.iter().enumerate() {
+                results.push(replay_step(&mut ctrl, step, retune_us, &phys, sent, 0).await?);
+            }
+            anyhow::Ok(results)
+        })?;
+
+        for (ifs, mut r) in steps.ifs_h2z_ms.iter().zip(results) {
+            let per_h = 1.0 - r.received[0] as f64 / sent_h as f64;
+            let per_z = 1.0 - r.received[1] as f64 / sent_z as f64;
+            let mut all: Vec<f64> = r.swaps.concat();
+            let n = all.len();
+            let swap = median(&mut all);
+            let max = all.last().copied().unwrap_or(f64::NAN);
+            let to_h = median(&mut r.swaps[0]);
+            let to_z = median(&mut r.swaps[1]);
+            let retune = median(&mut r.retunes);
+            println!(
+                "  {ifs:9.2}  {:6.1}%  {:6.1}%   {swap:6.3} ({to_h:.3} / {to_z:.3}) / {max:6.3}   \
+                 {retune:9.3}   {:10}",
+                100.0 * per_h,
+                100.0 * per_z,
+                r.impossible,
+            );
+            writeln!(
+                table,
+                "{halow_desc},{ifs},{},{sent_h},{},{sent_z},{},{per_h:.4},{per_z:.4},{},{n},\
+                 {swap:.4},{to_h:.4},{to_z:.4},{max:.4},{retune:.4}",
+                steps.ifs_z2h_ms, r.received[0], r.received[1], r.impossible,
+            )?;
+        }
     }
     let path = args
         .csv

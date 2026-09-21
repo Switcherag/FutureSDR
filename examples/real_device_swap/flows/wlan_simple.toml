@@ -1,5 +1,7 @@
 # 802.11ah (HaLow, S1G 2 MHz at 4 MSps) receiver: the wlan plugin's `Ah`
-# standard (the dyn branch's v6). Posts the frames it decodes on `frames`.
+# standard (the dyn branch's v6), with its fused blocks. Posts the frames it
+# decodes on `frames`. wlan_granular.toml is the same receiver block by
+# block.
 name = "halow"
 connections = "sync > long > eq > dec"
 
