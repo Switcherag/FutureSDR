@@ -90,7 +90,8 @@ def main():
         ax_zoom.plot([i for i, _ in zoom], [p for _, p in zoom], **style)
         ax_swap.plot(d["ifs"], d["swap"], **style)
 
-    ax_all.set_title("Packet error rate, 0 to 4 ms", loc="left", color=INK2, fontsize=11)
+    top = max(max(d["ifs"]) for *_, d in data)
+    ax_all.set_title(f"Packet error rate, 0 to {top:g} ms", loc="left", color=INK2, fontsize=11)
     ax_all.set_ylabel("PER (%)", color=INK2, fontsize=11)
     ax_all.set_ylim(-2, 60)
     ax_all.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False,

@@ -176,8 +176,9 @@ Optional:
 
 ### The benchmark
 
-`bench.sh` runs the five swaps against the software IFS, 0 to 4 ms every
-0.01 ms (401 spacings), 400 frames per spacing, and draws them:
+`bench.sh` runs the six swaps against the software IFS, 0 to 6 ms every
+0.01 ms (601 spacings, as the transmitters of the radio benchmark sweep),
+400 frames per spacing, and draws them:
 
 | Key | Swap |
 |-----|------|
@@ -186,6 +187,7 @@ Optional:
 | `sz` | HaLow simple ⇄ ZigBee |
 | `gg` | HaLow granular → HaLow granular (the whole receiver) |
 | `gd` | HaLow granular, decoder only: inverse ⇄ Viterbi (`wlan_granular_hard.toml`, `wlan_granular_viterbi.toml`) |
+| `11` | HaLow in one block → one block (`wlan_single.toml`) |
 
 ```sh
 cd ~/dynv4/examples/real_device_swap
@@ -194,15 +196,16 @@ cd ~/dynv4/examples/real_device_swap
 
 It writes into `results/<host>-<date>/`: a CSV and a log per swap,
 `system.txt` (the Pi's model, CPU settings, governors, commit, temperature
-and throttling before and after each swap), `bench.png` (PER over 0–4 ms,
+and throttling before and after each swap), `bench.png` (PER over 0–6 ms,
 PER over 0–0.6 ms, swap time) and `summary.md` (per swap: median swap time,
 the IFS from which PER stays at or below 1 %, mean PER above 1 ms).
 
-At about 1.5 s per spacing it takes some ten minutes per swap on a laptop,
+A spacing takes about 2 s on average (0.6–0.9 s, plus 0.4 s per ms of
+IFS), so 17 to 21 min per swap and about 1 h 50 for the six on a laptop,
 more on the Pi: leave it running (in `tmux` or `screen`, so that an SSH
 disconnection does not stop it). Settings, as environment variables:
 `FRAMES` (400), `CPUS` (`1,2,3`), `EXTRA` (e.g. `--keep-awake`), `ONLY`
-(e.g. `"zz gd"`), `STEP` (0.01), `MAX` (4), `OUT`. A quick check first:
+(e.g. `"zz gd"`), `STEP` (0.01), `MAX` (6), `OUT`. A quick check first:
 
 ```sh
 STEP=0.5 MAX=1 FRAMES=40 ./bench.sh

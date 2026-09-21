@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The six swaps against the software IFS, 0 to 4 ms every 0.01 ms, no
+# The six swaps against the software IFS, 0 to 6 ms every 0.01 ms (as the
+# transmitters of radio_bench.sh sweep it), no
 # radio: the receiver replaced after every frame it posts. Writes a CSV per
 # swap, system.txt, bench.png and summary.md into $OUT.
 #
@@ -14,10 +15,11 @@
 #   EXTRA   more options, e.g. "--keep-awake" or "--rt-priority 50"
 #   ONLY    the swaps to run, e.g. "zz gd" (all by default)
 #   STEP    spacing step in ms     (0.01)
-#   MAX     largest spacing in ms  (4)
+#   MAX     largest spacing in ms  (6)
 #
-# At 400 frames a spacing takes about 1.5 s, so the five swaps take about
-# an hour on a laptop, longer on a Pi.
+# At 400 frames a spacing takes 0.6 to 0.9 s plus 0.4 s per ms of IFS: about
+# 2 s on average from 0 to 6 ms, so 17 to 21 min per swap and about 1 h 50
+# for the six on a laptop, longer on a Pi.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -27,7 +29,7 @@ CPUS=${CPUS:-1,2,3}
 EXTRA=${EXTRA:-}
 ONLY=${ONLY:-zz ss sz gg gd 11}
 STEP=${STEP:-0.01}
-MAX=${MAX:-4}
+MAX=${MAX:-6}
 
 # Largest first, as in the dyn branch's sweeps.
 IFS_LIST=$(python3 -c "
