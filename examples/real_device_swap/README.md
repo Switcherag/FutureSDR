@@ -64,6 +64,12 @@ after each ZigBee frame is `--ifs-z2h`. The replayed front end takes
 is matched to the transmission it decodes and counted only if the receiver
 was listening while it was on the air.
 
+`--swap A,B` replays any two receivers in turn, including one replaced by
+itself (`--swap zigbee.toml,zigbee.toml`); the IFS after B's frames is the
+swept one unless `--ifs-z2h` sets it. `--retune-us 0` leaves out the front
+end: the receivers' `[radio]` demands go nowhere, and only the software swap
+is measured, as the `dyn` branch's software-IFS replay does.
+
 It writes `real_device_replay.csv`, a row per IFS. With 100 frames per IFS,
 `--ifs-z2h 1`, a 300 µs retune and 4 runtime threads:
 
@@ -111,3 +117,28 @@ more blocks costs about 0.04 ms per HaLow receiver. The PER curve of this
 sweep does not move: the gap swept is the one before ZigBee frames, where
 the ZigBee receiver is built (and PER near the knee varies from run to run
 by several points).
+
+## Software IFS
+
+`figures/software_ifs.png`: PER and the median swap time against the IFS,
+with no radio (`--retune-us 0`), 200 frames per spacing, for four swaps.
+`figures/*.csv` are the runs and `figures/plot_software_ifs.py` draws them.
+
+```text
+cargo run --release -- --source replay --retune-us 0 --frames-per-step 200 \
+    --ifs 2,1.5,1,0.8,0.6,0.5,0.4,0.35,0.3,0.25,0.2,0.15,0.1,0.05,0 \
+    --swap zigbee.toml,zigbee.toml --csv figures/zz.csv
+```
+
+| Swap | Swap time (median) | PER |
+|------|--------------------|-----|
+| ZigBee → ZigBee | 0.05 ms | ≤ 1.5 % down to 0 |
+| HaLow simple → simple | 0.15 ms | 0 % down to 0.35 ms, 50 % from 0.05 ms |
+| HaLow granular → granular | 0.19 ms | ≤ 1 % down to 0.4 ms, 50 % from 0.1 ms |
+| ZigBee ⇄ HaLow simple | 0.05 ms to ZigBee, 0.16 ms to HaLow | ≤ 2 % down to 0.25 ms, 50 % from 0.05 ms |
+
+A swap starts when the receiver posts the frame, after it has decoded it,
+so the time available is the IFS less the decoding delay, plus the silence
+each recording keeps around its frame (about 0.07 ms for ZigBee, 0.05 ms for
+HaLow). ZigBee's 0.05 ms swap fits in that silence alone. Near the knee, PER
+moves by several points from run to run.

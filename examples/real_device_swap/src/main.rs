@@ -144,13 +144,21 @@ struct Args {
     rx_timeout_ms: u64,
 
     // replay
-    /// IFS after each H frame, ms: `START:STOP:STEP` or a list `1,0.5,0.2`.
-    #[arg(long, default_value = "1:0:0.1")]
-    ifs_h2z: String,
-    /// IFS after each Z frame, ms.
-    #[arg(long, default_value_t = 1.0)]
-    ifs_z2h: f64,
-    /// Frames per IFS (H and Z together).
+    /// The two receivers that take turns, descriptions in flows/, e.g.
+    /// `zigbee.toml,zigbee.toml` for the same PHY replaced by itself. The
+    /// replay sends their PHYs' frames in turn. Default: `--halow` and
+    /// zigbee.toml.
+    #[arg(long)]
+    swap: Option<String>,
+    /// IFS after each frame for the first receiver (with the default pair,
+    /// each H frame), ms: `START:STOP:STEP` or a list `1,0.5,0.2`.
+    #[arg(long, alias = "ifs-h2z", default_value = "1:0:0.1")]
+    ifs: String,
+    /// IFS after each frame for the second receiver, ms; the swept IFS if
+    /// not given.
+    #[arg(long, alias = "ifs-z2h")]
+    ifs_after_second: Option<f64>,
+    /// Frames per IFS (both receivers' together).
     #[arg(long, default_value_t = 100)]
     frames_per_step: usize,
     /// Time the replayed front end takes to retune, µs.
@@ -478,26 +486,36 @@ fn run_bladerf(_args: &Args, _registry: Registry) -> Result<()> {
 
 // ── Replay ───────────────────────────────────────────────────────────────
 
+/// The PHY a receiver description posts frames of, by its name.
+fn phy_of(desc: &Description) -> Result<usize> {
+    let name = desc.name.as_deref().unwrap_or_default();
+    PHYS.iter()
+        .position(|p| *p == name)
+        .ok_or_else(|| anyhow::anyhow!("a receiver named {name:?}: expected halow or zigbee"))
+}
+
 /// What one IFS of the replay gave.
 struct StepResult {
-    /// Frames from a receiver that was listening when they were sent.
+    /// Frames from a receiver that was listening when they were sent, by
+    /// PHY.
     received: [usize; 2],
-    /// Frames a radio could not have given: its receiver was listening for
+    /// Frames a radio could not have given: the receiver was listening for
     /// none of the transmission it decoded. Not counted as received.
     impossible: usize,
-    /// Swap times, by the PHY swapped to: the swap builds its receiver.
+    /// Swap times, by the receiver swapped to (which the swap builds).
     swaps: [Vec<f64>; 2],
     retunes: Vec<f64>,
 }
 
+/// Replay step `step` to `pair`, the receivers taking turns from the first.
 async fn replay_step(
     ctrl: &mut Controller,
     step: usize,
     retune_us: u64,
-    phys: &[Description; 2],
+    pair: &[Description; 2],
     sent: &[replay::Sent],
-    first: usize,
 ) -> Result<StepResult> {
+    let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
     *replay::STARTED.lock().unwrap() = None;
     // The radio first: a receiver that starts on an ended stream ends.
     ctrl.spawn_async(
@@ -506,14 +524,14 @@ async fn replay_step(
     )
     .await?;
     let mut tap = ctrl.tap("rx.frames")?;
-    ctrl.spawn_async("rx", phys[first].clone()).await?;
+    ctrl.spawn_async("rx", pair[0].clone()).await?;
 
     let mut received = [0usize; 2];
     let mut impossible = 0;
     let (mut swaps, mut retunes) = ([Vec::new(), Vec::new()], Vec::new());
     // Which PHY the receiver listened for, from a given time on.
-    let mut listening: Vec<(f64, usize)> = vec![(0.0, first)];
-    let mut active = first;
+    let mut listening: Vec<(f64, usize)> = vec![(0.0, phy[0])];
+    let mut active = 0;
     let mut quiet_since: Option<Instant> = None;
     loop {
         let Some((origin, _)) = next_frame(&mut tap, Duration::from_millis(20)).await else {
@@ -529,35 +547,35 @@ async fn replay_step(
             continue;
         };
         quiet_since = None;
-        let phy = PHYS.iter().position(|p| *p == origin).unwrap();
+        let got = PHYS.iter().position(|p| *p == origin).unwrap();
 
         // The transmission it decodes: the last of its PHY that ended before
         // it arrived (every copy is the same recording).
         let at = replay::now();
-        let frame = sent.iter().rfind(|s| s.phy == phy && s.end <= at);
+        let frame = sent.iter().rfind(|s| s.phy == got && s.end <= at);
         let listened = frame.is_some_and(|f| {
             listening.iter().enumerate().any(|(k, (from, p))| {
                 let until = listening.get(k + 1).map_or(f64::INFINITY, |(t, _)| *t);
-                *p == phy && *from < f.end && until > f.start
+                *p == got && *from < f.end && until > f.start
             })
         });
         if listened {
-            received[phy] += 1;
+            received[got] += 1;
         } else {
             impossible += 1;
         }
-        if phy != active {
+        if got != phy[active] {
             continue;
         }
         let next = 1 - active;
         let t = Instant::now();
         let replacement = ctrl
-            .replace_async("rx", phys[next].clone(), Hold::Discard)
+            .replace_async("rx", pair[next].clone(), Hold::Discard)
             .await?;
         swaps[next].push(ms(t.elapsed()));
         retunes.push(ms(replacement.timings.controls));
         active = next;
-        listening.push((replay::now(), next));
+        listening.push((replay::now(), phy[next]));
     }
     let names: Vec<String> = ctrl.names().map(str::to_string).collect();
     for name in names {
@@ -575,74 +593,124 @@ fn run_replay(args: &Args, mut registry: Registry) -> Result<()> {
     registry.register(replay::blocks())?;
     replay::CHUNK.store(args.chunk.max(1), std::sync::atomic::Ordering::Relaxed);
     let testdata = workspace().join("blocks/testdata");
-    let halow = replay::read_cf32(&testdata.join("halow_frame.cf32"))?;
-    let zigbee = replay::read_cf32(&testdata.join("zigbee_frame.cf32"))?;
-    let frames = args.frames_per_step.max(2);
-    let steps = replay::prepare(
-        &halow,
-        &zigbee,
-        frames,
-        parse_sweep(&args.ifs_h2z)?,
-        args.ifs_z2h,
-    );
-    if args.first == Some(Phy::Zigbee) {
-        bail!("the replay starts with a HaLow frame; --first zigbee does not apply");
+    let recordings = [
+        replay::read_cf32(&testdata.join("halow_frame.cf32"))?,
+        replay::read_cf32(&testdata.join("zigbee_frame.cf32"))?,
+    ];
+    if args.first.is_some() {
+        bail!("--first does not apply to the replay: the first receiver of the pair starts");
     }
-    let (sent_h, sent_z) = (frames.div_ceil(2), frames / 2);
+    let pairs: Vec<[String; 2]> = match &args.swap {
+        Some(pair) => {
+            let names: Vec<&str> = pair.split(',').map(str::trim).collect();
+            let [a, b] = names[..] else {
+                bail!("--swap takes two descriptions: A,B");
+            };
+            vec![[a.to_string(), b.to_string()]]
+        }
+        None => args
+            .halow
+            .split(',')
+            .map(|h| [h.trim().to_string(), "zigbee.toml".to_string()])
+            .collect(),
+    };
+    let frames = args.frames_per_step.max(2);
+    let ifs = parse_sweep(&args.ifs)?;
+    let flows = Path::new(env!("CARGO_MANIFEST_DIR")).join("flows");
+    let label = |ms: Option<f64>| ms.map_or("the same".to_string(), |v| format!("{v} ms"));
     println!(
-        "{frames} frames per IFS ({sent_h} H of {:.0} µs, {sent_z} Z of {:.0} µs), \
-         IFS after Z {} ms, retune {} µs, chunks of {} samples",
-        halow.len() as f64 / replay::RATE * 1e6,
-        zigbee.len() as f64 / replay::RATE * 1e6,
-        steps.ifs_z2h_ms,
-        args.retune_us,
+        "{frames} frames per IFS, IFS after the second receiver's frames {}, {}, chunks of {} \
+         samples",
+        label(args.ifs_after_second),
+        if args.retune_us == 0 {
+            "no retuning".to_string()
+        } else {
+            format!("retune {} µs", args.retune_us)
+        },
         args.chunk,
     );
 
     let mut table = String::from(
-        "halow,ifs_h2z_ms,ifs_z2h_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,impossible,swaps,\
-         swap_median_ms,swap_to_h_median_ms,swap_to_z_median_ms,swap_max_ms,retune_median_ms\n",
+        "first,second,ifs_ms,ifs_after_second_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,per,\
+         impossible,swaps,swap_median_ms,swap_to_first_median_ms,swap_to_second_median_ms,\
+         swap_max_ms,retune_median_ms\n",
     );
-    for halow_desc in args.halow.split(',').map(str::trim) {
-        println!("\nHaLow receiver: flows/{halow_desc}");
-        println!(
-            "  IFS H→Z ms   PER H    PER Z   swap median (→H / →Z) / max ms   retune ms   impossible"
+    for [first, second] in pairs {
+        let pair = [
+            Description::from_file(flows.join(&first))?,
+            Description::from_file(flows.join(&second))?,
+        ];
+        let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
+        let steps = replay::prepare(
+            [&recordings[phy[0]], &recordings[phy[1]]],
+            [phy[0], phy[1]],
+            frames,
+            ifs.clone(),
+            args.ifs_after_second,
         );
-        let phys = receivers(halow_desc)?;
+        let mut sent = [0usize; 2];
+        for s in &steps.sent[0] {
+            sent[s.phy] += 1;
+        }
+        println!("\n{first} → {second} → ...");
+        println!(
+            "  IFS ms    PER H    PER Z    PER   swap median (→{first:.5} / →{second:.5}) / max ms   \
+             retune ms   impossible"
+        );
         let mut ctrl = controller(args, registry.clone());
         ctrl.link("radio.samples", "rx.samples")?;
         let retune_us = args.retune_us;
-        let sent = steps.sent.clone();
+        let per_step = steps.sent.clone();
         let results = ctrl.run(move |mut ctrl| async move {
             let mut results = Vec::new();
-            for (step, sent) in sent.iter().enumerate() {
-                results.push(replay_step(&mut ctrl, step, retune_us, &phys, sent, 0).await?);
+            for (step, sent) in per_step.iter().enumerate() {
+                results.push(replay_step(&mut ctrl, step, retune_us, &pair, sent).await?);
             }
             anyhow::Ok(results)
         })?;
 
-        for (ifs, mut r) in steps.ifs_h2z_ms.iter().zip(results) {
-            let per_h = 1.0 - r.received[0] as f64 / sent_h as f64;
-            let per_z = 1.0 - r.received[1] as f64 / sent_z as f64;
+        for ((ifs, after), mut r) in steps
+            .ifs_ms
+            .iter()
+            .zip(&steps.ifs_after_second_ms)
+            .zip(results)
+        {
+            let rate = |k: usize| {
+                if sent[k] == 0 {
+                    f64::NAN
+                } else {
+                    1.0 - r.received[k] as f64 / sent[k] as f64
+                }
+            };
+            let (per_h, per_z) = (rate(0), rate(1));
+            let per = 1.0 - (r.received[0] + r.received[1]) as f64 / (sent[0] + sent[1]) as f64;
             let mut all: Vec<f64> = r.swaps.concat();
             let n = all.len();
             let swap = median(&mut all);
             let max = all.last().copied().unwrap_or(f64::NAN);
-            let to_h = median(&mut r.swaps[0]);
-            let to_z = median(&mut r.swaps[1]);
+            let to_first = median(&mut r.swaps[0]);
+            let to_second = median(&mut r.swaps[1]);
             let retune = median(&mut r.retunes);
+            let pct = |v: f64| {
+                if v.is_nan() {
+                    "     -".to_string()
+                } else {
+                    format!("{:5.1}%", 100.0 * v)
+                }
+            };
             println!(
-                "  {ifs:9.2}  {:6.1}%  {:6.1}%   {swap:6.3} ({to_h:.3} / {to_z:.3}) / {max:6.3}   \
-                 {retune:9.3}   {:10}",
-                100.0 * per_h,
-                100.0 * per_z,
+                "  {ifs:6.2}   {}   {}   {}   {swap:6.3} ({to_first:.3} / {to_second:.3}) / \
+                 {max:6.3}   {retune:9.3}   {:10}",
+                pct(per_h),
+                pct(per_z),
+                pct(per),
                 r.impossible,
             );
             writeln!(
                 table,
-                "{halow_desc},{ifs},{},{sent_h},{},{sent_z},{},{per_h:.4},{per_z:.4},{},{n},\
-                 {swap:.4},{to_h:.4},{to_z:.4},{max:.4},{retune:.4}",
-                steps.ifs_z2h_ms, r.received[0], r.received[1], r.impossible,
+                "{first},{second},{ifs},{after},{},{},{},{},{per_h:.4},{per_z:.4},{per:.4},{},{n},\
+                 {swap:.4},{to_first:.4},{to_second:.4},{max:.4},{retune:.4}",
+                sent[0], r.received[0], sent[1], r.received[1], r.impossible,
             )?;
         }
     }

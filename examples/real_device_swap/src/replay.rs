@@ -59,8 +59,10 @@ pub struct Sent {
 
 /// A replay run: one stream per step, and what each sent when.
 pub struct Steps {
-    pub ifs_h2z_ms: Vec<f64>,
-    pub ifs_z2h_ms: f64,
+    /// The IFS after the first receiver's frames, by step.
+    pub ifs_ms: Vec<f64>,
+    /// The IFS after the second receiver's frames, by step.
+    pub ifs_after_second_ms: Vec<f64>,
     pub sent: Vec<Vec<Sent>>,
 }
 
@@ -79,49 +81,67 @@ pub fn read_cf32(path: &Path) -> Result<Vec<Complex32>> {
         .collect())
 }
 
-/// Prepare the streams: `frames` frames per step, H first, for each gap
-/// after H in `ifs_h2z_ms`, and `ifs_z2h_ms` after Z.
+/// Prepare the streams: `frames` frames per step, `recordings[0]` (of PHY
+/// `phys[0]`) first, then `recordings[1]`, in turn; after the first ones
+/// the step's IFS from `ifs_ms`, after the second ones `ifs_after_second_ms`
+/// (the step's IFS too if `None`).
 pub fn prepare(
-    halow: &[Complex32],
-    zigbee: &[Complex32],
+    recordings: [&[Complex32]; 2],
+    phys: [usize; 2],
     frames: usize,
-    ifs_h2z_ms: Vec<f64>,
-    ifs_z2h_ms: f64,
+    ifs_ms: Vec<f64>,
+    ifs_after_second_ms: Option<f64>,
 ) -> Steps {
     let samples = |ms: f64| (ms.max(0.0) / 1e3 * RATE).round() as usize;
     let n_lead = samples(LEAD.as_secs_f64() * 1e3);
     let mut streams = STREAMS.lock().unwrap();
     streams.clear();
     let mut sent_per_step = Vec::new();
-    for &h2z in &ifs_h2z_ms {
-        let gaps = [samples(h2z), samples(ifs_z2h_ms)];
+    let mut after_second = Vec::new();
+    for &ifs in &ifs_ms {
+        let second = ifs_after_second_ms.unwrap_or(ifs);
+        after_second.push(second);
+        let gaps = [samples(ifs), samples(second)];
         let mut out = vec![Complex32::default(); n_lead];
         let mut sent = Vec::new();
         for i in 0..frames {
-            let phy = i % 2;
+            let k = i % 2;
             let start = out.len();
-            out.extend_from_slice(if phy == 0 { halow } else { zigbee });
+            out.extend_from_slice(recordings[k]);
             sent.push(Sent {
-                phy,
+                phy: phys[k],
                 start: start as f64 / RATE,
                 end: out.len() as f64 / RATE,
             });
-            let gap = if i + 1 == frames { n_lead } else { gaps[phy] };
+            let gap = if i + 1 == frames { n_lead } else { gaps[k] };
             out.resize(out.len() + gap, Complex32::default());
         }
         streams.push(Arc::new(out));
         sent_per_step.push(sent);
     }
     Steps {
-        ifs_h2z_ms,
-        ifs_z2h_ms,
+        ifs_ms,
+        ifs_after_second_ms: after_second,
         sent: sent_per_step,
     }
 }
 
 /// The radio flowgraph of step `step`: the replay, and a front end that
-/// takes `retune_us` to change frequency.
+/// takes `retune_us` to change frequency, or none if `retune_us` is 0 (the
+/// receivers' `[radio]` demands then go nowhere: a software swap only).
 pub fn head(step: usize, retune_us: u64) -> String {
+    if retune_us == 0 {
+        return format!(
+            r#"
+            name = "radio"
+            [blocks.replay]
+            type = "Replay"
+            step = {step}
+            [outputs]
+            samples = {{ port = "replay.output", type = "c32" }}
+            "#
+        );
+    }
     format!(
         r#"
         name = "radio"
