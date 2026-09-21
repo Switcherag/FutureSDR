@@ -193,6 +193,17 @@ struct Args {
     /// be of one PHY): the reference, without swaps.
     #[arg(long)]
     no_swap: bool,
+    /// Samples the replay's output holds before it drops what it cannot
+    /// deliver, as a radio's buffers do: 13107 is what this program's
+    /// bladeRF setup buffers (16 transfers of 4096 samples at 20 MSps,
+    /// 3.3 ms), at 4 MSps.
+    #[arg(long, default_value_t = 13_107)]
+    source_buffer: usize,
+    /// Samples a link between flowgraphs holds before it drops the oldest,
+    /// as a radio's buffers do: 16384 is 4 ms at 4 MSps, about what a
+    /// bladeRF buffers (16 transfers of 4096 samples at 20 MSps).
+    #[arg(long, default_value_t = 16384)]
+    link_capacity: usize,
     /// Samples the replay delivers at once.
     #[arg(long, default_value_t = 256)]
     chunk: usize,
@@ -249,6 +260,12 @@ fn receivers(halow: &str) -> Result<[Description; 2]> {
 }
 
 fn controller(args: &Args, cpus: &[usize], registry: Registry) -> Controller {
+    let mut ctrl = controller_on(args, cpus, registry);
+    ctrl.set_link_capacity(args.link_capacity);
+    ctrl
+}
+
+fn controller_on(args: &Args, cpus: &[usize], registry: Registry) -> Controller {
     let pinned = !cpus.is_empty();
     match args.workers.or(pinned.then_some(cpus.len())) {
         // Pinned in turn to the CPUs the process may use: those of --cpus.
@@ -632,6 +649,11 @@ struct StepResult {
     queued: Vec<f64>,
     /// Frames posted, by the description that posted them.
     origins: BTreeMap<String, usize>,
+    /// Samples the replay could not deliver in time, and samples the link
+    /// to the receiver dropped because it was full: what a radio would have
+    /// lost to a receiver that fell behind.
+    source_dropped: usize,
+    link_dropped: u64,
 }
 
 /// Replay step `step` to `pair`, the receivers taking turns from the first.
@@ -646,6 +668,8 @@ async fn replay_step(
     let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
     *replay::STARTED.lock().unwrap() = None;
     replay::LATE_CHUNKS.lock().unwrap().clear();
+    replay::SOURCE_DROPPED.store(0, std::sync::atomic::Ordering::Relaxed);
+    let link_dropped_before = ctrl.link_stats("rx.samples").map_or(0, |s| s.dropped);
     replay::load(step);
     // The radio first: a receiver that starts on an ended stream ends.
     ctrl.spawn_async(
@@ -761,6 +785,7 @@ async fn replay_step(
         listening.push((done, phy[next]));
         log.push((frame.map_or(f64::NAN, |f| f.end), at, done, waiting));
     }
+    let link_dropped_after = ctrl.link_stats("rx.samples").map_or(0, |s| s.dropped);
     stop_all(ctrl).await?;
     replay::unload(step);
     if show_swaps > 0 {
@@ -844,11 +869,14 @@ async fn replay_step(
         missed,
         queued,
         origins,
+        source_dropped: replay::SOURCE_DROPPED.load(std::sync::atomic::Ordering::Relaxed),
+        link_dropped: link_dropped_after - link_dropped_before,
     })
 }
 
 fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()> {
     registry.register(replay::blocks())?;
+    replay::SOURCE_BUFFER.store(args.source_buffer, std::sync::atomic::Ordering::Relaxed);
     replay::CHUNK.store(args.chunk.max(1), std::sync::atomic::Ordering::Relaxed);
     let testdata = workspace().join("blocks/testdata");
     let mut recordings = [
@@ -918,7 +946,7 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
          ifs_true_after_second_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,per,\
          impossible,swaps,swap_median_ms,swap_to_first_median_ms,swap_to_second_median_ms,\
          swap_max_ms,retune_median_ms,duplicates,lost_late,lost_listening,queued_median,\
-         queued_max,posted_by\n",
+         queued_max,posted_by,source_dropped,link_dropped\n",
     );
     for [first, second] in pairs {
         let pair = [
@@ -1008,7 +1036,7 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
                 "{first},{second},{ifs},{after},{true_mean:.4},{true_first:.4},{true_second:.4},\
                  {},{},{},{},{per_h:.4},{per_z:.4},{per:.4},{},{n},\
                  {swap:.4},{to_first:.4},{to_second:.4},{max:.4},{retune:.4},{},{},{},\
-                 {queued_median},{queued_max},{}",
+                 {queued_median},{queued_max},{},{},{}",
                 sent[0],
                 r.received[0],
                 sent[1],
@@ -1018,7 +1046,15 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
                 r.late,
                 r.missed,
                 posted_by(&r.origins),
+                r.source_dropped,
+                r.link_dropped,
             )?;
+            if r.source_dropped + r.link_dropped as usize > 0 {
+                println!(
+                    "           dropped: {} samples by the replay, {} by the link",
+                    r.source_dropped, r.link_dropped
+                );
+            }
             if r.origins.len() > 1 {
                 println!("           posted by {}", posted_by(&r.origins));
             }

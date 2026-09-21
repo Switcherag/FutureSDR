@@ -211,6 +211,17 @@ STEP=0.5 MAX=1 FRAMES=40 ./bench.sh
 To redraw from a results directory: `python3 figures/plot_bench.py
 results/<dir>`. Copy the directory back to the laptop to compare.
 
+**Like a radio.** A radio does not wait for its reader: what is not read in
+time is lost. So the replay drops what its output cannot take, which holds
+`--source-buffer` samples (13107: 3.3 ms, what this program's bladeRF
+setup buffers), and the link to the receiver drops its oldest samples
+beyond `--link-capacity` (16384: 4 ms). At a swap the link is emptied
+(`Hold::Discard`): the new receiver starts on samples that arrive after it,
+and those that arrived during it went to the old one. The CSVs count what
+was dropped (`source_dropped`, `link_dropped`), and so does `summary.md`:
+anything but 0 means the Pi could not keep up, which a radio would have
+lost too.
+
 **The IFS axis.** The recorded frames were cut with some silence around
 them (HaLow: 12 µs before, 35 µs after; ZigBee: 17 and 20 µs). The replay
 cuts them to the frame, so the gap it puts between them is the IFS from the

@@ -35,7 +35,10 @@ def load(path):
     # have only the gap.
     key = "ifs_true_ms" if "ifs_true_ms" in open(path).readline() else "ifs_ms"
     rows = sorted(csv.DictReader(open(path)), key=lambda r: float(r[key]))
+    dropped = sum(int(r.get("source_dropped") or 0) + int(r.get("link_dropped") or 0)
+                  for r in rows)
     return {
+        "dropped": dropped,
         "ifs": [float(r[key]) for r in rows],
         "per": [100 * float(r["per"]) for r in rows],
         "swap": [float(r["swap_median_ms"]) for r in rows],
@@ -130,8 +133,8 @@ def main():
     fig.savefig(png, dpi=150, facecolor=SURFACE)
 
     lines = [
-        "| Swap | Swap time (median) | PER ≤ 1 % from | PER above 1 ms (mean) |",
-        "|------|--------------------|----------------|-----------------------|",
+        "| Swap | Swap time (median) | PER ≤ 1 % from | PER above 1 ms (mean) | Samples dropped |",
+        "|------|--------------------|----------------|-----------------------|-----------------|",
     ]
     for _, label, _, _, d in data:
         at = edge(d)
@@ -139,10 +142,13 @@ def main():
         lines.append(
             f"| {label} | {median(d['swap']):.3f} ms | "
             f"{'–' if at is None else f'{at:.2f} ms'} | "
-            f"{sum(above) / len(above) if above else float('nan'):.2f} % |"
+            f"{sum(above) / len(above) if above else float('nan'):.2f} % | {d['dropped']} |"
         )
     (out / "summary.md").write_text(
-        f"{system}\n\n" + "\n".join(lines) + "\n"
+        f"{system}\n\n" + "\n".join(lines) + "\n\n"
+        "Samples dropped: by the replay (its output full for longer than a radio's\n"
+        "buffers last) and by the link to the receiver (full); what a radio would\n"
+        "have lost to a receiver that fell behind. Not 0: the run was CPU-bound.\n"
     )
     print(png)
     print("\n".join(lines))

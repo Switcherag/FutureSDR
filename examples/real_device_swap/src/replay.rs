@@ -40,6 +40,12 @@ pub static CHUNK: AtomicUsize = AtomicUsize::new(256);
 /// Chunks emitted more than 0.2 ms after they were due: (when, seconds
 /// from the replay's start; how late, seconds).
 pub static LATE_CHUNKS: Mutex<Vec<(f64, f64)>> = Mutex::new(Vec::new());
+/// Samples the replay's output holds, as a radio's buffers do before they
+/// overflow.
+pub static SOURCE_BUFFER: AtomicUsize = AtomicUsize::new(13_107);
+/// Samples the replay dropped, as a radio would, because its output had no
+/// room for them in time.
+pub static SOURCE_DROPPED: AtomicUsize = AtomicUsize::new(0);
 /// How long each `Tune` retune took (always its delay; for the report).
 pub static RETUNES: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
 
@@ -399,10 +405,8 @@ impl Kernel for Replay {
         };
         let out = self.output.slice();
         self.room = self.room.max(out.len());
-        let mut n = ready.min(out.len());
-        if n < ready && n < chunk.min(self.room) {
-            n = 0;
-        }
+        // A radio does not wait for its reader: what does not fit is lost.
+        let n = ready.min(out.len());
         out[..n].copy_from_slice(&self.samples[self.pos..self.pos + n]);
         self.output.produce(n);
         if n > 0 {
@@ -413,13 +417,15 @@ impl Kernel for Replay {
                 LATE_CHUNKS.lock().unwrap().push((now, late));
             }
         }
-        self.pos += n;
+        if n < ready {
+            SOURCE_DROPPED.fetch_add(ready - n, Ordering::Relaxed);
+        }
+        self.pos += ready;
         if self.pos == len {
             io.finished = true;
-        } else if n == ready {
+        } else {
             io.call_again = true;
         }
-        // Else the output is full: called again when there is room.
         Ok(())
     }
 }
@@ -502,7 +508,13 @@ pub fn blocks() -> Plugin {
                     add_kernel(
                         fg,
                         Replay {
-                            output: ReuseCpuWriter::default(),
+                            output: {
+                                let mut output = ReuseCpuWriter::default();
+                                output.set_min_buffer_size_in_items(
+                                    SOURCE_BUFFER.load(Ordering::Relaxed),
+                                );
+                                output
+                            },
                             samples,
                             pos: 0,
                             start: None,
