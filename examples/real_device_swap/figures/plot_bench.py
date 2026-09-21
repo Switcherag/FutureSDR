@@ -30,9 +30,13 @@ ZOOM = 0.6
 
 
 def load(path):
-    rows = sorted(csv.DictReader(open(path)), key=lambda r: float(r["ifs_ms"]))
+    # The IFS from frame end to next frame start: with recordings replayed
+    # whole (--no-trim), the gap plus the silence they keep; older runs
+    # have only the gap.
+    key = "ifs_true_ms" if "ifs_true_ms" in open(path).readline() else "ifs_ms"
+    rows = sorted(csv.DictReader(open(path)), key=lambda r: float(r[key]))
     return {
-        "ifs": [float(r["ifs_ms"]) for r in rows],
+        "ifs": [float(r[key]) for r in rows],
         "per": [100 * float(r["per"]) for r in rows],
         "swap": [float(r["swap_median_ms"]) for r in rows],
     }

@@ -211,6 +211,21 @@ STEP=0.5 MAX=1 FRAMES=40 ./bench.sh
 To redraw from a results directory: `python3 figures/plot_bench.py
 results/<dir>`. Copy the directory back to the laptop to compare.
 
+**The IFS axis.** The recorded frames were cut with some silence around
+them (HaLow: 12 µs before, 35 µs after; ZigBee: 17 and 20 µs). The replay
+cuts them to the frame, so the gap it puts between them is the IFS from the
+end of one frame to the start of the next, and IFS 0 is frames back to
+back. `EXTRA=--no-trim` replays them whole, as the dyn branch's generator
+did: the IFS is then the gap plus that silence, 32 to 52 µs more, and the
+CSVs' `ifs_true_ms` column, which the figure uses, says so (a gap of 0 is
+plotted at 0.042 ms).
+
+To check what a swap does, `REPLAY_SWAPS=6` prints the first six: the new
+flowgraph's id (a new one each time) and number of blocks, and its build,
+start and switch times; and, per spacing, how many of the replaced
+flowgraphs terminated. (It keeps them until then, so their buffers do not
+go back to the pool and the swaps take longer during that run.)
+
 ### Single runs
 
 Each run writes a CSV (`--csv`), a row per IFS, and prints a table. The

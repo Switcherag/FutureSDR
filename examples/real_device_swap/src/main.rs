@@ -660,6 +660,14 @@ async fn replay_step(
     let mut impossible = 0;
     let mut duplicates = 0;
     let mut decoded = vec![false; sent.len()];
+    // REPLAY_SWAPS=N: what the first N swaps did, and whether what they
+    // replaced terminated.
+    let show_swaps: usize = std::env::var("REPLAY_SWAPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let mut retired = Vec::new();
+    let mut seen_ids = Vec::new();
     // Frames posted, by the description that posted them.
     let mut origins: BTreeMap<String, usize> = BTreeMap::new();
     let mut latency = Vec::new();
@@ -723,6 +731,31 @@ async fn replay_step(
             .await?;
         swaps[next].push(ms(t.elapsed()));
         retunes.push(ms(replacement.timings.controls));
+        if show_swaps > 0 {
+            let handle = ctrl.handle("rx").expect("running");
+            let blocks = handle.describe().map_or(0, |d| d.blocks.len());
+            let fresh = !seen_ids.contains(&handle.id());
+            if fresh {
+                seen_ids.push(handle.id());
+            }
+            if retired.len() < show_swaps {
+                let t = &replacement.timings;
+                eprintln!(
+                    "swap {:3}: {} -> {}: flowgraph {:?} ({}), {blocks} blocks; build {:.3} ms, \
+                     start {:.3} ms, switch {:.3} ms, total {:.3} ms",
+                    retired.len(),
+                    replacement.old.name(),
+                    pair[next].name.as_deref().unwrap_or("?"),
+                    handle.id(),
+                    if fresh { "new" } else { "SEEN BEFORE" },
+                    ms(t.build),
+                    ms(t.start),
+                    ms(t.switch),
+                    ms(t.total),
+                );
+            }
+            retired.push(replacement.old);
+        }
         active = next;
         let done = replay::now();
         listening.push((done, phy[next]));
@@ -730,6 +763,20 @@ async fn replay_step(
     }
     stop_all(ctrl).await?;
     replay::unload(step);
+    if show_swaps > 0 {
+        let n = retired.len();
+        let mut ended = 0;
+        for old in retired {
+            if old.wait_async().await.is_ok() {
+                ended += 1;
+            }
+        }
+        eprintln!(
+            "step {step}: {n} swaps, {} distinct new flowgraphs, {ended} of the {n} replaced \
+             ones terminated",
+            seen_ids.len()
+        );
+    }
     if std::env::var_os("REPLAY_LOSSES").is_some() {
         let slow = latency.iter().filter(|l| **l > 3e-4).count();
         let worst = latency.iter().copied().fold(0.0, f64::max);
@@ -808,9 +855,15 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
         replay::read_cf32(&testdata.join("halow_frame.cf32"))?,
         replay::read_cf32(&testdata.join("zigbee_frame.cf32"))?,
     ];
-    for (recording, name) in recordings.iter_mut().zip(PHYS) {
+    // Silence each replayed recording keeps before and after its frame, in
+    // ms: none once cut to the frame.
+    let mut silence = [[0.0f64; 2]; 2];
+    for ((recording, name), margin) in recordings.iter_mut().zip(PHYS).zip(&mut silence) {
         let us = |n: usize| n as f64 / replay::RATE * 1e6;
         let burst = replay::burst(recording);
+        if args.no_trim {
+            *margin = [us(burst.start) / 1e3, us(recording.len() - burst.end) / 1e3];
+        }
         println!(
             "{name}: recording {:.0} µs, frame {:.1} µs, silence {:.1} µs before and {:.1} after{}",
             us(recording.len()),
@@ -861,7 +914,8 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
     );
 
     let mut table = String::from(
-        "first,second,ifs_ms,ifs_after_second_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,per,\
+        "first,second,ifs_ms,ifs_after_second_ms,ifs_true_ms,ifs_true_after_first_ms,\
+         ifs_true_after_second_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,per,\
          impossible,swaps,swap_median_ms,swap_to_first_median_ms,swap_to_second_median_ms,\
          swap_max_ms,retune_median_ms,duplicates,lost_late,lost_listening,queued_median,\
          queued_max,posted_by\n",
@@ -918,6 +972,11 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
                 }
             };
             let (per_h, per_z) = (rate(0), rate(1));
+            // The IFS from frame end to next frame start: the gap, and the
+            // silence the recordings keep on either side (none when cut).
+            let true_first = ifs + silence[phy[0]][1] + silence[phy[1]][0];
+            let true_second = after + silence[phy[1]][1] + silence[phy[0]][0];
+            let true_mean = (true_first + true_second) / 2.0;
             let per = 1.0 - (r.received[0] + r.received[1]) as f64 / (sent[0] + sent[1]) as f64;
             let mut all: Vec<f64> = r.swaps.concat();
             let n = all.len();
@@ -946,7 +1005,8 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
             );
             writeln!(
                 table,
-                "{first},{second},{ifs},{after},{},{},{},{},{per_h:.4},{per_z:.4},{per:.4},{},{n},\
+                "{first},{second},{ifs},{after},{true_mean:.4},{true_first:.4},{true_second:.4},\
+                 {},{},{},{},{per_h:.4},{per_z:.4},{per:.4},{},{n},\
                  {swap:.4},{to_first:.4},{to_second:.4},{max:.4},{retune:.4},{},{},{},\
                  {queued_median},{queued_max},{}",
                 sent[0],
