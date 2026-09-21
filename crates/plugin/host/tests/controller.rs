@@ -841,3 +841,92 @@ fn hold_decides_what_happens_to_what_the_old_flowgraph_left() {
         }
     }
 }
+
+/// `receiver()` with a swappable block of type `mid` between its two.
+fn receiver_with(mid: &str) -> Description {
+    // A delay of nothing: the stream as it is, from another block.
+    let n = if mid.starts_with("Delay") {
+        "n = 0"
+    } else {
+        ""
+    };
+    Description::from_toml(&format!(
+        r#"
+        name = "rx {mid}"
+        connections = "copy > mid > snk"
+        swappable = ["mid"]
+        [blocks.copy]
+        type = "Copy<f32>"
+        [blocks.mid]
+        type = "{mid}"
+        {n}
+        [blocks.snk]
+        type = "VectorSink<f32>"
+        [inputs]
+        samples = "copy.input"
+        "#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_swappable_block_is_replaced_alone_and_loses_nothing() {
+    let mut ctrl = controller();
+    ctrl.spawn("src", source(0, 400_000.0)).unwrap();
+    ctrl.spawn("rx", receiver_with("Copy<f32>")).unwrap();
+    let names: Vec<&str> = ctrl.names().collect();
+    assert_eq!(names, ["rx", "rx/mid", "src"]);
+    let main = ctrl.handle("rx").unwrap().id();
+    for k in 0..6 {
+        sleep(Duration::from_millis(30));
+        let mid = if k % 2 == 0 {
+            "Delay<f32>"
+        } else {
+            "Copy<f32>"
+        };
+        let replaced = ctrl.replace("rx", receiver_with(mid), Hold::Keep).unwrap();
+        assert_eq!(replaced.old.name(), "rx/mid");
+    }
+    assert_eq!(
+        ctrl.handle("rx").unwrap().id(),
+        main,
+        "the rest was not replaced"
+    );
+    ctrl.wait("src").unwrap();
+    let rx = ctrl.wait("rx").unwrap();
+    // One sink all along: everything, once, in order.
+    assert_eq!(items(&rx), (0..N).collect::<Vec<_>>());
+}
+
+#[test]
+fn only_swappable_blocks_are_replaced_alone() {
+    let mut ctrl = controller();
+    ctrl.spawn("src", source(0, 400_000.0)).unwrap();
+    ctrl.spawn("rx", receiver_with("Copy<f32>")).unwrap();
+    // The same description: nothing to replace.
+    let err = ctrl
+        .replace("rx", receiver_with("Copy<f32>"), Hold::Keep)
+        .unwrap_err();
+    assert!(err.to_string().contains("changes none"), "{err}");
+    // A change of a block that is not swappable.
+    let mut changed = receiver_with("Delay<f32>");
+    changed.blocks[0].type_name = "Delay<f32>".into();
+    let err = ctrl.replace("rx", changed, Hold::Keep).unwrap_err();
+    assert!(err.to_string().contains("only those"), "{err}");
+    ctrl.stop("src").unwrap();
+    ctrl.stop("rx").unwrap();
+    assert_eq!(ctrl.names().count(), 0, "its segments stop with it");
+}
+
+#[test]
+fn a_flowgraph_with_swappable_blocks_runs_again() {
+    let mut ctrl = controller();
+    for start in [0, N] {
+        // The source first: its link still carries the end of the last run.
+        ctrl.spawn("src", source(start, 2e6)).unwrap();
+        ctrl.spawn("rx", receiver_with("Copy<f32>")).unwrap();
+        ctrl.wait("src").unwrap();
+        let rx = ctrl.wait("rx").unwrap();
+        assert_eq!(items(&rx), (start..start + N).collect::<Vec<_>>());
+    }
+}

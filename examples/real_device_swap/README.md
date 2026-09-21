@@ -202,3 +202,28 @@ The HaLow receiver is the dyn branch's v6 (`examples/wlan` on S1G), and
 includes the fix of dyn's commit 5d664f9a ("guard Signal state against full
 output buffer"): the equalizer adds the `wifi_start` tag only with the first
 data symbol it writes, so a full output cannot orphan it.
+
+## Replacing one block
+
+`flows/wlan_granular_viterbi.toml` and `flows/wlan_granular_hard.toml` are
+`wlan_granular.toml` with its decoder `swappable`, one decoding by Viterbi
+(`WlanDecoder<Ah>`), the other by the convolutional code's inverse, which
+corrects nothing (`WlanHardDecoder<Ah>`). The decoder runs as a flowgraph
+of its own, `rx/dec`, linked to the other twelve blocks, `rx`; replacing one
+description with the other replaces the decoder only, and the equalizer's
+output for the next frame, with its `wifi_start` tag, waits on the link for
+the new one.
+
+```text
+cargo run --release -- --source replay --cpus auto --keep-awake --retune-us 0 \
+    --swap wlan_granular_viterbi.toml,wlan_granular_hard.toml
+```
+
+`figures/block_swap.png` (`plot_block_swap.py`): the receiver replaced
+whole after every frame against its decoder only, 400 frames per spacing.
+The decoder alone takes 0.046 ms to replace against 0.187 ms, and no frame
+is lost at any spacing (1 in 11,600 over the sweep), where replacing the
+whole receiver loses half of them below 0.18 ms: the synchronizer and the
+equalizer never stop, and a frame is only at risk if the old decoder took
+its first bytes. Each description posted half of the frames (the replay
+counts them by the name of the description that posted them).

@@ -12,13 +12,16 @@ use crate::ViterbiDecoder;
 
 /// Decodes the data symbols of each frame the equalizer tags, and posts
 /// its MPDUs with a correct FCS, without the FCS, on `rx_frames` and as
-/// RFtap on `rftap`; with `invalid_frames`, also the others, whole.
+/// RFtap on `rftap`; with `invalid_frames`, also the others, whole. With
+/// `hard`, the convolutional code is undone by its inverse instead of
+/// Viterbi decoding (see [`ViterbiDecoder::decode_hard`]).
 #[derive(Block)]
 #[message_outputs(rx_frames, rftap)]
 pub struct Decoder<S: Standard> {
     #[input]
     input: DefaultCpuReader<u8>,
     invalid_frames: bool,
+    hard: bool,
     frame: Option<FrameParam>,
     copied: usize,
     rx_symbols: Vec<u8>,
@@ -34,11 +37,17 @@ pub struct Decoder<S: Standard> {
 
 impl<S: Standard> Decoder<S> {
     pub fn new(invalid_frames: bool) -> Self {
+        Self::with_hard(invalid_frames, false)
+    }
+
+    /// Decoding by the code's inverse (`hard`) or by Viterbi.
+    pub fn with_hard(invalid_frames: bool, hard: bool) -> Self {
         let mut input = DefaultCpuReader::default();
         input.set_min_items(S::N_DATA_SC);
         Self {
             input,
             invalid_frames,
+            hard,
             frame: None,
             copied: 0,
             rx_symbols: vec![0; S::N_DATA_SC * S::MAX_SYMBOLS],
@@ -83,7 +92,13 @@ impl<S: Standard> Decoder<S> {
             }
         }
 
-        self.viterbi.decode(
+        let decode = if self.hard {
+            ViterbiDecoder::decode_hard
+        } else {
+            ViterbiDecoder::decode
+        };
+        decode(
+            &mut self.viterbi,
             frame.mcs.rate,
             frame.n_symbols,
             n_cbps,

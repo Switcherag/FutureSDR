@@ -41,6 +41,7 @@ extern crate futuresdr_plugin_rt as futuresdr;
 mod bladerf_source;
 mod replay;
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 #[cfg(feature = "bladerf")]
 use std::io::Write as _;
@@ -549,10 +550,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
             }
             rx_idx += 1;
         }
-        let names: Vec<String> = ctrl.names().map(str::to_string).collect();
-        for name in names {
-            ctrl.stop_async(&name).await?;
-        }
+        stop_all(&mut ctrl).await?;
         anyhow::Ok((swaps, retunes, counts))
     })?;
     let (mut swaps, mut retunes) = (swaps, retunes);
@@ -578,12 +576,38 @@ fn run_bladerf(_args: &Args, _cpus: &[usize], _registry: Registry) -> Result<()>
 
 // ── Replay ───────────────────────────────────────────────────────────────
 
+/// The PHY of a receiver named `name`: `halow` or `zigbee`, or either
+/// followed by `/` and anything (`halow/hard`).
+fn phy_named(name: &str) -> Option<usize> {
+    let phy = name.split('/').next().unwrap_or_default();
+    PHYS.iter().position(|p| *p == phy)
+}
+
 /// The PHY a receiver description posts frames of, by its name.
 fn phy_of(desc: &Description) -> Result<usize> {
     let name = desc.name.as_deref().unwrap_or_default();
-    PHYS.iter()
-        .position(|p| *p == name)
+    phy_named(name)
         .ok_or_else(|| anyhow::anyhow!("a receiver named {name:?}: expected halow or zigbee"))
+}
+
+/// Stop every flowgraph; those of a swappable block stop with theirs.
+async fn stop_all(ctrl: &mut Controller) -> Result<()> {
+    let names: Vec<String> = ctrl.names().map(str::to_string).collect();
+    for name in names {
+        if ctrl.names().any(|n| n == name) {
+            ctrl.stop_async(&name).await?;
+        }
+    }
+    Ok(())
+}
+
+/// `name:count` of each description that posted frames.
+fn posted_by(origins: &BTreeMap<String, usize>) -> String {
+    origins
+        .iter()
+        .map(|(o, n)| format!("{o}:{n}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What one IFS of the replay gave.
@@ -606,6 +630,8 @@ struct StepResult {
     missed: usize,
     /// Items queued on the link when each swap began.
     queued: Vec<f64>,
+    /// Frames posted, by the description that posted them.
+    origins: BTreeMap<String, usize>,
 }
 
 /// Replay step `step` to `pair`, the receivers taking turns from the first.
@@ -633,6 +659,8 @@ async fn replay_step(
     let mut impossible = 0;
     let mut duplicates = 0;
     let mut decoded = vec![false; sent.len()];
+    // Frames posted, by the description that posted them.
+    let mut origins: BTreeMap<String, usize> = BTreeMap::new();
     let mut latency = Vec::new();
     let mut queued = Vec::new();
     // Each swap: the decoded frame's end, when it was posted, when the swap
@@ -657,7 +685,8 @@ async fn replay_step(
             continue;
         };
         quiet_since = None;
-        let got = PHYS.iter().position(|p| *p == origin).unwrap();
+        let got = phy_named(&origin).unwrap();
+        *origins.entry(origin.clone()).or_insert(0) += 1;
 
         // The transmission it decodes: the last of its PHY that ended before
         // it arrived (every copy is the same recording).
@@ -698,10 +727,7 @@ async fn replay_step(
         listening.push((done, phy[next]));
         log.push((frame.map_or(f64::NAN, |f| f.end), at, done, waiting));
     }
-    let names: Vec<String> = ctrl.names().map(str::to_string).collect();
-    for name in names {
-        ctrl.stop_async(&name).await?;
-    }
+    stop_all(ctrl).await?;
     if std::env::var_os("REPLAY_LOSSES").is_some() {
         let slow = latency.iter().filter(|l| **l > 3e-4).count();
         let worst = latency.iter().copied().fold(0.0, f64::max);
@@ -768,6 +794,7 @@ async fn replay_step(
         late,
         missed,
         queued,
+        origins,
     })
 }
 
@@ -835,7 +862,7 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
         "first,second,ifs_ms,ifs_after_second_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,per,\
          impossible,swaps,swap_median_ms,swap_to_first_median_ms,swap_to_second_median_ms,\
          swap_max_ms,retune_median_ms,duplicates,lost_late,lost_listening,queued_median,\
-         queued_max\n",
+         queued_max,posted_by\n",
     );
     for [first, second] in pairs {
         let pair = [
@@ -919,7 +946,7 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
                 table,
                 "{first},{second},{ifs},{after},{},{},{},{},{per_h:.4},{per_z:.4},{per:.4},{},{n},\
                  {swap:.4},{to_first:.4},{to_second:.4},{max:.4},{retune:.4},{},{},{},\
-                 {queued_median},{queued_max}",
+                 {queued_median},{queued_max},{}",
                 sent[0],
                 r.received[0],
                 sent[1],
@@ -928,7 +955,11 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
                 r.duplicates,
                 r.late,
                 r.missed,
+                posted_by(&r.origins),
             )?;
+            if r.origins.len() > 1 {
+                println!("           posted by {}", posted_by(&r.origins));
+            }
         }
     }
     let path = args

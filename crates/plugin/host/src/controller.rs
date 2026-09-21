@@ -41,6 +41,8 @@ use crate::description::PortDecl;
 use crate::items::ItemType;
 use crate::items::with_item_type;
 use crate::registry::Registry;
+use crate::segments::Split;
+use crate::segments::changed_swappable;
 use crate::topic::Tap;
 use crate::topic::Topic;
 use crate::topic::TopicSink;
@@ -501,6 +503,24 @@ pub struct Controller {
     desired: HashMap<String, BTreeMap<String, Pmt>>,
     /// flowgraph -> control -> value set on the running flowgraph
     applied: HashMap<String, BTreeMap<String, Pmt>>,
+    /// Ports of flowgraphs with swappable blocks that are on one of their
+    /// segments: (flowgraph, port) -> (segment, port).
+    aliases: HashMap<PortKey, PortKey>,
+    /// Flowgraphs with swappable blocks: the description they run.
+    segmented: HashMap<String, Description>,
+}
+
+/// The flowgraph running swappable block `block` of flowgraph `name`.
+fn segment_name(name: &str, block: &str) -> String {
+    format!("{name}/{block}")
+}
+
+/// The flowgraph of a part of flowgraph `name`: its main one, or a segment.
+fn part_name(name: &str, part: &Option<String>) -> String {
+    match part {
+        None => name.to_string(),
+        Some(block) => segment_name(name, block),
+    }
 }
 
 fn split_port(what: &str) -> Result<PortKey> {
@@ -567,6 +587,8 @@ impl Controller {
             topics: HashMap::new(),
             desired: HashMap::new(),
             applied: HashMap::new(),
+            aliases: HashMap::new(),
+            segmented: HashMap::new(),
         }
     }
 
@@ -609,13 +631,44 @@ impl Controller {
         block_on(scheduler.spawn(f(self)))
     }
 
+    /// Where port `what` (`"flowgraph.port"`) is: on the flowgraph named, or
+    /// on the segment of a swappable block that has it.
+    fn port(&self, what: &str) -> Result<PortKey> {
+        let key = split_port(what)?;
+        Ok(self.aliases.get(&key).cloned().unwrap_or(key))
+    }
+
+    /// Move what is attached to port `from` to port `to`: links, their
+    /// subscriptions, channels and taps made before the port moved to a
+    /// segment.
+    fn rekey(&mut self, from: &PortKey, to: &PortKey) {
+        if let Some(v) = self.links.remove(from) {
+            self.links.insert(to.clone(), v);
+        }
+        for v in self.links.values_mut().filter(|v| *v == from) {
+            *v = to.clone();
+        }
+        if let Some(v) = self.subscriptions.remove(from) {
+            self.subscriptions.insert(to.clone(), v);
+        }
+        if self.parked.remove(from) {
+            self.parked.insert(to.clone());
+        }
+        if let Some(v) = self.channels.remove(from) {
+            self.channels.insert(to.clone(), v);
+        }
+        if let Some(v) = self.topics.remove(from) {
+            self.topics.insert(to.clone(), v);
+        }
+    }
+
     /// Connect output `from` of one flowgraph to input `to` of another, both
     /// written `"flowgraph.port"`, for streams or messages. The input's
     /// flowgraph must not be running; each input has one link, an output may
     /// have several.
     pub fn link(&mut self, from: &str, to: &str) -> Result<()> {
-        let from = split_port(from)?;
-        let to = split_port(to)?;
+        let from = self.port(from)?;
+        let to = self.port(to)?;
         if self.flowgraphs.contains_key(&to.0) {
             bail!("'{}' is running; link its inputs before spawning it", to.0);
         }
@@ -633,7 +686,7 @@ impl Controller {
 
     /// Remove the link of input `to`, whose flowgraph must not be running.
     pub fn unlink(&mut self, to: &str) -> Result<()> {
-        let to = split_port(to)?;
+        let to = self.port(to)?;
         if self.flowgraphs.contains_key(&to.0) {
             bail!(
                 "'{}' is running; unlink its inputs once it is stopped",
@@ -778,7 +831,7 @@ impl Controller {
 
     /// Input `to` and the output it is linked to.
     fn linked(&self, to: &str) -> Result<(PortKey, PortKey)> {
-        let to = split_port(to)?;
+        let to = self.port(to)?;
         let from = self
             .links
             .get(&to)
@@ -790,7 +843,7 @@ impl Controller {
     /// The messages message output `from` (`"flowgraph.port"`) posts from
     /// now on, whichever flowgraph runs under that name.
     pub fn tap(&mut self, from: &str) -> Result<Tap> {
-        let key = split_port(from)?;
+        let key = self.port(from)?;
         let topic = self.output_topic(&key)?;
         Ok(Tap::new(topic, from.to_string()))
     }
@@ -818,7 +871,7 @@ impl Controller {
     /// State of the link of stream or message input `port`
     /// (`"flowgraph.port"`), or of all the links of stream output `port`.
     pub fn link_stats(&self, port: &str) -> Option<ChannelStats> {
-        let key = split_port(port).ok()?;
+        let key = self.port(port).ok()?;
         if let Some(channel) = self.channels.get(&key) {
             return channel.stats(None);
         }
@@ -1276,12 +1329,60 @@ impl Controller {
     }
 
     /// Build and start `desc` as flowgraph `name`.
+    ///
+    /// Each block `desc` lists as `swappable` runs as a flowgraph of its own,
+    /// `name/block`, linked to the flowgraph of the others, `name`; the
+    /// ports of `desc` keep their names (`name.port`) wherever their blocks
+    /// run. [`replace`](Self::replace) with a description that differs in
+    /// these blocks only replaces them.
     pub async fn spawn_async(&mut self, name: &str, desc: Description) -> Result<()> {
-        if self.flowgraphs.contains_key(name) {
+        if self.flowgraphs.contains_key(name) || self.segmented.contains_key(name) {
             bail!("a flowgraph '{name}' is already running");
+        }
+        if !desc.swappable.is_empty() {
+            return self.spawn_segmented(name, desc).await;
         }
         let standby = self.prepare_async(name, desc).await?;
         self.commit_async(standby, Hold::Keep).await?;
+        Ok(())
+    }
+
+    async fn spawn_segmented(&mut self, name: &str, desc: Description) -> Result<()> {
+        let split = Split::new(&desc)?;
+        for (port, block) in &split.moved {
+            let from = (name.to_string(), port.clone());
+            let to = (segment_name(name, block), port.clone());
+            self.rekey(&from, &to);
+            self.aliases.insert(from, to);
+        }
+        for (from, output, to, input) in &split.links {
+            self.link(
+                &format!("{}.{output}", part_name(name, from)),
+                &format!("{}.{input}", part_name(name, to)),
+            )?;
+        }
+        // Downstream first does not matter: links queue until read.
+        let mut started: Vec<String> = Vec::new();
+        let parts = split
+            .segments
+            .into_iter()
+            .map(|(block, d)| (segment_name(name, &block), d))
+            .chain([(name.to_string(), split.main)]);
+        for (part, d) in parts {
+            let result = async {
+                let standby = self.prepare_async(&part, d).await?;
+                self.commit_async(standby, Hold::Keep).await
+            }
+            .await;
+            if let Err(e) = result {
+                for done in started {
+                    let _ = self.stop_async(&done).await;
+                }
+                return Err(e.context(format!("starting '{part}' of '{name}'")));
+            }
+            started.push(part);
+        }
+        self.segmented.insert(name.to_string(), desc);
         Ok(())
     }
 
@@ -1308,6 +1409,9 @@ impl Controller {
         desc: Description,
         hold: Hold,
     ) -> Result<Replacement> {
+        if self.segmented.contains_key(name) {
+            return self.replace_swappable(name, desc, hold).await;
+        }
         let t0 = Instant::now();
         if !self.flowgraphs.contains_key(name) {
             bail!("no flowgraph '{name}' is running");
@@ -1327,6 +1431,47 @@ impl Controller {
                 total: switched - t0,
             },
         })
+    }
+
+    /// Replace the swappable blocks of `name` that `desc` changes, each
+    /// flowgraph of one replaced like a flowgraph; the rest keeps running.
+    /// Returns the last replacement.
+    async fn replace_swappable(
+        &mut self,
+        name: &str,
+        desc: Description,
+        hold: Hold,
+    ) -> Result<Replacement> {
+        let old = &self.segmented[name];
+        let changed = changed_swappable(old, &desc).ok_or_else(|| {
+            anyhow!(
+                "'{name}' runs with swappable blocks: a replacement may change only those \
+                 (stop it and spawn the new description to change the rest)"
+            )
+        })?;
+        if changed.is_empty() {
+            bail!("the description replacing '{name}' changes none of its blocks");
+        }
+        let split = Split::new(&desc)?;
+        let mut last = None;
+        for block in &changed {
+            let (_, segment) = split
+                .segments
+                .iter()
+                .find(|(b, _)| b == block)
+                .expect("a changed swappable block has a segment");
+            let part = segment_name(name, block);
+            last = Some(Box::pin(self.replace_async(&part, segment.clone(), hold)).await?);
+            // What runs now, for the next comparison.
+            let running = self.segmented.get_mut(name).unwrap();
+            let at = running
+                .blocks
+                .iter()
+                .position(|b| &b.name == block)
+                .unwrap();
+            running.blocks[at] = desc.blocks[at].clone();
+        }
+        Ok(last.expect("at least one block changed"))
     }
 
     /// Blocking form of [`replace_async`](Self::replace_async).
@@ -1430,6 +1575,42 @@ impl Controller {
     /// Stop flowgraph `name` and wait until it has terminated. Streams it
     /// writes to end.
     pub async fn stop_async(&mut self, name: &str) -> Result<Finished> {
+        if let Some(desc) = self.segmented.remove(name) {
+            let finished = self.stop_one(name).await;
+            for s in &desc.swappable {
+                // It may have been stopped by its own name.
+                let _ = self.stop_one(&segment_name(name, &s.block)).await;
+            }
+            self.unsegment(name, &desc);
+            return finished;
+        }
+        self.stop_one(name).await
+    }
+
+    /// Undo what running `desc` as flowgraph `name` in segments set up, once
+    /// its flowgraphs are gone: the links between them go, and its ports,
+    /// with what is linked or tapped there, are the flowgraph's again.
+    fn unsegment(&mut self, name: &str, desc: &Description) {
+        let Ok(split) = Split::new(desc) else {
+            return;
+        };
+        for (from, output, to, input) in &split.links {
+            let _ = self.unlink(&format!("{}.{input}", part_name(name, to)));
+            // Its stream ended with the run: a reader of the next one would
+            // take that end for its own.
+            let out = (part_name(name, from), output.clone());
+            self.channels.remove(&out);
+            self.topics.remove(&out);
+        }
+        for (port, block) in &split.moved {
+            let from = (segment_name(name, block), port.clone());
+            let to = (name.to_string(), port.clone());
+            self.aliases.remove(&to);
+            self.rekey(&from, &to);
+        }
+    }
+
+    async fn stop_one(&mut self, name: &str) -> Result<Finished> {
         let managed = self
             .flowgraphs
             .remove(name)
@@ -1456,6 +1637,18 @@ impl Controller {
     /// Wait until flowgraph `name` has finished by itself: its sources
     /// ended, including the flowgraphs feeding its inputs.
     pub async fn wait_async(&mut self, name: &str) -> Result<Finished> {
+        if let Some(desc) = self.segmented.remove(name) {
+            let finished = self.wait_one(name).await;
+            for s in &desc.swappable {
+                let _ = self.wait_one(&segment_name(name, &s.block)).await;
+            }
+            self.unsegment(name, &desc);
+            return finished;
+        }
+        self.wait_one(name).await
+    }
+
+    async fn wait_one(&mut self, name: &str) -> Result<Finished> {
         let managed = self
             .flowgraphs
             .remove(name)

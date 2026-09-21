@@ -104,6 +104,10 @@ frames = "dec.rx_frames"
 
 [radio]                            # settings this one asks of those feeding it
 frequency = 919.0e6
+
+# swappable = ["eq"]               # blocks that can be replaced on their own
+[swappable]                        # ... with the item types of their stream
+dec = { input = "u8" }             # ports where the block type does not tell
 ```
 
 ## Controller
@@ -143,6 +147,15 @@ let old = ctrl.commit(next, Hold::Keep)?;        // microseconds
   flowgraph starts on items that arrive after. A flowgraph started later, or
   replacing one that had settings, gets them first. Parked links ask for
   nothing; demands nobody offers are ignored.
+- **Swappable blocks**: a block a description lists as `swappable` runs as
+  a flowgraph of its own (`name/block`), linked to one of the other blocks
+  (`name`); the description's ports keep their names wherever their
+  blocks run, and links carry stream tags. Replacing the flowgraph with a
+  description that differs in these blocks only replaces them: the rest
+  keeps running, with its state, and with `Hold::Keep` nothing is lost
+  (what the old block took, it finishes; what it did not, the new one
+  gets). Any other change is refused; stop and spawn instead. The
+  replaced block starts afresh: its own state is not carried over.
 - Every operation has an `_async` form. The blocking forms must not be
   called from the runtime's tasks; `Controller::run` runs async code as such
   a task, which also avoids waking a blocked thread for each operation.

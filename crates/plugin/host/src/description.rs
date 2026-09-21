@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -89,6 +90,20 @@ pub struct Description {
     /// Settings this flowgraph asks of the flowgraphs feeding it, in file
     /// order.
     pub radio: Vec<(String, Pmt)>,
+    /// Blocks that can be replaced on their own (`swappable`): each runs as
+    /// a flowgraph of its own, linked to the rest, so that a description that
+    /// differs from the running one in these blocks only replaces them.
+    pub swappable: Vec<SwappableDecl>,
+}
+
+/// A block that can be replaced on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwappableDecl {
+    /// The block.
+    pub block: String,
+    /// Item types of its stream ports, where its type does not tell them
+    /// (`WlanDecoder<Ah>`: `input = "u8"`).
+    pub items: BTreeMap<String, ItemType>,
 }
 
 /// One block of a [`Description`].
@@ -127,7 +142,7 @@ pub struct MessagePortDecl {
     pub port: String,
 }
 
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 11] = [
     "name",
     "plugins",
     "connections",
@@ -138,6 +153,7 @@ const KEYS: [&str; 10] = [
     "message_outputs",
     "controls",
     "radio",
+    "swappable",
 ];
 
 impl Description {
@@ -216,6 +232,7 @@ impl Description {
             )?,
             controls: message_ports(table.get("controls"), "controls", &blocks)?,
             radio,
+            swappable: swappable(table.get("swappable"), &blocks)?,
             links: connections.links,
             blocks,
         };
@@ -437,6 +454,59 @@ fn ports(value: Option<&Value>, key: &str, blocks: &[BlockDecl]) -> Result<Vec<P
             })
         })
         .collect()
+}
+
+/// `swappable = ["block", ...]`, or a table of blocks, each with the item
+/// types of its stream ports: `[swappable] dec = { input = "u8" }`.
+fn swappable(value: Option<&Value>, blocks: &[BlockDecl]) -> Result<Vec<SwappableDecl>> {
+    let declared = |block: &str| {
+        if blocks.iter().any(|b| b.name == block) {
+            Ok(())
+        } else {
+            Err(anyhow!("swappable: no block '{block}'"))
+        }
+    };
+    match value {
+        None => Ok(Vec::new()),
+        Some(Value::Array(names)) => names
+            .iter()
+            .map(|n| {
+                let block = n
+                    .as_str()
+                    .ok_or_else(|| anyhow!("'swappable' must list block names"))?;
+                declared(block)?;
+                Ok(SwappableDecl {
+                    block: block.to_string(),
+                    items: BTreeMap::new(),
+                })
+            })
+            .collect(),
+        Some(Value::Table(entries)) => entries
+            .iter()
+            .map(|(block, ports)| {
+                declared(block)?;
+                let Value::Table(ports) = ports else {
+                    bail!("swappable.{block} must be a table of port = \"item type\"");
+                };
+                let items = ports
+                    .iter()
+                    .map(|(port, item)| {
+                        let item = item
+                            .as_str()
+                            .ok_or_else(|| anyhow!("swappable.{block}.{port} must be a string"))?
+                            .parse::<ItemType>()
+                            .map_err(|e| anyhow!("swappable.{block}.{port}: {e}"))?;
+                        Ok((port.clone(), item))
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(SwappableDecl {
+                    block: block.clone(),
+                    items,
+                })
+            })
+            .collect(),
+        Some(_) => bail!("'swappable' must be a list of blocks or a table"),
+    }
 }
 
 /// A TOML value as a [`Pmt`].

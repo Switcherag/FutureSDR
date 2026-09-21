@@ -159,6 +159,7 @@ impl<T: CpuSample> Channel<T> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    #[cfg(test)]
     pub(crate) fn write(&self, generation: u64, items: &[T]) -> Write {
         self.write_tagged(generation, items, &[])
     }
@@ -190,7 +191,8 @@ impl<T: CpuSample> Channel<T> {
             sub.dropped += (skip + excess) as u64;
             let base = sub.head + sub.queue.len() as u64;
             for t in tags.iter().filter(|t| t.index >= skip) {
-                sub.tags.push_back((base + (t.index - skip) as u64, t.tag.clone()));
+                sub.tags
+                    .push_back((base + (t.index - skip) as u64, t.tag.clone()));
             }
             sub.queue.extend(items);
             gather(&mut waiting, &mut sub.readers_waiting);
@@ -202,6 +204,7 @@ impl<T: CpuSample> Channel<T> {
 
     /// Take items of subscription `sub` into `out` for the reader
     /// `generation`. `active` records whether this reader ever had its turn.
+    #[cfg(test)]
     pub(crate) fn read(&self, sub: u64, generation: u64, out: &mut [T], active: &mut bool) -> Read {
         self.read_tagged(sub, generation, out, &mut Vec::new(), active)
     }
@@ -402,7 +405,9 @@ impl<T: CpuSample> Pipe for Channel<T> {
 
     fn subscribe(&self, parked: bool) -> u64 {
         let id = next_generation();
-        self.lock().subscriptions.push(Subscription::new(id, parked));
+        self.lock()
+            .subscriptions
+            .push(Subscription::new(id, parked));
         id
     }
 
@@ -601,10 +606,13 @@ impl<T: CpuSample> Kernel for BridgeSource<T> {
             self.wait = None;
             return Ok(());
         }
-        match self
-            .channel
-            .read_tagged(self.sub, self.generation, out, &mut self.tags, &mut self.active)
-        {
+        match self.channel.read_tagged(
+            self.sub,
+            self.generation,
+            out,
+            &mut self.tags,
+            &mut self.active,
+        ) {
             Read::Items(n) => {
                 for t in self.tags.drain(..) {
                     out_tags.add_tag(t.index, t.tag);

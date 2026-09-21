@@ -138,6 +138,13 @@ export_plugin! {
                           wrong FCS, whole).",
             add: |s| Decoder::<T>::new(s.get_or("invalid_frames", false)?),
         },
+        {
+            name: "WlanHardDecoder",
+            types: [A, Ah],
+            description: "WlanDecoder undoing the convolutional code by its inverse instead of \
+                          Viterbi decoding: no error correction, rate 1/2 only.",
+            add: |s| Decoder::<T>::with_hard(s.get_or("invalid_frames", false)?, true),
+        },
         // examples/wlan's front end, block by block.
         {
             name: "WlanMagSquared",

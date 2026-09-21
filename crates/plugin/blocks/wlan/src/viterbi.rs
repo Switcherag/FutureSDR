@@ -516,6 +516,34 @@ impl ViterbiDecoder {
     }
 }
 
+impl ViterbiDecoder {
+    /// Decode like [`decode`](Self::decode), but without Viterbi: the code's
+    /// feedforward inverse, `b[n] = A[n-2] + A[n-4] + B[n] + B[n-1] + B[n-2] +
+    /// B[n-3] + B[n-4]` (mod 2), since `(D^2 + D^4) gA + (1 + D + D^2 + D^3 +
+    /// D^4) gB = 1` for gA = 133 and gB = 171 (octal). It corrects nothing:
+    /// a wrong coded bit spoils up to seven decoded ones, and a punctured
+    /// (erased) bit counts as 0, so only rate 1/2 decodes whole.
+    pub fn decode_hard(
+        &mut self,
+        rate: CodeRate,
+        n_symbols: usize,
+        n_cbps: usize,
+        n_data_bits: usize,
+        in_bits: &[u8],
+        out_bits: &mut [u8],
+    ) {
+        self.reset(rate);
+        self.depuncture(in_bits, n_symbols, n_cbps);
+        let bit = |k: usize| self.depunctured.get(k).map_or(0, |&b| b & (b != 2) as u8);
+        let a = |n: isize| if n < 0 { 0 } else { bit(2 * n as usize) };
+        let b = |n: isize| if n < 0 { 0 } else { bit(2 * n as usize + 1) };
+        for n in 0..n_data_bits as isize {
+            out_bits[n as usize] =
+                a(n - 2) ^ a(n - 4) ^ b(n) ^ b(n - 1) ^ b(n - 2) ^ b(n - 3) ^ b(n - 4);
+        }
+    }
+}
+
 /* Parity lookup table */
 const PARTAB: [u8; 256] = [
     0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,

@@ -23,6 +23,7 @@ mod controller;
 mod description;
 mod items;
 mod registry;
+mod segments;
 #[cfg(test)]
 mod test_rng;
 mod topic;
@@ -42,6 +43,7 @@ pub use description::BlockDecl;
 pub use description::Description;
 pub use description::MessagePortDecl;
 pub use description::PortDecl;
+pub use description::SwappableDecl;
 pub use description::to_pmt;
 pub use futuresdr_plugin_rt::buffer::ReuseCpuReader;
 pub use futuresdr_plugin_rt::buffer::ReuseCpuWriter;

@@ -98,7 +98,7 @@ fn receive<S: Standard>(
     chunks: Option<u64>,
     invalid_frames: bool,
 ) -> Result<Vec<Vec<u8>>> {
-    receive_with::<S>(samples, chunks, invalid_frames, false)
+    receive_with::<S>(samples, chunks, invalid_frames, false, false)
 }
 
 /// The receiver with the fused blocks, or (`granular`) as `examples/wlan`
@@ -108,6 +108,7 @@ fn receive_with<S: Standard>(
     chunks: Option<u64>,
     invalid_frames: bool,
     granular: bool,
+    hard: bool,
 ) -> Result<Vec<Vec<u8>>> {
     let mut fg = Flowgraph::new();
     let src = fg.add(ChunkSource {
@@ -117,7 +118,7 @@ fn receive_with<S: Standard>(
         chunks: chunks.map(Rng::new),
     })?;
     let long = fg.add(SyncLong::<S>::new())?;
-    let dec = fg.add(Decoder::<S>::new(invalid_frames))?;
+    let dec = fg.add(Decoder::<S>::with_hard(invalid_frames, hard))?;
     let (tx, rx) = mpsc::channel(10_000);
     let pipe = fg.add(MessagePipe::new(tx))?;
     if granular {
@@ -269,16 +270,37 @@ fn the_granular_receiver_gives_the_same_frames() -> Result<()> {
         let samples = read_cf32(&wlan_data(&format!("{name}.cf32")));
         let want = expected(&format!("{name}.wlan.txt"));
         for chunks in [None, Some(1)] {
-            let frames = receive_with::<A>(samples.clone(), chunks, false, true)?;
+            let frames = receive_with::<A>(samples.clone(), chunks, false, true, false)?;
             assert_eq!(hex(&frames), hex(&want), "{name} {chunks:?}");
         }
     }
     let want = expected("halow_frame.v6.txt");
     for seed in 0..3 {
         let samples = halow_frame(&mut Rng::new(seed));
-        let frames = receive_with::<Ah>(samples, Some(seed), false, true)?;
+        let frames = receive_with::<Ah>(samples, Some(seed), false, true, false)?;
         assert_eq!(hex(&frames), hex(&want), "seed {seed}");
     }
+    Ok(())
+}
+
+/// Undoing the code without Viterbi gives the same frame when nothing is
+/// wrong (the HaLow frame is at rate 1/2), and on a noisy recording no
+/// frame Viterbi does not give.
+#[test]
+fn the_hard_decoder_decodes_clean_frames_only() -> Result<()> {
+    let want = expected("halow_frame.v6.txt");
+    let frames = receive_with::<Ah>(halow_frame(&mut Rng::new(1)), None, false, false, true)?;
+    assert_eq!(hex(&frames), hex(&want));
+
+    let samples = read_cf32(&wlan_data("bpsk-1-2-15db.cf32"));
+    let viterbi = hex(&expected("bpsk-1-2-15db.wlan.txt"));
+    let hard = hex(&receive_with::<A>(samples, None, false, false, true)?);
+    assert!(hard.iter().all(|f| viterbi.contains(f)), "{hard:?}");
+    eprintln!(
+        "bpsk 1/2 at 15 dB: {} frames by Viterbi, {} without",
+        viterbi.len(),
+        hard.len()
+    );
     Ok(())
 }
 
@@ -295,7 +317,7 @@ fn ah_long_recording_gives_the_frames_of_v6() -> Result<()> {
         let (mut best, mut cpu) = (f64::INFINITY, f64::INFINITY);
         for _ in 0..5 {
             let (since, cpu_since) = (Instant::now(), cpu_time());
-            let frames = receive_with::<Ah>(samples.clone(), None, false, granular)?;
+            let frames = receive_with::<Ah>(samples.clone(), None, false, granular, false)?;
             best = best.min(since.elapsed().as_secs_f64());
             cpu = cpu.min(cpu_time() - cpu_since);
             assert_eq!(frames.len(), want.len());

@@ -1,0 +1,83 @@
+# wlan_granular.toml with its decoder swappable: the decoder runs as a
+# flowgraph of its own, so that replacing this description with
+# wlan_granular_hard.toml replaces the decoder only. This one decodes by
+# Viterbi decoding.
+#
+# 802.11ah (HaLow, S1G 2 MHz at 4 MSps) receiver built as examples/wlan
+# builds its receiver, block by block: the delay line, |x|², x·conj(delayed),
+# the two moving sums and their ratio feed the short training field
+# detector, and the FFT is a block of its own. It sees the same frames as
+# wlan_simple.toml, whose WlanSync and WlanEqualizer fuse these (checked by the
+# wlan plugin's tests); it is here to measure what the fusion saves.
+name = "halow/viterbi"
+connections = """
+in > delay
+in > mag > power
+in > in0.mult
+delay > in1.mult
+mult > corr
+corr > in0.div
+power > in1.div
+delay > in_sig.sync
+corr > in_abs.sync
+div > in_cor.sync
+sync > long > fft > eq > dec
+"""
+
+# The flowgraph's input, fanned out to the three branches.
+[blocks.in]
+type = "Copy<Complex32>"
+
+# The short training field's period: FFT_SIZE / 4.
+[blocks.delay]
+type = "Delay<Complex32>"
+n = 32
+
+[blocks.mag]
+type = "WlanMagSquared"
+
+[blocks.mult]
+type = "WlanMultiplyConj"
+
+# Power over one symbol without cyclic prefix, FFT_SIZE samples.
+[blocks.power]
+type = "WlanMovingSum<f64>"
+len = 128
+
+# Autocorrelation over three STF periods.
+[blocks.corr]
+type = "WlanMovingSum<Complex64>"
+len = 96
+
+[blocks.div]
+type = "WlanDivideMag"
+
+[blocks.sync]
+type = "WlanSyncShort<Ah>"
+
+[blocks.long]
+type = "WlanSyncLong<Ah>"
+
+[blocks.fft]
+type = "WlanFft<Ah>"
+
+[blocks.eq]
+type = "WlanFrameEqualizer<Ah>"
+
+[blocks.dec]
+type = "WlanDecoder<Ah>"
+
+# The decoder runs apart; its input's item type (the equalizer's bytes)
+# cannot be told from its type.
+[swappable]
+dec = { input = "u8" }
+
+[inputs]
+samples = { port = "in.input", type = "c32" }
+
+[message_outputs]
+frames = "dec.rx_frames"
+
+# S1G channel 34 (EU), 2 MHz, as the dyn branch's real-device runs.
+[radio]
+frequency = 919.0e6
