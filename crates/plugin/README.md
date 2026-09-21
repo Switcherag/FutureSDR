@@ -160,7 +160,12 @@ WlanSync<S> > WlanSyncLong<S> > WlanEqualizer<S> > WlanDecoder<S>     S = A | Ah
   is `examples/wlan` moved to S1G).
 
 `WlanSync` includes the delay line and moving averages that fed the
-detector, `WlanEqualizer` the FFT. On the same recordings the plugin decodes
+detector, `WlanEqualizer` the FFT. The plugin also exports these as
+separate blocks, as `examples/wlan` connects them (`WlanMagSquared`,
+`WlanMultiplyConj`, `WlanMovingSum<f64|Complex64>`, `WlanDivideMag`,
+`WlanSyncShort<S>`, `WlanFft<S>`, `WlanFrameEqualizer<S>`, with the basic
+plugin's `Delay`); they give the same frames at 2.6 times the CPU
+(`examples/real_device_swap/flows/wlan_granular.toml`). On the same recordings the plugin decodes
 the same frames as the originals, whatever the chunk sizes
 (`blocks/testdata/expected`): 17 + 1 frames of `examples/wlan`'s captures,
 and the 112 frames v6 decodes from a one-second HaLow recording. On that

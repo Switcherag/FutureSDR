@@ -98,6 +98,17 @@ fn receive<S: Standard>(
     chunks: Option<u64>,
     invalid_frames: bool,
 ) -> Result<Vec<Vec<u8>>> {
+    receive_with::<S>(samples, chunks, invalid_frames, false)
+}
+
+/// The receiver with the fused blocks, or (`granular`) as `examples/wlan`
+/// builds it, block by block.
+fn receive_with<S: Standard>(
+    samples: Vec<Complex32>,
+    chunks: Option<u64>,
+    invalid_frames: bool,
+    granular: bool,
+) -> Result<Vec<Vec<u8>>> {
     let mut fg = Flowgraph::new();
     let src = fg.add(ChunkSource {
         output: DefaultCpuWriter::default(),
@@ -105,16 +116,49 @@ fn receive<S: Standard>(
         pos: 0,
         chunks: chunks.map(Rng::new),
     })?;
-    let sync = fg.add(SyncShort::<S>::default())?;
     let long = fg.add(SyncLong::<S>::new())?;
-    let eq = fg.add(FrameEqualizer::<S>::new())?;
     let dec = fg.add(Decoder::<S>::new(invalid_frames))?;
     let (tx, rx) = mpsc::channel(10_000);
     let pipe = fg.add(MessagePipe::new(tx))?;
-    fg.stream_dyn(src.id(), "output", sync.id(), "input")?;
-    fg.stream_dyn(sync.id(), "output", long.id(), "input")?;
-    fg.stream_dyn(long.id(), "output", eq.id(), "input")?;
-    fg.stream_dyn(eq.id(), "output", dec.id(), "input")?;
+    if granular {
+        type Delay =
+            blocks::Delay<Complex32, DefaultCpuReader<Complex32>, DefaultCpuWriter<Complex32>>;
+        let delay = fg.add(Delay::new(S::STF_DELAY as isize))?;
+        let mag = fg.add(MagSquared::new())?;
+        let mult = fg.add(MultiplyConj::new())?;
+        let power = fg.add(MovingSum::<f64>::new(S::STF_POWER_WIN))?;
+        let corr = fg.add(MovingSum::<Complex64>::new(S::STF_CORR_WIN))?;
+        let div = fg.add(DivideMag::new())?;
+        let sync = fg.add(SyncShortGranular::<S>::new(sync_short::THRESHOLD))?;
+        let fft = fg.add(granular::Fft::<S>::new())?;
+        let eq = fg.add(FrameEqualizer::<S>::with_fft(false))?;
+        for (a, ap, b, bp) in [
+            (src.id(), "output", delay.id(), "input"),
+            (src.id(), "output", mag.id(), "input"),
+            (src.id(), "output", mult.id(), "in0"),
+            (delay.id(), "output", mult.id(), "in1"),
+            (mag.id(), "output", power.id(), "input"),
+            (mult.id(), "output", corr.id(), "input"),
+            (corr.id(), "output", div.id(), "in0"),
+            (power.id(), "output", div.id(), "in1"),
+            (delay.id(), "output", sync.id(), "in_sig"),
+            (corr.id(), "output", sync.id(), "in_abs"),
+            (div.id(), "output", sync.id(), "in_cor"),
+            (sync.id(), "output", long.id(), "input"),
+            (long.id(), "output", fft.id(), "input"),
+            (fft.id(), "output", eq.id(), "input"),
+            (eq.id(), "output", dec.id(), "input"),
+        ] {
+            fg.stream_dyn(a, ap, b, bp)?;
+        }
+    } else {
+        let sync = fg.add(SyncShort::<S>::default())?;
+        let eq = fg.add(FrameEqualizer::<S>::new())?;
+        fg.stream_dyn(src.id(), "output", sync.id(), "input")?;
+        fg.stream_dyn(sync.id(), "output", long.id(), "input")?;
+        fg.stream_dyn(long.id(), "output", eq.id(), "input")?;
+        fg.stream_dyn(eq.id(), "output", dec.id(), "input")?;
+    }
     fg.message(dec.id(), "rx_frames", pipe.id(), "in")?;
 
     let running = Runtime::new().start(fg)?;
@@ -217,6 +261,27 @@ fn ah_frames_do_not_depend_on_chunks() -> Result<()> {
     Ok(())
 }
 
+/// The front end built block by block sees the same frames as the fused
+/// one, however the samples come.
+#[test]
+fn the_granular_receiver_gives_the_same_frames() -> Result<()> {
+    for name in ["bpsk-1-2-15db", "bpsk-3-4-30db"] {
+        let samples = read_cf32(&wlan_data(&format!("{name}.cf32")));
+        let want = expected(&format!("{name}.wlan.txt"));
+        for chunks in [None, Some(1)] {
+            let frames = receive_with::<A>(samples.clone(), chunks, false, true)?;
+            assert_eq!(hex(&frames), hex(&want), "{name} {chunks:?}");
+        }
+    }
+    let want = expected("halow_frame.v6.txt");
+    for seed in 0..3 {
+        let samples = halow_frame(&mut Rng::new(seed));
+        let frames = receive_with::<Ah>(samples, Some(seed), false, true)?;
+        assert_eq!(hex(&frames), hex(&want), "seed {seed}");
+    }
+    Ok(())
+}
+
 /// The one-second recording the HaLow frame was cut from (32 MB, in the
 /// `dyn` branch's `examples/real_device_swap/recording/halow_raw.cf32`),
 /// named by `WLAN_HALOW_RECORDING`.
@@ -226,15 +291,42 @@ fn ah_long_recording_gives_the_frames_of_v6() -> Result<()> {
     let path = std::env::var("WLAN_HALOW_RECORDING").expect("WLAN_HALOW_RECORDING");
     let samples = read_cf32(&PathBuf::from(path));
     let want = expected("halow_raw.v6.txt");
-    let mut best = f64::INFINITY;
-    for _ in 0..5 {
-        let since = Instant::now();
-        let frames = receive::<Ah>(samples.clone(), None, false)?;
-        best = best.min(since.elapsed().as_secs_f64());
-        assert_eq!(frames.len(), want.len());
-        assert_eq!(hex(&frames), hex(&want));
+    for granular in [false, true] {
+        let (mut best, mut cpu) = (f64::INFINITY, f64::INFINITY);
+        for _ in 0..5 {
+            let (since, cpu_since) = (Instant::now(), cpu_time());
+            let frames = receive_with::<Ah>(samples.clone(), None, false, granular)?;
+            best = best.min(since.elapsed().as_secs_f64());
+            cpu = cpu.min(cpu_time() - cpu_since);
+            assert_eq!(frames.len(), want.len());
+            assert_eq!(hex(&frames), hex(&want));
+        }
+        let rate = samples.len() as f64 / best / 1e6;
+        let front = if granular { "granular" } else { "fused" };
+        eprintln!(
+            "{front:8}: {} samples in {best:.4} s: {rate:.1} MSps, {:.0} ms of CPU",
+            samples.len(),
+            cpu * 1e3
+        );
     }
-    let rate = samples.len() as f64 / best / 1e6;
-    eprintln!("{} samples in {best:.4} s: {rate:.1} MSps", samples.len());
     Ok(())
+}
+
+/// Seconds of CPU time this process used (Linux), including the test
+/// harness's own few milliseconds.
+fn cpu_time() -> f64 {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let fields: Vec<&str> = stat
+        .rsplit_once(')')
+        .map_or("", |(_, rest)| rest)
+        .split_whitespace()
+        .collect();
+    let ticks = |i: usize| {
+        fields
+            .get(i)
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    // utime and stime, in clock ticks of 10 ms.
+    (ticks(11) + ticks(12)) / 100.0
 }

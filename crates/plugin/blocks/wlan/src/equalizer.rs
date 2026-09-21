@@ -71,7 +71,9 @@ pub struct FrameEqualizer<S: Standard> {
     input: DefaultCpuReader<Complex32>,
     #[output]
     output: DefaultCpuWriter<u8>,
-    fft: Transform,
+    /// None when the input is already in frequency domain, DC in the middle
+    /// (`examples/wlan`'s `Fft` block in front, with `fft_shift`).
+    fft: Option<Transform>,
     sym: Vec<Complex32>,
     equalizer: S::Equalizer,
     viterbi: ViterbiDecoder,
@@ -83,7 +85,13 @@ pub struct FrameEqualizer<S: Standard> {
 }
 
 impl<S: Standard> FrameEqualizer<S> {
+    /// With the FFT built in.
     pub fn new() -> Self {
+        Self::with_fft(true)
+    }
+
+    /// With the FFT built in, or behind a separate `Fft` block (`fft` false).
+    pub fn with_fft(fft: bool) -> Self {
         let mut input = DefaultCpuReader::default();
         input.set_min_items(S::FFT_SIZE);
         let mut output = DefaultCpuWriter::default();
@@ -92,7 +100,7 @@ impl<S: Standard> FrameEqualizer<S> {
         Self {
             input,
             output,
-            fft: Transform::new(S::FFT_SIZE),
+            fft: fft.then(|| Transform::new(S::FFT_SIZE)),
             sym: vec![Complex32::default(); S::FFT_SIZE],
             equalizer: S::Equalizer::new(),
             // Signal fields have at most two symbols of 48 bits.
@@ -197,7 +205,11 @@ impl<S: Standard> Kernel for FrameEqualizer<S> {
                 State::Data(_) if o == max_o => break,
                 _ => {}
             }
-            self.fft.run(&input[i * n..(i + 1) * n], &mut self.sym);
+            let symbol = &input[i * n..(i + 1) * n];
+            match &mut self.fft {
+                Some(fft) => fft.run(symbol, &mut self.sym),
+                None => self.sym.copy_from_slice(symbol),
+            }
             i += 1;
             match self.state {
                 State::Ltf(k) => {

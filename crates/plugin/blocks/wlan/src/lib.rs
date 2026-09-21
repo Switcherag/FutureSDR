@@ -15,6 +15,14 @@
 //! line and moving averages that feed it built in, and `WlanEqualizer`
 //! includes the FFT. The decoder posts each MPDU with a correct FCS, without
 //! the FCS, on `rx_frames`, and as RFtap on `rftap`.
+//!
+//! The front end is also exported as `examples/wlan` builds it, block by
+//! block (see `granular`), to compare what the fusion saves:
+//!
+//! ```text
+//! Delay, WlanMagSquared, WlanMultiplyConj, WlanMovingSum, WlanDivideMag >
+//! WlanSyncShort<S> > WlanSyncLong<S> > WlanFft<S> > WlanFrameEqualizer<S> > WlanDecoder<S>
+//! ```
 
 #![allow(clippy::needless_range_loop)]
 
@@ -27,6 +35,7 @@ mod a;
 mod ah;
 mod decoder;
 mod equalizer;
+mod granular;
 mod phy;
 mod sync_long;
 mod sync_short;
@@ -39,6 +48,11 @@ pub use decoder::Decoder;
 pub use equalizer::FrameEqualizer;
 pub use equalizer::Signal;
 pub use equalizer::SymbolEqualizer;
+pub use granular::DivideMag;
+pub use granular::MagSquared;
+pub use granular::MovingSum;
+pub use granular::MultiplyConj;
+pub use granular::SyncShortGranular;
 pub use phy::*;
 pub use sync_long::SyncLong;
 pub use sync_short::SyncShort;
@@ -123,6 +137,47 @@ export_plugin! {
                           `rx_frames` and `rftap` (setting invalid_frames: also those with a \
                           wrong FCS, whole).",
             add: |s| Decoder::<T>::new(s.get_or("invalid_frames", false)?),
+        },
+        // examples/wlan's front end, block by block.
+        {
+            name: "WlanMagSquared",
+            description: "|x|² of complex samples, as f64.",
+            add: |_s| MagSquared::new(),
+        },
+        {
+            name: "WlanMultiplyConj",
+            description: "in0 · conj(in1), as Complex64.",
+            add: |_s| MultiplyConj::new(),
+        },
+        {
+            name: "WlanMovingSum",
+            types: [f64, Complex64],
+            description: "Sum of the last `len` items, zero until the window is full.",
+            add: |s| MovingSum::<T>::new(s.get("len")?),
+        },
+        {
+            name: "WlanDivideMag",
+            description: "|in0| / in1: the normalized autocorrelation.",
+            add: |_s| DivideMag::new(),
+        },
+        {
+            name: "WlanSyncShort",
+            types: [A, Ah],
+            description: "examples/wlan's short training field detector, fed by the blocks \
+                          above on in_sig, in_abs and in_cor (setting threshold).",
+            add: |s| SyncShortGranular::<T>::new(s.get_or("threshold", sync_short::THRESHOLD)?),
+        },
+        {
+            name: "WlanFft",
+            types: [A, Ah],
+            description: "FutureSDR's Fft block: one symbol's points, DC in the middle.",
+            add: |_s| granular::Fft::<T>::new(),
+        },
+        {
+            name: "WlanFrameEqualizer",
+            types: [A, Ah],
+            description: "WlanEqualizer without the FFT, behind WlanFft.",
+            add: |_s| FrameEqualizer::<T>::with_fft(false),
         },
     ]
 }

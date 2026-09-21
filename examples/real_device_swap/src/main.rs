@@ -97,6 +97,10 @@ struct Args {
     /// Runtime threads (one per core by default).
     #[arg(long)]
     workers: Option<usize>,
+    /// The HaLow receiver's description, relative to flows/: halow.toml
+    /// (fused blocks) or wlan_granular.toml (examples/wlan's blocks).
+    #[arg(long, default_value = "halow.toml")]
+    halow: String,
     /// Output CSV (default: real_device_swap.csv or real_device_replay.csv).
     #[arg(long)]
     csv: Option<PathBuf>,
@@ -196,10 +200,10 @@ fn registry(args: &Args) -> Result<Registry> {
     Ok(registry)
 }
 
-fn receivers() -> Result<[Description; 2]> {
+fn receivers(halow: &str) -> Result<[Description; 2]> {
     let flows = Path::new(env!("CARGO_MANIFEST_DIR")).join("flows");
     Ok([
-        Description::from_file(flows.join("halow.toml"))?,
+        Description::from_file(flows.join(halow))?,
         Description::from_file(flows.join("zigbee.toml"))?,
     ])
 }
@@ -290,7 +294,7 @@ fn run_bladerf(args: &Args, registry: Registry) -> Result<()> {
     use plugin_api::Plugin;
     use plugin_api::add_kernel;
 
-    let phys = receivers()?;
+    let phys = receivers(&args.halow)?;
     let channels: Vec<u64> = phys
         .iter()
         .map(|d| {
@@ -589,7 +593,7 @@ fn run_replay(args: &Args, mut registry: Registry) -> Result<()> {
     );
     println!("  IFS H→Z ms   PER H    PER Z   swap median / max ms   retune ms   impossible");
 
-    let phys = receivers()?;
+    let phys = receivers(&args.halow)?;
     let mut ctrl = controller(args, registry);
     ctrl.link("radio.samples", "rx.samples")?;
     let retune_us = args.retune_us;

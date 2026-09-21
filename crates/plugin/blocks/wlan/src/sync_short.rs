@@ -13,13 +13,13 @@ use crate::Standard;
 /// Normalized autocorrelation above which a short training field is seen.
 pub const THRESHOLD: f32 = 0.56;
 /// Samples between exact recomputations of the running sums.
-const REFRESH: usize = 4096;
+pub(crate) const REFRESH: usize = 4096;
 
 /// Sum of the last `len` values pushed, as `examples/wlan`'s
 /// `MovingAverage` computes it, but in double precision and exactly zero
 /// over zeros: the rounding errors a running sum leaves behind a strong
 /// burst would otherwise make up a correlation in the silence after it.
-struct Window<T> {
+pub(crate) struct Window<T> {
     ring: Box<[T]>,
     /// Where the next value goes; holds the oldest one.
     next: usize,
@@ -33,7 +33,7 @@ impl<T> Window<T>
 where
     T: Copy + Default + PartialEq + Add<Output = T> + Sub<Output = T>,
 {
-    fn new(len: usize) -> Self {
+    pub(crate) fn new(len: usize) -> Self {
         Self {
             ring: vec![T::default(); len].into_boxed_slice(),
             next: 0,
@@ -43,7 +43,7 @@ where
     }
 
     #[inline(always)]
-    fn push(&mut self, v: T) -> T {
+    pub(crate) fn push(&mut self, v: T) -> T {
         let zero = T::default();
         self.nonzero += (v != zero) as usize;
         self.nonzero -= (self.ring[self.next] != zero) as usize;
@@ -61,7 +61,7 @@ where
         out
     }
 
-    fn refresh(&mut self) {
+    pub(crate) fn refresh(&mut self) {
         let len = self.ring.len();
         self.sum = (1..len).fold(T::default(), |s, k| s + self.ring[(self.next + k) % len]);
     }
@@ -84,11 +84,6 @@ impl Point {
     fn above(&self, threshold: f32) -> bool {
         let limit = threshold as f64 * self.power;
         self.power > 1.0e-12 && self.corr.norm_sqr() > limit * limit
-    }
-
-    /// Frequency offset per sample shown by the correlation at `lag`.
-    fn frequency_offset(&self, lag: usize) -> f32 {
-        (-self.corr.arg() / lag as f64) as f32
     }
 }
 
@@ -157,6 +152,97 @@ enum State {
     },
 }
 
+/// What the detector makes of one sample.
+pub(crate) enum Feed {
+    /// Nothing to pass on.
+    Skip,
+    /// Pass this on; the first sample of a frame comes with its frequency
+    /// offset, for the `wifi_start` tag.
+    Out(Complex32, Option<f32>),
+}
+
+/// The frame logic of `examples/wlan`'s `SyncShort`: a frame starts on two
+/// samples in a row above the threshold, and its samples are passed on,
+/// corrected by the frequency offset the correlation shows then.
+pub(crate) struct Machine<S: Standard> {
+    threshold: f32,
+    state: State,
+    pending_tag: Option<f32>,
+    standard: PhantomData<fn() -> S>,
+}
+
+impl<S: Standard> Machine<S> {
+    pub(crate) fn new(threshold: f32) -> Self {
+        Self {
+            threshold,
+            state: State::Search,
+            pending_tag: None,
+            standard: PhantomData,
+        }
+    }
+
+    pub(crate) fn threshold(&self) -> f32 {
+        self.threshold
+    }
+
+    /// Copy from the sample after this one on, which starts a frame.
+    fn start(&mut self, corr: Complex64) {
+        let f_offset = (-corr.arg() / S::STF_DELAY as f64) as f32;
+        self.state = State::Copy {
+            n: 0,
+            rotation: Rotation::new(f_offset),
+            above: false,
+        };
+        self.pending_tag = Some(f_offset);
+    }
+
+    /// The sample `STF_DELAY` before the newest, `delayed`, with the
+    /// correlation `corr` and whether its normalized magnitude is `above`
+    /// the threshold.
+    #[inline(always)]
+    pub(crate) fn feed(&mut self, delayed: Complex32, corr: Complex64, above: bool) -> Feed {
+        match &mut self.state {
+            State::Copy {
+                n,
+                rotation,
+                above: was_above,
+            } => {
+                if above && *was_above && *n > S::MIN_GAP {
+                    // Another frame starts.
+                    self.start(corr);
+                    return Feed::Skip;
+                }
+                *was_above = above;
+                let tag = if *n == 0 {
+                    self.pending_tag.take()
+                } else {
+                    None
+                };
+                let out = delayed * rotation.next();
+                *n += 1;
+                if *n == S::MAX_SAMPLES {
+                    self.state = State::Search;
+                }
+                Feed::Out(out, tag)
+            }
+            State::Search => {
+                if above {
+                    self.state = State::Found;
+                }
+                Feed::Skip
+            }
+            State::Found => {
+                if above {
+                    self.start(corr);
+                } else {
+                    self.state = State::Search;
+                }
+                Feed::Skip
+            }
+        }
+    }
+}
+
 /// Passes on the samples of each frame, from its short training field on,
 /// corrected by the frequency offset the field shows, the first one tagged
 /// `wifi_start` with that offset.
@@ -167,10 +253,7 @@ pub struct SyncShort<S: Standard> {
     #[output]
     output: DefaultCpuWriter<Complex32>,
     detector: Detector,
-    threshold: f32,
-    state: State,
-    pending_tag: Option<f32>,
-    standard: PhantomData<fn() -> S>,
+    machine: Machine<S>,
 }
 
 impl<S: Standard> SyncShort<S> {
@@ -179,23 +262,9 @@ impl<S: Standard> SyncShort<S> {
             input: DefaultCpuReader::default(),
             output: DefaultCpuWriter::default(),
             detector: Detector::new(S::STF_DELAY, S::STF_CORR_WIN, S::STF_POWER_WIN),
-            threshold,
-            state: State::Search,
-            pending_tag: None,
-            standard: PhantomData,
+            machine: Machine::new(threshold),
         }
     }
-}
-
-/// Copy from the sample after `p` on, which starts a frame.
-fn start<S: Standard>(p: &Point, state: &mut State, pending_tag: &mut Option<f32>) {
-    let f_offset = p.frequency_offset(S::STF_DELAY);
-    *state = State::Copy {
-        n: 0,
-        rotation: Rotation::new(f_offset),
-        above: false,
-    };
-    *pending_tag = Some(f_offset);
 }
 
 impl<S: Standard> Default for SyncShort<S> {
@@ -215,6 +284,7 @@ impl<S: Standard> Kernel for SyncShort<S> {
         let input_len = input.len();
         let (out, mut tags) = self.output.slice_with_tags();
 
+        let threshold = self.machine.threshold();
         let mut i = 0;
         let mut o = 0;
         while i < input_len && o < out.len() {
@@ -223,43 +293,13 @@ impl<S: Standard> Kernel for SyncShort<S> {
             if self.detector.n <= S::STF_WARMUP {
                 continue;
             }
-            let above = p.above(self.threshold);
-            match &mut self.state {
-                State::Copy {
-                    n,
-                    rotation,
-                    above: was_above,
-                } => {
-                    if above && *was_above && *n > S::MIN_GAP {
-                        // Another frame starts.
-                        start::<S>(&p, &mut self.state, &mut self.pending_tag);
-                        continue;
-                    }
-                    *was_above = above;
-                    if *n == 0
-                        && let Some(f_offset) = self.pending_tag.take()
-                    {
-                        tags.add_tag(o, Tag::NamedF32("wifi_start".to_string(), f_offset));
-                    }
-                    out[o] = p.delayed * rotation.next();
-                    o += 1;
-                    *n += 1;
-                    if *n == S::MAX_SAMPLES {
-                        self.state = State::Search;
-                    }
+            let above = p.above(threshold);
+            if let Feed::Out(x, tag) = self.machine.feed(p.delayed, p.corr, above) {
+                if let Some(f_offset) = tag {
+                    tags.add_tag(o, Tag::NamedF32("wifi_start".to_string(), f_offset));
                 }
-                State::Search => {
-                    if above {
-                        self.state = State::Found;
-                    }
-                }
-                State::Found => {
-                    if above {
-                        start::<S>(&p, &mut self.state, &mut self.pending_tag);
-                    } else {
-                        self.state = State::Search;
-                    }
-                }
+                out[o] = x;
+                o += 1;
             }
         }
 
