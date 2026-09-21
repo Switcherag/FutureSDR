@@ -88,10 +88,11 @@ fig.suptitle("Receiver replaced after every frame, no radio (software IFS)",
              x=0.07, y=0.985, ha="left", color=INK, fontsize=14, fontweight="bold")
 fig.text(0.07, 0.945,
          "Recorded 802.15.4 and 802.11ah frames cut to the frame, replayed at 4 MSps, "
-         "400 per spacing; IFS from the end\nof a frame to the start of the next. "
-         "Controller::replace, 4 runtime threads pinned to performance cores.",
+         "400 per spacing.\nIFS from the end of a frame to the start of the next. "
+         "Controller::replace; 4 runtime threads pinned\nto performance cores, the replay "
+         "on a fifth, all kept awake (--cpus auto --keep-awake).",
          ha="left", va="top", color=MUTED, fontsize=10, linespacing=1.4)
-fig.tight_layout(rect=(0, 0, 0.86, 0.90))
+fig.tight_layout(rect=(0, 0, 0.86, 0.87))
 out = HERE / "software_ifs.png"
 fig.savefig(out, dpi=150, facecolor=SURFACE)
 print(out)

@@ -37,8 +37,116 @@ static STREAMS: Mutex<Vec<Arc<Vec<Complex32>>>> = Mutex::new(Vec::new());
 pub static STARTED: Mutex<Option<Instant>> = Mutex::new(None);
 /// Samples the replay emits at once, as a radio delivers them.
 pub static CHUNK: AtomicUsize = AtomicUsize::new(256);
+/// Chunks emitted more than 0.2 ms after they were due: (when, seconds
+/// from the replay's start; how late, seconds).
+pub static LATE_CHUNKS: Mutex<Vec<(f64, f64)>> = Mutex::new(Vec::new());
 /// How long each `Tune` retune took (always its delay; for the report).
 pub static RETUNES: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
+
+/// CPUs for the source's thread (the replay's, or the radio's), away from
+/// the runtime's; empty: those it inherits.
+pub static SOURCE_CPUS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// Restrict the calling thread to `cpus` (threads it starts inherit them).
+pub fn set_thread_cpus(cpus: &[usize]) -> Result<()> {
+    // SAFETY: a zeroed cpu_set_t is an empty set; the calls only read and
+    // write the set passed.
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        for &cpu in cpus {
+            libc::CPU_SET(cpu, &mut set);
+        }
+        if libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) != 0 {
+            anyhow::bail!(
+                "setting the CPU affinity to {cpus:?}: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Real-time priority (SCHED_FIFO) for the runtime's threads and the
+/// source's; 0: none.
+pub static RT_PRIORITY: AtomicUsize = AtomicUsize::new(0);
+
+/// Give the calling thread SCHED_FIFO at `priority` (threads it starts
+/// inherit it).
+pub fn set_thread_rt_priority(priority: usize) -> Result<()> {
+    let param = libc::sched_param {
+        sched_priority: priority as i32,
+    };
+    // SAFETY: sets the calling thread's policy from a valid parameter.
+    if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) } != 0 {
+        anyhow::bail!(
+            "real-time priority {priority}: {} (grant it with `ulimit -r` / \
+             /etc/security/limits.conf rtprio, or setcap cap_sys_nice+ep on the binary)",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(())
+}
+
+/// Keep `cpus` out of their idle states and at full clock without taking
+/// them from anyone: a thread on each, spinning at the lowest priority
+/// (SCHED_IDLE), which any other thread there preempts at once. An idle
+/// core of this laptop sleeps in C3, which takes about 1 ms to leave, and
+/// its clock falls to 800 MHz; a runtime thread woken there starts late.
+/// Costs a core's power each; `tuned-adm profile latency-performance` does
+/// the same with root (idle states up to C1, minimum clock 100 %).
+pub fn keep_awake(cpus: &[usize]) -> Result<()> {
+    for &cpu in cpus {
+        std::thread::Builder::new()
+            .name(format!("awake-{cpu}"))
+            .spawn(move || {
+                let param = libc::sched_param { sched_priority: 0 };
+                // SAFETY: sets the calling thread's policy from a valid
+                // parameter; SCHED_IDLE needs no privilege.
+                unsafe { libc::sched_setscheduler(0, libc::SCHED_IDLE, &param) };
+                if set_thread_cpus(&[cpu]).is_ok() {
+                    loop {
+                        // Into the kernel and back each turn: with lazy
+                        // preemption, a spinner that stays in user space
+                        // gives way to a woken thread only at the next
+                        // tick, up to a millisecond later.
+                        // SAFETY: no arguments, no memory.
+                        unsafe { libc::sched_yield() };
+                    }
+                }
+            })?;
+    }
+    Ok(())
+}
+
+/// Move the calling thread to the source's CPUs, if there are any, and give
+/// it the real-time priority asked for.
+pub fn pin_source_thread() -> Result<()> {
+    let cpus = SOURCE_CPUS.lock().unwrap().clone();
+    if !cpus.is_empty() {
+        set_thread_cpus(&cpus)?;
+    }
+    match RT_PRIORITY.load(Ordering::Relaxed) {
+        0 => Ok(()),
+        priority => set_thread_rt_priority(priority),
+    }
+}
+
+/// Wait until `t`: asleep until shortly before, then spinning, since a
+/// sleep overshoots by tens of microseconds.
+fn wait_until(t: Instant) {
+    loop {
+        let now = Instant::now();
+        if now >= t {
+            return;
+        }
+        let left = t - now;
+        if left > Duration::from_micros(200) {
+            std::thread::sleep(left - Duration::from_micros(150));
+        } else {
+            std::hint::spin_loop();
+        }
+    }
+}
 
 /// Seconds since the replay of the current step began.
 pub fn now() -> f64 {
@@ -188,32 +296,33 @@ pub fn head(step: usize, retune_us: u64) -> String {
 }
 
 /// Emits a stream at `RATE` samples per second of wall clock, in whole
-/// chunks, from its first call on.
+/// chunks, from its first call on. It runs on a thread of its own, as a
+/// radio's driver does: on the runtime's threads, it would wait for them
+/// whenever they are busy (building a receiver, say), and then deliver
+/// what it owes in a burst, which closes the gaps between frames.
 #[derive(Block)]
+#[blocking]
 struct Replay {
     #[output]
     output: ReuseCpuWriter<Complex32>,
     samples: Arc<Vec<Complex32>>,
     pos: usize,
     start: Option<Instant>,
-    timer: Option<Timer>,
     /// The most room its output ever had.
     room: usize,
+    pinned: bool,
 }
 
 impl Kernel for Replay {
-    type BlockOn = Timer;
-
-    fn block_on(&mut self) -> Option<std::pin::Pin<&mut Timer>> {
-        self.timer.as_mut().map(std::pin::Pin::new)
-    }
-
     async fn work(
         &mut self,
         io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &BlockMeta,
     ) -> Result<()> {
+        if !std::mem::replace(&mut self.pinned, true) {
+            pin_source_thread()?;
+        }
         let start = *self.start.get_or_insert_with(|| {
             let now = Instant::now();
             *STARTED.lock().unwrap() = Some(now);
@@ -221,6 +330,14 @@ impl Kernel for Replay {
         });
         let chunk = CHUNK.load(Ordering::Relaxed);
         let len = self.samples.len();
+        if self.pos == len {
+            io.finished = true;
+            return Ok(());
+        }
+        // The end of the chunk the next sample is in.
+        let next = (self.pos + chunk - self.pos % chunk).min(len);
+        wait_until(start + Duration::from_secs_f64(next as f64 / RATE));
+
         let due = ((start.elapsed().as_secs_f64() * RATE) as usize).min(len);
         let owed = due - self.pos.min(due);
         let ready = if due == len {
@@ -236,15 +353,21 @@ impl Kernel for Replay {
         }
         out[..n].copy_from_slice(&self.samples[self.pos..self.pos + n]);
         self.output.produce(n);
+        if n > 0 {
+            // The last of these samples was due at (pos + n) / RATE.
+            let now = start.elapsed().as_secs_f64();
+            let late = now - (self.pos + n) as f64 / RATE;
+            if late > 2e-4 {
+                LATE_CHUNKS.lock().unwrap().push((now, late));
+            }
+        }
         self.pos += n;
-        self.timer = None;
         if self.pos == len {
             io.finished = true;
         } else if n == ready {
-            let next = self.pos + chunk - (self.pos + chunk) % chunk;
-            let at = start + Duration::from_secs_f64(next.min(len) as f64 / RATE);
-            self.timer = Some(Timer::after(at.saturating_duration_since(Instant::now())));
+            io.call_again = true;
         }
+        // Else the output is full: called again when there is room.
         Ok(())
     }
 }
@@ -331,8 +454,8 @@ pub fn blocks() -> Plugin {
                             samples,
                             pos: 0,
                             start: None,
-                            timer: None,
                             room: 0,
+                            pinned: false,
                         },
                     )
                 },

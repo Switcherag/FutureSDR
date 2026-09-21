@@ -293,6 +293,8 @@ impl BladeRfSource {
 
 impl Kernel for BladeRfSource {
     async fn init(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
+        // The radio's thread, away from the runtime's (see --cpus).
+        crate::replay::pin_source_thread()?;
         self.stream = Some(self.radio.stream()?);
         Ok(())
     }

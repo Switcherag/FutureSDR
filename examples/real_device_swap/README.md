@@ -143,25 +143,62 @@ by several points).
 
 `figures/software_ifs.png`: PER and the median swap time against the IFS,
 from the end of a frame to the start of the next (the recordings cut to the
-frame), with no radio (`--retune-us 0`), 400 frames per spacing, 4 runtime
-threads pinned to performance cores, for four swaps. `figures/*.csv` are the
-runs and `figures/plot_software_ifs.py` draws them.
+frame), with no radio (`--retune-us 0`), 400 frames per spacing, for four
+swaps. `figures/*.csv` are the runs and `figures/plot_software_ifs.py`
+draws them.
 
 ```text
-cargo run --release -- --source replay --cpus auto --retune-us 0 --frames-per-step 400 \
-    --ifs 0,0.02,0.04,...,0.5,0.6,0.8,1 --swap zigbee.toml,zigbee.toml --csv figures/zz.csv
+cargo run --release -- --source replay --cpus auto --keep-awake --retune-us 0 \
+    --frames-per-step 400 --ifs 0,0.02,...,0.5,0.6,0.8,1 \
+    --swap zigbee.toml,zigbee.toml --csv figures/zz.csv
 ```
 
-| Swap | Swap time (median) | PER 50 % up to | PER ≤ 3 % from |
+| Swap | Swap time (median) | PER 50 % up to | PER 0–2 % from |
 |------|--------------------|----------------|----------------|
-| ZigBee → ZigBee | 0.04 ms | – | 0 (1–4 % below 0.2 ms) |
-| HaLow simple → simple | 0.14 ms | 0.10 ms | 0.24 ms |
-| HaLow granular → granular | 0.18 ms | 0.18 ms | 0.26 ms |
-| ZigBee ⇄ HaLow simple | 0.04 ms to ZigBee, 0.15 ms to HaLow | 0.08 ms | 0.22 ms |
+| ZigBee → ZigBee | 0.035 ms | – | 0.02 ms |
+| HaLow simple → simple | 0.15 ms | 0.10 ms | 0.20 ms |
+| HaLow granular → granular | 0.19 ms | 0.16 ms | 0.24 ms |
+| ZigBee ⇄ HaLow simple | 0.04 ms to ZigBee, 0.15 ms to HaLow | 0.08 ms | 0.16 ms |
 
-A swap starts when the receiver posts the frame it decoded, so a frame is
-lost when the IFS is shorter than the decoding delay plus the swap. The
-granular HaLow receiver's 0.04 ms longer swap moves its edge by about as
-much. Two things are not explained yet: ZigBee → ZigBee loses 1–4 % of
-frames below 0.2 ms although its swap takes 0.04 ms, and ZigBee ⇄ HaLow
-loses 2–4 % from 0.5 to 1 ms, where every swap is done in time.
+A swap starts when the receiver posts the frame it decoded (0.04 ms after
+the frame's end for ZigBee, 0.07 ms for HaLow, median), so a frame is lost
+when the IFS is shorter than that plus the swap. Above the edges, every
+frame is received but for one or two in 400.
+
+### What the numbers need
+
+With REPLAY_LOSSES set, the replay tells, for each lost frame, whether the
+receiver was listening for its PHY from its start ("listening": none, in any
+run: the receivers decode every frame they hear whole) or not ("late"), and
+for late ones when the frame before was posted and how many samples waited
+on the link. `--no-swap` keeps one receiver, for reference.
+
+- **The link does not buffer.** When a swap begins, the link to the
+  receiver holds no items (median 0, at most a few chunks when the receiver
+  lags), and with `Hold::Discard` the new receiver starts on what arrives
+  after the swap.
+- **The replay runs on a thread of its own** (a blocking block, pinned
+  away from the runtime's threads, pacing itself to the microsecond), as a
+  radio's driver does. On the runtime's threads it waited for them whenever
+  a swap kept them busy, 30 to 50 times per 400 frames by up to 2.8 ms, and
+  then delivered in a burst, which closes the gap before the next frame.
+- **Idle CPUs are slow to wake.** An idle core of this laptop sleeps in C3,
+  which takes 1048 µs to leave, and its clock falls to 800 MHz: the
+  `performance` governor only raises the ceiling. A runtime thread woken
+  there posts its frame up to 1.9 ms late, once in 400 frames with no swap
+  at all, and with swaps the next frame is lost (1–4 % at any IFS).
+  `--keep-awake` keeps each CPU of `--cpus` busy with a thread at the lowest
+  priority that yields at once to any other (it enters the kernel at every
+  turn: with lazy preemption, a thread spinning in user space gives way
+  only at the next tick). The worst posting delay falls from 1.9 to
+  0.22 ms. It costs those cores' power; with root,
+  `tuned-adm profile latency-performance` does the same (idle states up to
+  C1, minimum clock 100 %).
+- `--rt-priority N` gives the runtime's and the source's threads SCHED_FIFO,
+  against other processes taking their CPUs; it needs an rtprio limit or
+  CAP_SYS_NICE (not granted here, so not measured).
+
+The HaLow receiver is the dyn branch's v6 (`examples/wlan` on S1G), and
+includes the fix of dyn's commit 5d664f9a ("guard Signal state against full
+output buffer"): the equalizer adds the `wifi_start` tag only with the first
+data symbol it writes, so a full output cannot orphan it.

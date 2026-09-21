@@ -177,6 +177,21 @@ struct Args {
     /// recordings, not between frames.
     #[arg(long)]
     no_trim: bool,
+    /// Real-time priority (SCHED_FIFO, 1 to 99) for the runtime's threads
+    /// and the source's, so that other processes cannot hold their CPUs; it
+    /// needs the right to (rtprio limit or CAP_SYS_NICE).
+    #[arg(long)]
+    rt_priority: Option<usize>,
+    /// Keep the CPUs of --cpus awake: a thread spinning at the lowest
+    /// priority on each, so that they neither sleep in deep idle states
+    /// (C3 takes about 1 ms to leave here) nor slow down their clocks. Costs
+    /// their power.
+    #[arg(long)]
+    keep_awake: bool,
+    /// Keep the first receiver for the whole replay (both of the pair must
+    /// be of one PHY): the reference, without swaps.
+    #[arg(long)]
+    no_swap: bool,
     /// Samples the replay delivers at once.
     #[arg(long, default_value_t = 256)]
     chunk: usize,
@@ -280,25 +295,6 @@ fn parse_cpus(spec: &str, workers: Option<usize>) -> Result<Vec<usize>> {
         );
     }
     Ok(cores[..want].iter().map(|c| c.3).collect())
-}
-
-/// Restrict this process to `cpus`; threads started afterwards inherit it.
-fn set_cpus(cpus: &[usize]) -> Result<()> {
-    // SAFETY: a zeroed cpu_set_t is an empty set; the calls only read and
-    // write the set passed.
-    unsafe {
-        let mut set: libc::cpu_set_t = std::mem::zeroed();
-        for &cpu in cpus {
-            libc::CPU_SET(cpu, &mut set);
-        }
-        if libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) != 0 {
-            bail!(
-                "setting the CPU affinity to {cpus:?}: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Governor and frequencies of `cpus`, to check they run at full speed.
@@ -601,6 +597,15 @@ struct StepResult {
     /// Swap times, by the receiver swapped to (which the swap builds).
     swaps: [Vec<f64>; 2],
     retunes: Vec<f64>,
+    /// Transmissions decoded more than once (counted once).
+    duplicates: usize,
+    /// Lost transmissions that started before the receiver was listening
+    /// for their PHY: the swap was late.
+    late: usize,
+    /// Lost transmissions the receiver listened to from their start.
+    missed: usize,
+    /// Items queued on the link when each swap began.
+    queued: Vec<f64>,
 }
 
 /// Replay step `step` to `pair`, the receivers taking turns from the first.
@@ -610,9 +615,11 @@ async fn replay_step(
     retune_us: u64,
     pair: &[Description; 2],
     sent: &[replay::Sent],
+    no_swap: bool,
 ) -> Result<StepResult> {
     let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
     *replay::STARTED.lock().unwrap() = None;
+    replay::LATE_CHUNKS.lock().unwrap().clear();
     // The radio first: a receiver that starts on an ended stream ends.
     ctrl.spawn_async(
         "radio",
@@ -624,6 +631,13 @@ async fn replay_step(
 
     let mut received = [0usize; 2];
     let mut impossible = 0;
+    let mut duplicates = 0;
+    let mut decoded = vec![false; sent.len()];
+    let mut latency = Vec::new();
+    let mut queued = Vec::new();
+    // Each swap: the decoded frame's end, when it was posted, when the swap
+    // was done (replay clock, s), and the items queued when it began.
+    let mut log: Vec<(f64, f64, f64, usize)> = Vec::new();
     let (mut swaps, mut retunes) = ([Vec::new(), Vec::new()], Vec::new());
     // Which PHY the receiver listened for, from a given time on.
     let mut listening: Vec<(f64, usize)> = vec![(0.0, phy[0])];
@@ -648,22 +662,31 @@ async fn replay_step(
         // The transmission it decodes: the last of its PHY that ended before
         // it arrived (every copy is the same recording).
         let at = replay::now();
-        let frame = sent.iter().rfind(|s| s.phy == got && s.end <= at);
+        let index = sent.iter().rposition(|s| s.phy == got && s.end <= at);
+        let frame = index.map(|k| &sent[k]);
+        if let Some(f) = frame {
+            latency.push(at - f.end);
+        }
         let listened = frame.is_some_and(|f| {
             listening.iter().enumerate().any(|(k, (from, p))| {
                 let until = listening.get(k + 1).map_or(f64::INFINITY, |(t, _)| *t);
                 *p == got && *from < f.end && until > f.start
             })
         });
-        if listened {
-            received[got] += 1;
-        } else {
-            impossible += 1;
+        match index {
+            Some(k) if listened && decoded[k] => duplicates += 1,
+            Some(k) if listened => {
+                decoded[k] = true;
+                received[got] += 1;
+            }
+            _ => impossible += 1,
         }
-        if got != phy[active] {
+        if got != phy[active] || no_swap {
             continue;
         }
         let next = 1 - active;
+        let waiting = ctrl.link_stats("rx.samples").map_or(0, |s| s.queued);
+        queued.push(waiting as f64);
         let t = Instant::now();
         let replacement = ctrl
             .replace_async("rx", pair[next].clone(), Hold::Discard)
@@ -671,17 +694,80 @@ async fn replay_step(
         swaps[next].push(ms(t.elapsed()));
         retunes.push(ms(replacement.timings.controls));
         active = next;
-        listening.push((replay::now(), phy[next]));
+        let done = replay::now();
+        listening.push((done, phy[next]));
+        log.push((frame.map_or(f64::NAN, |f| f.end), at, done, waiting));
     }
     let names: Vec<String> = ctrl.names().map(str::to_string).collect();
     for name in names {
         ctrl.stop_async(&name).await?;
+    }
+    if std::env::var_os("REPLAY_LOSSES").is_some() {
+        let slow = latency.iter().filter(|l| **l > 3e-4).count();
+        let worst = latency.iter().copied().fold(0.0, f64::max);
+        eprintln!(
+            "step {step}: {} frames posted, {slow} more than 0.3 ms after their end, worst {:.3} ms, \
+             median {:.3} ms",
+            latency.len(),
+            worst * 1e3,
+            median(&mut latency.clone()) * 1e3
+        );
+        let late = replay::LATE_CHUNKS.lock().unwrap();
+        let worst = late.iter().map(|(_, l)| *l).fold(0.0, f64::max);
+        eprintln!(
+            "step {step}: {} replay chunks more than 0.2 ms late, worst {:.3} ms",
+            late.len(),
+            worst * 1e3
+        );
+    }
+    // Why the others were lost: whether the receiver was listening for
+    // their PHY from before they started.
+    let (mut late, mut missed) = (0, 0);
+    for (f, _) in sent.iter().zip(&decoded).filter(|(_, d)| !**d) {
+        let before = listening.iter().rfind(|(from, _)| *from <= f.start);
+        let changed = listening
+            .iter()
+            .any(|(from, _)| *from > f.start && *from < f.end);
+        if before.is_some_and(|(_, p)| *p == f.phy) && !changed {
+            missed += 1;
+        } else {
+            late += 1;
+            if std::env::var_os("REPLAY_LOSSES").is_some() {
+                // The swap before it, or the one during it.
+                if let Some((end, posted, done, waiting)) =
+                    log.iter().rfind(|(_, _, done, _)| *done < f.end)
+                {
+                    // Replay chunks that came late around the previous frame.
+                    let late_chunks: Vec<String> = replay::LATE_CHUNKS
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|(t, _)| *t > end - 2e-3 && *t < *posted)
+                        .map(|(t, l)| format!("{:.2}@{:.3}", l * 1e3, (t - end) * 1e3))
+                        .collect();
+                    eprintln!(
+                        "lost at {:8.3} ms: previous frame ended {:7.3} ms before it, posted \
+                         {:6.3} ms after its end with {waiting} items queued, swap done {:6.3} ms \
+                         after the lost frame began; late replay chunks (ms late @ ms after \
+                         that end): {late_chunks:?}",
+                        f.start * 1e3,
+                        (f.start - end) * 1e3,
+                        (posted - end) * 1e3,
+                        (done - f.start) * 1e3,
+                    );
+                }
+            }
+        }
     }
     Ok(StepResult {
         received,
         impossible,
         swaps,
         retunes,
+        duplicates,
+        late,
+        missed,
+        queued,
     })
 }
 
@@ -748,7 +834,8 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
     let mut table = String::from(
         "first,second,ifs_ms,ifs_after_second_ms,sent_h,rx_h,sent_z,rx_z,per_h,per_z,per,\
          impossible,swaps,swap_median_ms,swap_to_first_median_ms,swap_to_second_median_ms,\
-         swap_max_ms,retune_median_ms\n",
+         swap_max_ms,retune_median_ms,duplicates,lost_late,lost_listening,queued_median,\
+         queued_max\n",
     );
     for [first, second] in pairs {
         let pair = [
@@ -770,16 +857,20 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
         println!("\n{first} → {second} → ...");
         println!(
             "  IFS ms    PER H    PER Z    PER   swap median (→{first:.5} / →{second:.5}) / max ms   \
-             retune ms   impossible"
+             lost: late listening   queued at swap: median max"
         );
         let mut ctrl = controller(args, cpus, registry.clone());
         ctrl.link("radio.samples", "rx.samples")?;
         let retune_us = args.retune_us;
+        let no_swap = args.no_swap;
+        if no_swap && phy[0] != phy[1] {
+            bail!("--no-swap needs the pair to be of one PHY");
+        }
         let per_step = steps.sent.clone();
         let results = ctrl.run(move |mut ctrl| async move {
             let mut results = Vec::new();
             for (step, sent) in per_step.iter().enumerate() {
-                results.push(replay_step(&mut ctrl, step, retune_us, &pair, sent).await?);
+                results.push(replay_step(&mut ctrl, step, retune_us, &pair, sent, no_swap).await?);
             }
             anyhow::Ok(results)
         })?;
@@ -806,6 +897,8 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
             let to_first = median(&mut r.swaps[0]);
             let to_second = median(&mut r.swaps[1]);
             let retune = median(&mut r.retunes);
+            let queued_max = r.queued.iter().copied().fold(0.0, f64::max);
+            let queued_median = median(&mut r.queued);
             let pct = |v: f64| {
                 if v.is_nan() {
                     "     -".to_string()
@@ -815,17 +908,26 @@ fn run_replay(args: &Args, cpus: &[usize], mut registry: Registry) -> Result<()>
             };
             println!(
                 "  {ifs:6.2}   {}   {}   {}   {swap:6.3} ({to_first:.3} / {to_second:.3}) / \
-                 {max:6.3}   {retune:9.3}   {:10}",
+                 {max:6.3}   {:4} {:4}   {queued_median:6.0} {queued_max:6.0}",
                 pct(per_h),
                 pct(per_z),
                 pct(per),
-                r.impossible,
+                r.late,
+                r.missed,
             );
             writeln!(
                 table,
                 "{first},{second},{ifs},{after},{},{},{},{},{per_h:.4},{per_z:.4},{per:.4},{},{n},\
-                 {swap:.4},{to_first:.4},{to_second:.4},{max:.4},{retune:.4}",
-                sent[0], r.received[0], sent[1], r.received[1], r.impossible,
+                 {swap:.4},{to_first:.4},{to_second:.4},{max:.4},{retune:.4},{},{},{},\
+                 {queued_median},{queued_max}",
+                sent[0],
+                r.received[0],
+                sent[1],
+                r.received[1],
+                r.impossible,
+                r.duplicates,
+                r.late,
+                r.missed,
             )?;
         }
     }
@@ -842,13 +944,52 @@ fn main() -> Result<()> {
     let args = Args::parse();
     // Plugins build with every CPU; the runs then use those asked for.
     let registry = registry(&args)?;
-    let cpus = match &args.cpus {
-        Some(spec) => parse_cpus(spec, args.workers)?,
-        None => Vec::new(),
+    let (cpus, source_cpus) = match &args.cpus {
+        // The runtime's threads on the fastest cores, the source's thread
+        // on the next one, if there is one more.
+        Some(spec) if spec == "auto" => {
+            let want = args.workers.unwrap_or(4);
+            match parse_cpus(spec, Some(want + 1)) {
+                Ok(mut all) => {
+                    let source = all.pop().into_iter().collect();
+                    (all, source)
+                }
+                Err(_) => (parse_cpus(spec, Some(want))?, Vec::new()),
+            }
+        }
+        Some(spec) => {
+            let cpus = parse_cpus(spec, args.workers)?;
+            let n = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let others = (0..n).filter(|c| !cpus.contains(c)).collect();
+            (cpus, others)
+        }
+        None => (Vec::new(), Vec::new()),
     };
     if !cpus.is_empty() {
-        set_cpus(&cpus)?;
-        println!("pinned to {}", describe_cpus(&cpus));
+        // The timer thread (async-io's) keeps every CPU.
+        futuresdr::runtime::block_on(Timer::after(Duration::from_micros(1)));
+        replay::set_thread_cpus(&cpus)?;
+        println!("runtime threads on {}", describe_cpus(&cpus));
+        // Without CPUs of its own, the source shares the runtime's.
+        let source = if source_cpus.is_empty() {
+            cpus.clone()
+        } else {
+            source_cpus
+        };
+        println!("source thread on {}", describe_cpus(&source));
+        if args.keep_awake {
+            let mut all = cpus.clone();
+            all.extend(source.iter().filter(|c| !cpus.contains(c)));
+            replay::keep_awake(&all)?;
+            println!("keeping CPUs {all:?} awake");
+        }
+        *replay::SOURCE_CPUS.lock().unwrap() = source;
+    }
+    if let Some(priority) = args.rt_priority {
+        // Before the runtime starts its threads, which inherit it.
+        replay::set_thread_rt_priority(priority)?;
+        replay::RT_PRIORITY.store(priority, std::sync::atomic::Ordering::Relaxed);
+        println!("real-time priority {priority} (SCHED_FIFO)");
     }
     match args.source {
         Source::Bladerf => run_bladerf(&args, &cpus, registry),
