@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The five swaps against the software IFS, 0 to 4 ms every 0.01 ms, no
+# The six swaps against the software IFS, 0 to 4 ms every 0.01 ms, no
 # radio: the receiver replaced after every frame it posts. Writes a CSV per
 # swap, system.txt, bench.png and summary.md into $OUT.
 #
@@ -25,7 +25,7 @@ OUT=${OUT:-results/$(hostname)-$(date +%Y%m%d-%H%M)}
 FRAMES=${FRAMES:-400}
 CPUS=${CPUS:-1,2,3}
 EXTRA=${EXTRA:-}
-ONLY=${ONLY:-zz ss sz gg gd}
+ONLY=${ONLY:-zz ss sz gg gd 11}
 STEP=${STEP:-0.01}
 MAX=${MAX:-4}
 
@@ -40,6 +40,7 @@ declare -A PAIRS=(
     [sz]=wlan_simple.toml,zigbee.toml
     [gg]=wlan_granular.toml,wlan_granular.toml
     [gd]=wlan_granular_hard.toml,wlan_granular_viterbi.toml
+    [11]=wlan_single.toml,wlan_single.toml
 )
 
 mkdir -p "$OUT"

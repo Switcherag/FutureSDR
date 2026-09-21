@@ -294,6 +294,44 @@ or copy them to the laptop.
 
 ## 10. Tests with the bladeRF
 
+### The radio benchmark
+
+`radio_bench.sh` runs six receivers against your transmitters, replaced
+after every frame, in this order (so that the transmitter changes least):
+
+| Key | Receivers | Transmitter |
+|-----|-----------|-------------|
+| `zz` | ZigBee → ZigBee | ZigBee |
+| `ss` | HaLow simple (4 blocks) → simple | HaLow |
+| `gg` | HaLow granular (13 blocks) → granular | HaLow |
+| `gd` | HaLow granular, decoder only: inverse ⇄ Viterbi | HaLow |
+| `11` | HaLow in one block → one block (`wlan_single.toml`) | HaLow |
+| `sz` | HaLow simple ⇄ ZigBee, quick-tune retune at each swap | ZigBee and HaLow alternating |
+
+```sh
+./radio_bench.sh
+```
+
+It first opens the bladeRF and registers the quick-tune profiles, then for
+each run says which transmitter to start and waits for Enter; the receiver
+runs until Enter again (when the transmitter's sweep is done), and the next
+run comes. Each run writes a row per received frame (`<key>.csv`: PHY,
+posting description, the multizig stamp or the 802.11 sequence number, swap
+and retune times, radio overflows) and prints a line every 5 s. At the end,
+`figures/plot_radio.py` draws `radio.png` (PER against the programmed IFS)
+and writes `summary.md`.
+
+The sweep's shape is for the analysis: `FRAMES_PER_STEP` (1000),
+`IFS_START` (6 ms), `IFS_STEP` (0.01 ms). ZigBee frames are placed exactly by
+their stamp; HaLow frames by the ZigBee frames around them (alternating
+run), or by counting sequence numbers from the first frame received onto
+that sweep (HaLow-only runs: start the receiver before the transmitter).
+
+Settings as for `bench.sh`: `CPUS`, `EXTRA` (e.g. `--gain-db 20`,
+`--sample-rate 4e6 --decim 1`), `ONLY`, `OUT`.
+
+### Single runs
+
 First the quick-tune profiles: the program opens the bladeRF, tunes it once
 to each receiver's channel (919 MHz, 2.425 GHz) and keeps the RFIC's state
 for each:

@@ -247,33 +247,49 @@ impl<S: Standard> Machine<S> {
 /// corrected by the frequency offset the field shows, the first one tagged
 /// `wifi_start` with that offset.
 #[derive(Block)]
-pub struct SyncShort<S: Standard> {
+pub struct SyncShort<S: Standard, I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<Complex32>>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     #[input]
-    input: DefaultCpuReader<Complex32>,
+    pub(crate) input: I,
     #[output]
-    output: DefaultCpuWriter<Complex32>,
+    pub(crate) output: O,
     detector: Detector,
     machine: Machine<S>,
 }
 
-impl<S: Standard> SyncShort<S> {
+impl<S: Standard, I, O> SyncShort<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     pub fn new(threshold: f32) -> Self {
         Self {
-            input: DefaultCpuReader::default(),
-            output: DefaultCpuWriter::default(),
+            input: I::default(),
+            output: O::default(),
             detector: Detector::new(S::STF_DELAY, S::STF_CORR_WIN, S::STF_POWER_WIN),
             machine: Machine::new(threshold),
         }
     }
 }
 
-impl<S: Standard> Default for SyncShort<S> {
+impl<S: Standard, I, O> Default for SyncShort<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     fn default() -> Self {
         Self::new(THRESHOLD)
     }
 }
 
-impl<S: Standard> Kernel for SyncShort<S> {
+impl<S: Standard, I, O> Kernel for SyncShort<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     async fn work(
         &mut self,
         io: &mut WorkIo,

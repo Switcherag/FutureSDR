@@ -23,22 +23,30 @@ enum State {
 /// corrected by the fine frequency offset, the first tagged `wifi_start`
 /// with the total offset.
 #[derive(Block)]
-pub struct SyncLong<S: Standard> {
+pub struct SyncLong<S: Standard, I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<Complex32>>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     #[input]
-    input: DefaultCpuReader<Complex32>,
+    pub(crate) input: I,
     #[output]
-    output: DefaultCpuWriter<Complex32>,
+    pub(crate) output: O,
     taps: Box<[Complex32]>,
     cor: Box<[Complex32]>,
     state: State,
     standard: PhantomData<fn() -> S>,
 }
 
-impl<S: Standard> SyncLong<S> {
+impl<S: Standard, I, O> SyncLong<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     pub fn new() -> Self {
-        let mut input = DefaultCpuReader::default();
+        let mut input = I::default();
         input.set_min_items(S::LTF_SEARCH + 2 * S::FFT_SIZE);
-        let mut output = DefaultCpuWriter::default();
+        let mut output = O::default();
         output.set_min_items(2 * S::FFT_SIZE);
         output.set_min_buffer_size_in_items(2 * S::FFT_SIZE);
         Self {
@@ -83,13 +91,21 @@ impl<S: Standard> SyncLong<S> {
     }
 }
 
-impl<S: Standard> Default for SyncLong<S> {
+impl<S: Standard, I, O> Default for SyncLong<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: Standard> Kernel for SyncLong<S> {
+impl<S: Standard, I, O> Kernel for SyncLong<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = Complex32>,
+{
     async fn work(
         &mut self,
         io: &mut WorkIo,

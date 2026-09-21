@@ -66,11 +66,15 @@ enum State {
 /// each frame on `symbols` and the channel estimate on `channel_est`.
 #[derive(Block)]
 #[message_outputs(symbols, channel_est)]
-pub struct FrameEqualizer<S: Standard> {
+pub struct FrameEqualizer<S: Standard, I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<u8>>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = u8>,
+{
     #[input]
-    input: DefaultCpuReader<Complex32>,
+    pub(crate) input: I,
     #[output]
-    output: DefaultCpuWriter<u8>,
+    pub(crate) output: O,
     /// None when the input is already in frequency domain, DC in the middle
     /// (`examples/wlan`'s `Fft` block in front, with `fft_shift`).
     fft: Option<Transform>,
@@ -84,7 +88,11 @@ pub struct FrameEqualizer<S: Standard> {
     symbols: Vec<Complex32>,
 }
 
-impl<S: Standard> FrameEqualizer<S> {
+impl<S: Standard, I, O> FrameEqualizer<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = u8>,
+{
     /// With the FFT built in.
     pub fn new() -> Self {
         Self::with_fft(true)
@@ -92,9 +100,9 @@ impl<S: Standard> FrameEqualizer<S> {
 
     /// With the FFT built in, or behind a separate `Fft` block (`fft` false).
     pub fn with_fft(fft: bool) -> Self {
-        let mut input = DefaultCpuReader::default();
+        let mut input = I::default();
         input.set_min_items(S::FFT_SIZE);
-        let mut output = DefaultCpuWriter::default();
+        let mut output = O::default();
         output.set_min_items(S::N_DATA_SC);
         output.set_min_buffer_size_in_items(S::N_DATA_SC);
         Self {
@@ -143,13 +151,21 @@ impl Transform {
     }
 }
 
-impl<S: Standard> Default for FrameEqualizer<S> {
+impl<S: Standard, I, O> Default for FrameEqualizer<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = u8>,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: Standard> Kernel for FrameEqualizer<S> {
+impl<S: Standard, I, O> Kernel for FrameEqualizer<S, I, O>
+where
+    I: CpuBufferReader<Item = Complex32>,
+    O: CpuBufferWriter<Item = u8>,
+{
     async fn work(
         &mut self,
         io: &mut WorkIo,

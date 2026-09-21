@@ -237,9 +237,11 @@ stage_size() {
     check_size "shared library" "$RT" 6000000
     check_size "one-block plugin" "$tiny" 150000
     check_size "basic plugin (74 block types)" "$basic" 2000000
-    # Fused receiver 360 KB, plus examples/wlan's front end block by block
-    # (about 220 KB); planning an FFT in the plugin would add 0.8 MB.
-    check_size "wlan plugin (802.11a and ah)" "$wlan" 650000
+    # Fused receiver 360 KB, examples/wlan's front end block by block
+    # (about 220 KB), the receiver as one block (the four kernels again, on
+    # in-memory buffers: about 90 KB); planning an FFT in the plugin would
+    # add 0.8 MB.
+    check_size "wlan plugin (802.11a and ah)" "$wlan" 750000
     check_size "zigbee plugin" "$zigbee" 500000
     check_size "radio plugin" "$radio" 500000
     check_size "swap_bench" "$ROOT/target/release/examples/swap_bench" 2000000

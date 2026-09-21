@@ -37,6 +37,7 @@ mod decoder;
 mod equalizer;
 mod granular;
 mod phy;
+mod single;
 mod sync_long;
 mod sync_short;
 mod tables;
@@ -54,6 +55,7 @@ pub use granular::MovingSum;
 pub use granular::MultiplyConj;
 pub use granular::SyncShortGranular;
 pub use phy::*;
+pub use single::Receiver;
 pub use sync_long::SyncLong;
 pub use sync_short::SyncShort;
 pub use viterbi::ViterbiDecoder;
@@ -144,6 +146,17 @@ export_plugin! {
             description: "WlanDecoder undoing the convolutional code by its inverse instead of \
                           Viterbi decoding: no error correction, rate 1/2 only.",
             add: |s| Decoder::<T>::with_hard(s.get_or("invalid_frames", false)?, true),
+        },
+        {
+            name: "WlanReceiver",
+            types: [A, Ah],
+            description: "The whole receiver in one block (WlanSync > WlanSyncLong > \
+                          WlanEqualizer > WlanDecoder inside); posts on rx_frames and rftap \
+                          (settings threshold, invalid_frames).",
+            add: |s| Receiver::<T>::new(
+                s.get_or("threshold", sync_short::THRESHOLD)?,
+                s.get_or("invalid_frames", false)?,
+            ),
         },
         // examples/wlan's front end, block by block.
         {

@@ -181,6 +181,41 @@ fn receive_with<S: Standard>(
     Ok(frames)
 }
 
+/// The receiver as one block (`WlanReceiver`).
+fn receive_single<S: Standard>(
+    samples: Vec<Complex32>,
+    chunks: Option<u64>,
+) -> Result<Vec<Vec<u8>>> {
+    let mut fg = Flowgraph::new();
+    let src = fg.add(ChunkSource {
+        output: DefaultCpuWriter::default(),
+        samples,
+        pos: 0,
+        chunks: chunks.map(Rng::new),
+    })?;
+    let rx = fg.add(Receiver::<S>::new(sync_short::THRESHOLD, false))?;
+    let (tx, frames_rx) = mpsc::channel(10_000);
+    let pipe = fg.add(MessagePipe::new(tx))?;
+    fg.stream_dyn(src.id(), "output", rx.id(), "input")?;
+    fg.message(rx.id(), "rx_frames", pipe.id(), "in")?;
+    let running = Runtime::new().start(fg)?;
+    let mut frames = Vec::new();
+    let since = Instant::now();
+    loop {
+        match frames_rx.try_recv() {
+            Ok(Pmt::Blob(frame)) => frames.push(frame),
+            Ok(Pmt::Finished) => break,
+            Ok(p) => panic!("{p:?}"),
+            Err(_) if since.elapsed() > Duration::from_secs(120) => panic!("no end of stream"),
+            Err(_) => std::thread::sleep(Duration::from_millis(2)),
+        }
+    }
+    let (task, handle) = running.split();
+    block_on(handle.stop())?;
+    block_on(task)?;
+    Ok(frames)
+}
+
 fn hex(frames: &[Vec<u8>]) -> Vec<String> {
     frames
         .iter()
@@ -283,6 +318,25 @@ fn the_granular_receiver_gives_the_same_frames() -> Result<()> {
     Ok(())
 }
 
+/// The receiver as one block decodes what the four blocks decode.
+#[test]
+fn the_single_block_receiver_gives_the_same_frames() -> Result<()> {
+    for name in ["bpsk-1-2-15db", "bpsk-3-4-30db"] {
+        let samples = read_cf32(&wlan_data(&format!("{name}.cf32")));
+        let want = expected(&format!("{name}.wlan.txt"));
+        for chunks in [None, Some(1), Some(2)] {
+            let frames = receive_single::<A>(samples.clone(), chunks)?;
+            assert_eq!(hex(&frames), hex(&want), "{name} {chunks:?}");
+        }
+    }
+    let want = expected("halow_frame.v6.txt");
+    for seed in 0..3 {
+        let frames = receive_single::<Ah>(halow_frame(&mut Rng::new(seed)), Some(seed))?;
+        assert_eq!(hex(&frames), hex(&want), "seed {seed}");
+    }
+    Ok(())
+}
+
 /// Undoing the code without Viterbi gives the same frame when nothing is
 /// wrong (the HaLow frame is at rate 1/2), and on a noisy recording no
 /// frame Viterbi does not give.
@@ -313,6 +367,20 @@ fn ah_long_recording_gives_the_frames_of_v6() -> Result<()> {
     let path = std::env::var("WLAN_HALOW_RECORDING").expect("WLAN_HALOW_RECORDING");
     let samples = read_cf32(&PathBuf::from(path));
     let want = expected("halow_raw.v6.txt");
+    let (mut best, mut cpu) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        let (since, cpu_since) = (Instant::now(), cpu_time());
+        let frames = receive_single::<Ah>(samples.clone(), None)?;
+        best = best.min(since.elapsed().as_secs_f64());
+        cpu = cpu.min(cpu_time() - cpu_since);
+        assert_eq!(hex(&frames), hex(&want));
+    }
+    eprintln!(
+        "single  : {} samples in {best:.4} s: {:.1} MSps, {:.0} ms of CPU",
+        samples.len(),
+        samples.len() as f64 / best / 1e6,
+        cpu * 1e3
+    );
     for granular in [false, true] {
         let (mut best, mut cpu) = (f64::INFINITY, f64::INFINITY);
         for _ in 0..5 {

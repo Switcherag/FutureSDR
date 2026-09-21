@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The five swaps of bench.sh: PER and swap time against the IFS.
+"""The six swaps of bench.sh: PER and swap time against the IFS.
 
     python3 plot_bench.py RESULTS_DIR
 
-Reads RESULTS_DIR/{zz,ss,sz,gg,gd}.csv (those present) and writes
+Reads RESULTS_DIR/{zz,ss,sz,gg,gd,11}.csv (those present) and writes
 RESULTS_DIR/bench.png and RESULTS_DIR/summary.md.
 """
 import csv
@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# Categorical slots 1-5 in order (validated with the dataviz method's
+# Categorical slots 1-6 in order (validated with the dataviz method's
 # script); the dash of each line tells them apart too.
 SERIES = [
     ("zz", "ZigBee → ZigBee", "#2a78d6", "-"),
@@ -23,6 +23,7 @@ SERIES = [
     ("sz", "HaLow simple ⇄ ZigBee", "#1baf7a", "-."),
     ("gg", "HaLow granular → granular", "#eda100", ":"),
     ("gd", "HaLow granular, decoder only (inverse ⇄ Viterbi)", "#e87ba4", (0, (5, 1, 1, 1))),
+    ("11", "HaLow single block → single", "#008300", (0, (3, 1, 1, 1, 1, 1))),
 ]
 SURFACE, GRID, AXIS = "#fcfcfb", "#e1e0d9", "#c3c2b7"
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"

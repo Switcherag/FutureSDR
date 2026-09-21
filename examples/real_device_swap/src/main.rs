@@ -148,6 +148,13 @@ struct Args {
     /// Stop after this many frames (0: no limit).
     #[arg(long, default_value_t = 0)]
     frames: usize,
+    /// With the radio: run until Enter is pressed (for scripts that wait for
+    /// the transmitter), --duration and --frames still apply.
+    #[arg(long)]
+    until_enter: bool,
+    /// With the radio: print every frame, not a line every 5 s.
+    #[arg(long)]
+    verbose: bool,
     /// Change PHY anyway after this long without a frame, ms.
     #[arg(long, default_value_t = 80_000)]
     rx_timeout_ms: u64,
@@ -249,14 +256,6 @@ fn registry(args: &Args) -> Result<Registry> {
         }
     }
     Ok(registry)
-}
-
-fn receivers(halow: &str) -> Result<[Description; 2]> {
-    let flows = Path::new(env!("CARGO_MANIFEST_DIR")).join("flows");
-    Ok([
-        Description::from_file(flows.join(halow))?,
-        Description::from_file(flows.join("zigbee.toml"))?,
-    ])
 }
 
 fn controller(args: &Args, cpus: &[usize], registry: Registry) -> Controller {
@@ -415,11 +414,27 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     use plugin_api::Plugin;
     use plugin_api::add_kernel;
 
-    if args.halow.contains(',') {
-        bail!("--halow takes one description with a radio");
-    }
-    let phys = receivers(&args.halow)?;
-    let channels: Vec<u64> = phys
+    // The receivers that take turns: --swap, else --halow and ZigBee.
+    let flows = Path::new(env!("CARGO_MANIFEST_DIR")).join("flows");
+    let names: Vec<String> = match &args.swap {
+        Some(pair) => pair.split(',').map(|n| n.trim().to_string()).collect(),
+        None => {
+            let pair = [args.halow.clone(), "zigbee.toml".to_string()];
+            match args.first.unwrap_or(Phy::Zigbee) {
+                Phy::Halow => pair.to_vec(),
+                Phy::Zigbee => vec![pair[1].clone(), pair[0].clone()],
+            }
+        }
+    };
+    let [a, b] = &names[..] else {
+        bail!("--swap takes two descriptions: A,B");
+    };
+    let pair = [
+        Description::from_file(flows.join(a))?,
+        Description::from_file(flows.join(b))?,
+    ];
+    let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
+    let mut channels: Vec<u64> = pair
         .iter()
         .map(|d| {
             d.radio
@@ -435,6 +450,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("{:?} has no [radio] frequency", d.name))
         })
         .collect::<Result<_>>()?;
+    channels.dedup();
     let rate = args.sample_rate / args.decim.max(1) as f64;
     if (rate - replay::RATE).abs() > 1.0 {
         bail!(
@@ -496,57 +512,102 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     let mut csv = std::fs::File::create(&csv_path)?;
     writeln!(
         csv,
-        "rx_idx,phy,event,len,frame,step,tag,ifs_us,ts_us,seq,rx_t_ms,swap_ms,retune_ms"
+        "rx_idx,phy,origin,event,len,frame,step,tag,ifs_us,ts_us,seq,rx_t_ms,swapped,swap_ms,\
+         retune_ms,overflows"
     )?;
-    let first = match args.first.unwrap_or(Phy::Zigbee) {
-        Phy::Halow => 0,
-        Phy::Zigbee => 1,
-    };
     let (duration, max_frames) = (Duration::from_secs_f64(args.duration), args.frames);
     let timeout = Duration::from_millis(args.rx_timeout_ms);
+    let verbose = args.verbose;
+
+    // Enter stops the run.
+    static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if args.until_enter {
+        std::thread::spawn(|| {
+            let mut line = String::new();
+            let _ = std::io::stdin().read_line(&mut line);
+            STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        println!("receiving; press Enter to stop");
+    }
+    let stopped = || STOP.load(std::sync::atomic::Ordering::Relaxed);
 
     let mut ctrl = controller(args, cpus, registry);
     ctrl.link("radio.samples", "rx.samples")?;
     let (swaps, retunes, counts) = ctrl.run(move |mut ctrl| async move {
         ctrl.spawn_async("radio", head).await?;
         let mut tap = ctrl.tap("rx.frames")?;
-        ctrl.spawn_async("rx", phys[first].clone()).await?;
-        println!("listening for {} first; a frame changes PHY", PHYS[first]);
+        ctrl.spawn_async("rx", pair[0].clone()).await?;
+        println!(
+            "listening with {} first; a frame changes to the other",
+            pair[0].name.as_deref().unwrap_or("?")
+        );
 
         let t0 = Instant::now();
-        let (mut active, mut rx_idx) = (first, 0u64);
+        let (mut active, mut rx_idx) = (0usize, 0u64);
         let (mut swaps, mut retunes, mut counts) = (Vec::new(), Vec::new(), [0usize; 2]);
-        while t0.elapsed() < duration && (max_frames == 0 || rx_idx < max_frames as u64) {
-            let left = duration.saturating_sub(t0.elapsed()).min(timeout);
-            let frame = next_frame(&mut tap, left).await;
+        let mut since_frame = Instant::now();
+        let mut report = Instant::now();
+        while !stopped()
+            && t0.elapsed() < duration
+            && (max_frames == 0 || rx_idx < max_frames as u64)
+        {
+            let wait = duration
+                .saturating_sub(t0.elapsed())
+                .min(Duration::from_millis(200));
+            let frame = next_frame(&mut tap, wait).await;
             let rx_t = ms(t0.elapsed());
-            if frame.is_none() && t0.elapsed() >= duration {
-                break;
+            let overflows = bladerf_source::OVERFLOWS.load(std::sync::atomic::Ordering::Relaxed);
+            if report.elapsed() > Duration::from_secs(5) && !verbose {
+                report = Instant::now();
+                let mut recent = swaps.iter().rev().take(200).copied().collect::<Vec<f64>>();
+                println!(
+                    "[{:7.1} s] frames H {} Z {}, swaps {} (median {:.3} ms), overflows {}",
+                    rx_t / 1e3,
+                    counts[0],
+                    counts[1],
+                    swaps.len(),
+                    median(&mut recent),
+                    overflows
+                );
             }
-            let t = Instant::now();
-            let replacement = ctrl
-                .replace_async("rx", phys[1 - active].clone(), Hold::Discard)
-                .await?;
-            let swap = ms(t.elapsed());
-            let retune = ms(replacement.timings.controls);
-            active = 1 - active;
-            swaps.push(swap);
-            retunes.push(retune);
+            // A frame of the PHY listened for changes receiver; so does
+            // nothing for --rx-timeout-ms.
+            let (got, timed_out) = match &frame {
+                Some((origin, _)) => (phy_named(origin), false),
+                None => (None, since_frame.elapsed() > timeout),
+            };
+            if frame.is_none() && !timed_out {
+                continue;
+            }
+            let swap_now = timed_out || got == Some(phy[active]);
+            let (mut swap, mut retune) = (f64::NAN, f64::NAN);
+            if swap_now {
+                since_frame = Instant::now();
+                let t = Instant::now();
+                let replacement = ctrl
+                    .replace_async("rx", pair[1 - active].clone(), Hold::Discard)
+                    .await?;
+                swap = ms(t.elapsed());
+                retune = ms(replacement.timings.controls);
+                active = 1 - active;
+                swaps.push(swap);
+                retunes.push(retune);
+            }
 
             let row = match &frame {
-                None => format!("{rx_idx},?,timeout,-1,-1,-1,-1,-1,-1,-1"),
+                None => format!("{rx_idx},?,,timeout,-1,-1,-1,-1,-1,-1,-1"),
                 Some((origin, bytes)) => {
-                    let phy = PHYS.iter().position(|p| p == origin).unwrap_or(0);
-                    counts[phy] += 1;
-                    let (stamp, seq) = if phy == 1 {
+                    let p = got.unwrap_or(0);
+                    counts[p] += 1;
+                    let (stamp, seq) = if p == 1 {
                         (parse_stamp(bytes), None)
                     } else {
                         (None, parse_seq(bytes))
                     };
                     let s = |v: Option<String>| v.unwrap_or_else(|| "-1".into());
                     format!(
-                        "{rx_idx},{},rx,{},{},{},{},{},{},{}",
-                        if phy == 0 { "H" } else { "Z" },
+                        "{rx_idx},{},{origin},rx,{},{},{},{},{},{},{}",
+                        if p == 0 { "H" } else { "Z" },
                         bytes.len(),
                         s(stamp.map(|x| x.frame.to_string())),
                         s(stamp.map(|x| x.step.to_string())),
@@ -557,23 +618,27 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
                     )
                 }
             };
-            writeln!(csv, "{row},{rx_t:.3},{swap:.3},{retune:.3}")?;
-            csv.flush().ok();
-            if let Some((origin, bytes)) = &frame {
+            writeln!(
+                csv,
+                "{row},{rx_t:.3},{},{swap:.3},{retune:.3},{overflows}",
+                swap_now as u8
+            )?;
+            if verbose && let Some((origin, bytes)) = &frame {
                 println!(
-                    "[{rx_t:9.1} ms] {origin:6} {:4} B   swap {swap:.3} ms (retune {retune:.3})",
+                    "[{rx_t:9.1} ms] {origin:14} {:4} B   swap {swap:.3} ms (retune {retune:.3})",
                     bytes.len()
                 );
             }
             rx_idx += 1;
         }
+        csv.flush().ok();
         stop_all(&mut ctrl).await?;
         anyhow::Ok((swaps, retunes, counts))
     })?;
     let (mut swaps, mut retunes) = (swaps, retunes);
     println!(
         "\n{} frames (H {}, Z {}), {} swaps: median {:.3} ms, retune median {:.3} ms; \
-         quick-tune misses {}",
+         quick-tune misses {}, radio overflows {} samples",
         counts[0] + counts[1],
         counts[0],
         counts[1],
@@ -581,6 +646,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
         median(&mut swaps),
         median(&mut retunes),
         radio.misses.load(std::sync::atomic::Ordering::Relaxed),
+        bladerf_source::OVERFLOWS.load(std::sync::atomic::Ordering::Relaxed),
     );
     println!("wrote {}", csv_path.display());
     Ok(())

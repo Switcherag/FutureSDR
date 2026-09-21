@@ -17,9 +17,12 @@ use crate::ViterbiDecoder;
 /// Viterbi decoding (see [`ViterbiDecoder::decode_hard`]).
 #[derive(Block)]
 #[message_outputs(rx_frames, rftap)]
-pub struct Decoder<S: Standard> {
+pub struct Decoder<S: Standard, I = DefaultCpuReader<u8>>
+where
+    I: CpuBufferReader<Item = u8>,
+{
     #[input]
-    input: DefaultCpuReader<u8>,
+    pub(crate) input: I,
     invalid_frames: bool,
     hard: bool,
     frame: Option<FrameParam>,
@@ -35,14 +38,17 @@ pub struct Decoder<S: Standard> {
     standard: PhantomData<fn() -> S>,
 }
 
-impl<S: Standard> Decoder<S> {
+impl<S: Standard, I> Decoder<S, I>
+where
+    I: CpuBufferReader<Item = u8>,
+{
     pub fn new(invalid_frames: bool) -> Self {
         Self::with_hard(invalid_frames, false)
     }
 
     /// Decoding by the code's inverse (`hard`) or by Viterbi.
     pub fn with_hard(invalid_frames: bool, hard: bool) -> Self {
-        let mut input = DefaultCpuReader::default();
+        let mut input = I::default();
         input.set_min_items(S::N_DATA_SC);
         Self {
             input,
@@ -138,13 +144,19 @@ fn rftap(frame: &[u8]) -> Vec<u8> {
     rftap
 }
 
-impl<S: Standard> Default for Decoder<S> {
+impl<S: Standard, I> Default for Decoder<S, I>
+where
+    I: CpuBufferReader<Item = u8>,
+{
     fn default() -> Self {
         Self::new(false)
     }
 }
 
-impl<S: Standard> Kernel for Decoder<S> {
+impl<S: Standard, I> Kernel for Decoder<S, I>
+where
+    I: CpuBufferReader<Item = u8>,
+{
     async fn work(
         &mut self,
         io: &mut WorkIo,

@@ -202,6 +202,9 @@ impl Radio {
     }
 }
 
+/// Samples the radio's reader lost for want of room, in all.
+pub static OVERFLOWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Retune times, for the report.
 pub static RETUNES: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
 
@@ -353,10 +356,15 @@ impl Kernel for BladeRfSource {
         let rest = &samples[n..];
         let keep = rest.len().min(self.raw.len());
         self.overflows += (rest.len() - keep) as u64;
+        OVERFLOWS.fetch_add(
+            (rest.len() - keep) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.pending.extend_from_slice(&rest[rest.len() - keep..]);
         if self.pending.len() > self.raw.len() {
             let excess = self.pending.len() - self.raw.len();
             self.overflows += excess as u64;
+            OVERFLOWS.fetch_add(excess as u64, std::sync::atomic::Ordering::Relaxed);
             self.pending.drain(..excess);
         }
         io.call_again = true;
