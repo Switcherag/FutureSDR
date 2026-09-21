@@ -19,6 +19,9 @@ before the new receiver gets samples. The plugins are built at start against
 the shared library this program runs (in `target/plugins`), or loaded from
 `--plugins DIR`.
 
+On a Raspberry Pi 5, see [RPI.md](RPI.md): installing libbladeRF, building,
+CPU setup and the commands for every test.
+
 ## With a bladeRF
 
 ```text
