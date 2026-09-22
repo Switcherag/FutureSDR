@@ -144,16 +144,21 @@ by several points).
 
 ## Software IFS
 
+`figures/software_ifs.png` and `figures/block_swap.png` are drawn from
+`bench.sh`'s run on the laptop, `results/laptop-6ms` (six swaps, 0 to 6 ms
+every 0.01 ms; `bench.png` and `summary.md` there), by
+`figures/plot_software_ifs.py` and `figures/plot_block_swap.py`. Earlier
+runs, below, had fewer spacings.
+
 `figures/software_ifs.png`: PER and the median swap time against the IFS,
 from the end of a frame to the start of the next (the recordings cut to the
 frame), with no radio (`--retune-us 0`), 400 frames per spacing, for four
-swaps. `figures/*.csv` are the runs and `figures/plot_software_ifs.py`
-draws them.
+swaps.
 
 ```text
 cargo run --release -- --source replay --cpus auto --keep-awake --retune-us 0 \
     --frames-per-step 400 --ifs 0,0.02,...,0.5,0.6,0.8,1 \
-    --swap zigbee.toml,zigbee.toml --csv figures/zz.csv
+    --swap zigbee.toml,zigbee.toml --csv zz.csv    # or ./bench.sh, all six
 ```
 
 | Swap | Swap time (median) | PER 50 % up to | PER 0–2 % from |
@@ -222,8 +227,9 @@ cargo run --release -- --source replay --cpus auto --keep-awake --retune-us 0 \
     --swap wlan_granular_viterbi.toml,wlan_granular_hard.toml
 ```
 
-`figures/block_swap.png` (`plot_block_swap.py`): the receiver replaced
-whole after every frame against its decoder only, 400 frames per spacing.
+`figures/block_swap.png` (`plot_block_swap.py`): the HaLow receiver replaced
+whole after every frame (granular, simple and single-block) against the
+granular one's decoder only, 400 frames per spacing.
 The decoder alone takes 0.046 ms to replace against 0.187 ms, and no frame
 is lost at any spacing (1 in 11,600 over the sweep), where replacing the
 whole receiver loses half of them below 0.18 ms: the synchronizer and the
