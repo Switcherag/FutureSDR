@@ -50,14 +50,15 @@ def rows_of(path):
 
 
 def zigbee_per(rows):
-    """{ifs_ms: (received, expected)} of stamped ZigBee frames, counted
-    per channel (the stamp's tag), which may share step numbers."""
-    frames = defaultdict(set)  # (step, ifs, channel) -> frame numbers
+    """{ifs_ms: (received, expected)} of stamped ZigBee frames. Frames are
+    numbered per step across channels (the stamp's tag): alternating ch15
+    and ch20, ch15 gets the even numbers and ch20 the odd ones."""
+    frames = defaultdict(set)  # (step, ifs) -> frame numbers
     for r in rows:
         if r["phy"] == "Z" and int(r["ifs_us"]) >= 0:
-            frames[(int(r["step"]), int(r["ifs_us"]), r["tag"])].add(int(r["frame"]))
+            frames[(int(r["step"]), int(r["ifs_us"]))].add(int(r["frame"]))
     per_ifs = defaultdict(lambda: [0, 0])
-    for (_, ifs_us, _), got in frames.items():
+    for (_, ifs_us), got in frames.items():
         # Numbered from 0 in each step: the highest seen tells how many
         # were sent, at least.
         per_ifs[ifs_us / 1000][0] += len(got)
