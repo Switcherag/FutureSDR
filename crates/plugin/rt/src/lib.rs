@@ -20,6 +20,7 @@ pub use futuresdr::*;
 pub use plugin_api;
 
 pub mod buffer;
+pub mod scheduler;
 /// FFT plans of the library FutureSDR's `Fft` block uses, `rustfft`, made
 /// by this library: planning in a plugin would compile all of `rustfft`'s
 /// algorithms into it.

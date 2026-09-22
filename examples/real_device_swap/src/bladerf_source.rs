@@ -8,17 +8,30 @@
 //! dyn branch's measurements, against 26.9 ms in FPGA tuning mode and
 //! 111.6 ms in host mode.
 //!
-//! The source block reads the samples at the hardware rate, decimates them
-//! to the rate the receivers expect, and takes the settings the receivers
-//! ask for in their `[radio]` sections on message inputs `freq` and `gain`.
+//! A thread reads the samples at the hardware rate, and the source block
+//! decimates them to the rate the receivers expect. [`Radio::tune`] retunes
+//! from any thread while it reads (the example's swap loop, without waiting
+//! for it); the block drops what was read before. The block also takes the
+//! settings on message inputs `freq` and `gain`.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+
+use std::task::Poll;
+use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Context;
+use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::bail;
 use bladerf::BladeRF;
@@ -37,6 +50,7 @@ use bladerf::sys::bladerf_schedule_retune;
 use futuresdr::futuredsp::DecimatingFirFilter;
 use futuresdr::futuredsp::firdes;
 use futuresdr::futuredsp::prelude::*;
+use futuresdr::futures::task::AtomicWaker;
 use futuresdr::runtime::dev::prelude::*;
 use plugin_host::ReuseCpuWriter;
 
@@ -47,6 +61,10 @@ const RETUNE_NOW: u64 = 0;
 const SCALE: f32 = 1.0 / 2048.0;
 
 const CHANNEL: Channel = Channel::Rx0;
+
+/// Buffers the reader may fill ahead of the block: 13 ms at 20 MSps in
+/// buffers of 4096, time for the block's thread to be late.
+const READ_AHEAD: usize = 64;
 
 /// How the radio is set up.
 #[derive(Debug, Clone)]
@@ -75,7 +93,12 @@ pub struct Radio {
     profiles: Mutex<HashMap<u64, bladerf_quick_tune>>,
     pub settings: Settings,
     /// Retunes that found no profile and used `set_frequency`.
-    pub misses: std::sync::atomic::AtomicU64,
+    pub misses: AtomicU64,
+    /// The frequency tuned to, in Hz (`f64` bits; NaN at first).
+    frequency: AtomicU64,
+    /// Retunes so far: samples read under an older count are of another
+    /// channel.
+    epoch: AtomicU64,
 }
 
 // SAFETY: `bladerf_quick_tune` is a union of integers, and `BladeRfAny` is
@@ -131,6 +154,8 @@ impl Radio {
             profiles: Mutex::new(profiles),
             settings,
             misses: Default::default(),
+            frequency: AtomicU64::new(f64::NAN.to_bits()),
+            epoch: AtomicU64::new(0),
         });
         Ok((radio, report))
     }
@@ -139,9 +164,27 @@ impl Radio {
         self.dev.get_serial().unwrap_or_default()
     }
 
+    /// Tune to `hz` unless it is tuned there already; returns how long it
+    /// took if it retuned. Any thread may call it, while the source reads.
+    pub fn tune(&self, hz: f64) -> Result<Option<Duration>> {
+        if f64::from_bits(self.frequency.load(Ordering::Acquire)) == hz {
+            return Ok(None);
+        }
+        let took = self.retune(hz)?;
+        self.frequency.store(hz.to_bits(), Ordering::Release);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        RETUNES.lock().unwrap().push(took);
+        Ok(Some(took))
+    }
+
+    /// Retunes so far.
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
+    }
+
     /// Tune to `hz`: a profile recall if there is one within 1 kHz, else
     /// `set_frequency` (counted in `misses`). Returns how long it took.
-    pub fn retune(&self, hz: f64) -> Result<Duration> {
+    fn retune(&self, hz: f64) -> Result<Duration> {
         let t = Instant::now();
         let target = hz.round() as u64;
         let profile = if self.settings.no_quick_tune {
@@ -171,8 +214,7 @@ impl Radio {
             }
             None => {
                 if !self.settings.no_quick_tune {
-                    self.misses
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.misses.fetch_add(1, Ordering::Relaxed);
                 }
                 self.dev.set_frequency(CHANNEL, target)?;
             }
@@ -202,34 +244,144 @@ impl Radio {
     }
 }
 
-/// Samples the radio's reader lost for want of room, in all.
-pub static OVERFLOWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Samples lost, in all (at the receivers' rate): read while all the
+/// reader's buffers waited for the block.
+pub static OVERFLOWS: AtomicU64 = AtomicU64::new(0);
 
 /// Retune times, for the report.
 pub static RETUNES: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
 
+/// A buffer the reader filled, and the retunes there had been when it was.
+struct Filled {
+    samples: Vec<ComplexI16>,
+    epoch: u64,
+}
+
+/// Ready when the reader has handed buffers over since last polled.
+#[derive(Default)]
+pub struct Handed {
+    waker: AtomicWaker,
+    ready: AtomicBool,
+}
+
+/// The block waits on this when it has done all the reader handed over.
+pub struct Wait(Arc<Handed>);
+
+impl Future for Wait {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<()> {
+        self.0.waker.register(cx.waker());
+        if self.0.ready.swap(false, Ordering::AcqRel) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+/// The thread reading the radio, and its way back.
+struct Reader {
+    thread: Option<JoinHandle<Result<()>>>,
+    stop: Arc<AtomicBool>,
+    filled: Receiver<Filled>,
+    free: Sender<Vec<ComplexI16>>,
+}
+
+impl Reader {
+    /// Stream from `radio` on a thread of its own, into [`READ_AHEAD`]
+    /// buffers that the block hands back once done with them. When it has none to
+    /// read into, the samples are lost, as a radio's are when not read.
+    fn spawn(radio: Arc<Radio>, handed: Arc<Handed>) -> Result<Self> {
+        let (filled_tx, filled) = mpsc::channel();
+        let (free, free_rx) = mpsc::channel();
+        let size = radio.settings.buffer;
+        for _ in 0..READ_AHEAD {
+            free.send(vec![ComplexI16::new(0, 0); size])?;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = std::thread::Builder::new()
+            .name("bladerf-rx".into())
+            .spawn({
+                let stop = stop.clone();
+                move || -> Result<()> {
+                    crate::replay::pin_source_thread()?;
+                    let stream = radio.stream()?;
+                    let decim = radio.settings.decim.max(1);
+                    let mut spare = vec![ComplexI16::new(0, 0); size];
+                    let mut held = None;
+                    while !stop.load(Ordering::Relaxed) {
+                        let mut buffer = held.take().or_else(|| free_rx.try_recv().ok());
+                        let into = buffer.as_mut().unwrap_or(&mut spare);
+                        if stream.read(into, Duration::from_millis(200)).is_err() {
+                            held = buffer;
+                            continue;
+                        }
+                        let Some(samples) = buffer else {
+                            OVERFLOWS.fetch_add((size / decim) as u64, Ordering::Relaxed);
+                            continue;
+                        };
+                        let epoch = radio.epoch();
+                        if filled_tx.send(Filled { samples, epoch }).is_err() {
+                            break;
+                        }
+                        handed.ready.store(true, Ordering::Release);
+                        handed.waker.wake();
+                    }
+                    stream.disable()?;
+                    Ok(())
+                }
+            })?;
+        Ok(Self {
+            thread: Some(thread),
+            stop,
+            filled,
+            free,
+        })
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        self.stop.store(true, Ordering::Relaxed);
+        match self.thread.take().map(JoinHandle::join) {
+            Some(Ok(result)) => result,
+            Some(Err(_)) => bail!("the bladeRF reader panicked"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
 /// Samples from the bladeRF, decimated; message inputs `freq` (Hz) and
 /// `gain` (dB).
+///
+/// A thread of its own reads the radio, so that the block waits for samples
+/// rather than in the radio's driver, and takes its messages meanwhile.
 #[derive(Block)]
-#[blocking]
 #[message_inputs(freq, gain)]
+#[blocking]
 pub struct BladeRfSource {
     #[output]
     output: ReuseCpuWriter<Complex32>,
     radio: Arc<Radio>,
-    stream: Option<RxSyncStream<Arc<BladeRfAny>, ComplexI16, BladeRfAny>>,
-    raw: Vec<ComplexI16>,
+    reader: Option<Reader>,
+    handed: Arc<Handed>,
+    wait: Wait,
     fir: DecimatingFirFilter<Complex32, Complex32, Vec<f32>>,
     /// The last `taps - 1` input samples, and the new ones after them.
     history: Vec<Complex32>,
     n_history: usize,
+    decimated: Vec<Complex32>,
     /// Decimated samples the output had no room for.
     pending: Vec<Complex32>,
-    frequency: f64,
+    /// The retunes the samples of the last buffer were read after.
+    epoch: u64,
     /// Samples still to drop after a retune.
     drop: usize,
-    /// Samples lost for want of room.
-    pub overflows: u64,
 }
 
 impl BladeRfSource {
@@ -238,17 +390,19 @@ impl BladeRfSource {
         // As FutureSDR's resampling FIR builder designs it.
         let taps: Vec<f32> = firdes::kaiser::multirate(1, decim, 12, 0.0001);
         let n_history = taps.len() - 1;
+        let handed = Arc::new(Handed::default());
         Self {
             output: ReuseCpuWriter::default(),
-            raw: vec![ComplexI16::new(0, 0); radio.settings.buffer],
             fir: DecimatingFirFilter::new(decim, taps),
             history: vec![Complex32::new(0.0, 0.0); n_history],
             n_history,
+            decimated: Vec::new(),
             pending: Vec::new(),
-            frequency: f64::NAN,
+            epoch: 0,
             drop: 0,
-            overflows: 0,
-            stream: None,
+            reader: None,
+            wait: Wait(handed.clone()),
+            handed,
             radio,
         }
     }
@@ -266,14 +420,7 @@ impl BladeRfSource {
             Pmt::U64(v) => v as f64,
             _ => return Ok(Pmt::InvalidValue),
         };
-        if hz != self.frequency {
-            let took = self.radio.retune(hz)?;
-            RETUNES.lock().unwrap().push(took);
-            self.frequency = hz;
-            // What is held was received on the other channel.
-            self.pending.clear();
-            self.drop = self.radio.settings.drop_after_retune;
-        }
+        self.radio.tune(hz)?;
         Ok(Pmt::Ok)
     }
 
@@ -292,57 +439,24 @@ impl BladeRfSource {
         self.radio.set_gain(db)?;
         Ok(Pmt::Ok)
     }
-}
 
-impl Kernel for BladeRfSource {
-    async fn init(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
-        // The radio's thread, away from the runtime's (see --cpus).
-        crate::replay::pin_source_thread()?;
-        self.stream = Some(self.radio.stream()?);
-        Ok(())
-    }
-
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _mo: &mut MessageOutputs,
-        _meta: &BlockMeta,
-    ) -> Result<()> {
-        // What the output had no room for last time, first.
-        if !self.pending.is_empty() {
-            let out = self.output.slice();
-            let n = out.len().min(self.pending.len());
-            out[..n].copy_from_slice(&self.pending[..n]);
-            self.output.produce(n);
-            self.pending.drain(..n);
-        }
-
-        // Always read: a radio that is not read overruns.
-        let stream = self.stream.as_ref().expect("started");
-        if stream
-            .read(&mut self.raw, Duration::from_millis(200))
-            .is_err()
-        {
-            io.call_again = true;
-            return Ok(());
-        }
+    /// Decimate `raw` to the output; what does not fit waits in `pending`.
+    fn push(&mut self, raw: &[ComplexI16]) {
         // `history` holds what the filter has not consumed yet: at least
         // the last `taps - 1` samples.
         let n_history = self.n_history;
         self.history.extend(
-            self.raw
-                .iter()
+            raw.iter()
                 .map(|s| Complex32::new(s.re as f32 * SCALE, s.im as f32 * SCALE)),
         );
         let decim = self.radio.settings.decim.max(1);
         let n_out = (self.history.len() - n_history) / decim;
-        let mut decimated = vec![Complex32::new(0.0, 0.0); n_out];
-        let (consumed, produced, _) = self.fir.filter(&self.history, &mut decimated);
-        decimated.truncate(produced);
+        self.decimated.resize(n_out, Complex32::new(0.0, 0.0));
+        let (consumed, produced, _) = self.fir.filter(&self.history, &mut self.decimated);
         self.history
             .drain(..consumed.min(self.history.len() - n_history));
 
-        let mut samples = &decimated[..];
+        let mut samples = &self.decimated[..produced];
         if self.drop > 0 {
             let n = self.drop.min(samples.len());
             self.drop -= n;
@@ -352,28 +466,74 @@ impl Kernel for BladeRfSource {
         let n = out.len().min(samples.len());
         out[..n].copy_from_slice(&samples[..n]);
         self.output.produce(n);
-        // Keep a buffer's worth for when there is room; older ones are lost.
-        let rest = &samples[n..];
-        let keep = rest.len().min(self.raw.len());
-        self.overflows += (rest.len() - keep) as u64;
-        OVERFLOWS.fetch_add(
-            (rest.len() - keep) as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        self.pending.extend_from_slice(&rest[rest.len() - keep..]);
-        if self.pending.len() > self.raw.len() {
-            let excess = self.pending.len() - self.raw.len();
-            self.overflows += excess as u64;
-            OVERFLOWS.fetch_add(excess as u64, std::sync::atomic::Ordering::Relaxed);
-            self.pending.drain(..excess);
+        self.pending.extend_from_slice(&samples[n..]);
+    }
+}
+
+impl Kernel for BladeRfSource {
+    type BlockOn = Wait;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Wait>> {
+        Some(Pin::new(&mut self.wait))
+    }
+
+    async fn init(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
+        // The radio's threads, away from the runtime's (see --cpus).
+        crate::replay::pin_source_thread()?;
+        self.epoch = self.radio.epoch();
+        self.reader = Some(Reader::spawn(self.radio.clone(), self.handed.clone())?);
+        Ok(())
+    }
+
+    async fn work(
+        &mut self,
+        _io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &BlockMeta,
+    ) -> Result<()> {
+        // What the output had no room for last time, first, unless of
+        // another channel.
+        let epoch = self.radio.epoch();
+        if self.epoch != epoch {
+            self.pending.clear();
         }
-        io.call_again = true;
+        if !self.pending.is_empty() {
+            let out = self.output.slice();
+            let n = out.len().min(self.pending.len());
+            out[..n].copy_from_slice(&self.pending[..n]);
+            self.output.produce(n);
+            self.pending.drain(..n);
+        }
+
+        // Then what the reader handed over, while the output has room: the
+        // rest waits with the reader, which loses samples only once all its
+        // buffers are waiting, as a radio not read does. Called again when
+        // the reader hands more (`block_on`) or the output has room.
+        let reader = self.reader.take().expect("started");
+        while self.pending.is_empty()
+            && let Ok(Filled {
+                samples,
+                epoch: read,
+            }) = reader.filled.try_recv()
+        {
+            // Read before the last retune: another channel's.
+            if read == epoch {
+                if self.epoch != epoch {
+                    self.epoch = epoch;
+                    self.pending.clear();
+                    self.drop = self.radio.settings.drop_after_retune;
+                }
+                self.push(&samples);
+            }
+            let _ = reader.free.send(samples);
+        }
+        self.reader = Some(reader);
         Ok(())
     }
 
     async fn deinit(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
-        if let Some(stream) = self.stream.take() {
-            stream.disable()?;
+        if let Some(mut reader) = self.reader.take() {
+            reader.stop()?;
         }
         Ok(())
     }

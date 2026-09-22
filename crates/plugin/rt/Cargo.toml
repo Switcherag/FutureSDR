@@ -10,6 +10,7 @@ name = "futuresdr_plugin_rt"
 crate-type = ["dylib"]
 
 [dependencies]
+async-executor = "1.14"
 futuresdr.workspace = true
 futuresdr-plugin-api.workspace = true
 rustfft.workspace = true

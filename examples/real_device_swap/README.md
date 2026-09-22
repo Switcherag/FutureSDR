@@ -37,12 +37,17 @@ quick-tune recall (about 0.3 ms across bands, against 26.9 ms in FPGA tuning
 mode). `--no-quick-tune` uses `set_frequency` instead, to compare.
 
 The bladeRF runs at `--sample-rate` (20 MSps) and is decimated by `--decim`
-(5) to the receivers' 4 MSps. `--drop-after-retune-us` drops that much of
-the samples that follow a retune, for those still in USB transfers from the
-previous channel.
+(5) to the receivers' 4 MSps. A thread of its own reads it, 13 ms ahead of
+the source block at most; samples are lost (the overflows) only when the
+block is that late. As on the `dyn` branch, a swap does not wait for its
+retune: the swap loop hands the frequency to a tuning thread and replaces
+the receiver meanwhile. The source drops what was read before the retune,
+and `--drop-after-retune-us` that much of what follows, for the samples
+still in USB transfers from the previous channel.
 
 It writes `real_device_swap.csv`, a row per frame (or timeout): the PHY, the
-frame length, the time, how long the swap and its retune took, and:
+frame length, the time, how long the swap took, the last retune done (the
+swap's own, or the one before if it is still running), and:
 
 - for ZigBee frames of the `dyn` branch's multizig transmitter, the stamp it
   puts after its source address: frame number, step, tag, the inter-frame

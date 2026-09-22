@@ -450,6 +450,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("{:?} has no [radio] frequency", d.name))
         })
         .collect::<Result<_>>()?;
+    let freqs = [channels[0] as f64, channels[1] as f64];
     channels.dedup();
     let rate = args.sample_rate / args.decim.max(1) as f64;
     if (rate - replay::RATE).abs() > 1.0 {
@@ -500,10 +501,29 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
         [outputs]
         samples = { port = "src.output", type = "c32" }
         [controls]
-        frequency = "src.freq"
         gain = "src.gain"
         "#,
     )?;
+    // The retunes, as on the dyn branch: not through the controller (a call
+    // to `src.freq`, which the swap would wait for), but by this thread,
+    // which the swap hands the frequency to and does not wait for. The
+    // source drops what was read before (see `Radio::tune`).
+    let (tune, tunes) = std::sync::mpsc::channel::<f64>();
+    std::thread::Builder::new()
+        .name("bladerf-tune".into())
+        .spawn({
+            let radio = radio.clone();
+            move || {
+                if let Err(e) = replay::pin_source_thread() {
+                    eprintln!("tuner thread: {e}");
+                }
+                for hz in tunes {
+                    if let Err(e) = radio.tune(hz) {
+                        eprintln!("retune to {hz} Hz: {e}");
+                    }
+                }
+            }
+        })?;
 
     let csv_path = args
         .csv
@@ -535,6 +555,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     ctrl.link("radio.samples", "rx.samples")?;
     let (swaps, retunes, counts) = ctrl.run(move |mut ctrl| async move {
         ctrl.spawn_async("radio", head).await?;
+        tune.send(freqs[0])?;
         let mut tap = ctrl.tap("rx.frames")?;
         ctrl.spawn_async("rx", pair[0].clone()).await?;
         println!(
@@ -584,11 +605,22 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
             if swap_now {
                 since_frame = Instant::now();
                 let t = Instant::now();
-                let replacement = ctrl
-                    .replace_async("rx", pair[1 - active].clone(), Hold::Discard)
+                let retuning = freqs[1 - active] != freqs[active];
+                if retuning {
+                    tune.send(freqs[1 - active])?;
+                }
+                ctrl.replace_async("rx", pair[1 - active].clone(), Hold::Discard)
                     .await?;
                 swap = ms(t.elapsed());
-                retune = ms(replacement.timings.controls);
+                // The last retune done: this one's, or the one before if
+                // it is not done yet.
+                if retuning {
+                    retune = bladerf_source::RETUNES
+                        .lock()
+                        .unwrap()
+                        .last()
+                        .map_or(f64::NAN, |d| ms(*d));
+                }
                 active = 1 - active;
                 swaps.push(swap);
                 retunes.push(retune);
