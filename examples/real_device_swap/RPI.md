@@ -315,10 +315,11 @@ after every frame, in this order (so that the transmitter changes least):
 ./radio_bench.sh
 ```
 
-It first opens the bladeRF and registers the quick-tune profiles, then for
-each run says which transmitter to start and waits for Enter; the receiver
-runs until Enter again (when the transmitter's sweep is done), and the next
-run comes. Each run writes a row per received frame (`<key>.csv`: PHY,
+It first opens the bladeRF and registers the quick-tune profiles. Then for
+each run it says which transmitter it needs and starts the receiver on
+Enter; once the receiver prints `receiving; press Enter to stop`, start the
+transmitter's sweep, and press Enter when the sweep is over. The next run
+comes. Each run writes a row per received frame (`<key>.csv`: PHY,
 posting description, the multizig stamp or the 802.11 sequence number, swap
 and retune times, radio overflows) and prints a line every 5 s. At the end,
 `figures/plot_radio.py` draws `radio.png` (PER against the programmed IFS)

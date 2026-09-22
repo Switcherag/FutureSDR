@@ -89,7 +89,10 @@ for key in $ONLY; do
     echo
     echo "== $key: ${WHAT[$key]}"
     echo "   receivers: ${PAIR[$key]}"
-    read -r -p "   Start the transmitter: ${TX[$key]}. Press Enter to start receiving... "
+    echo "   transmitter: ${TX[$key]}"
+    read -r -p "   Press Enter to start the receiver (transmitter still idle)... "
+    echo "   When it prints 'receiving; press Enter to stop', start the transmitter's sweep;"
+    echo "   press Enter once the sweep is over."
     echo "$key start: $(date +%T) $(state)" >>"$OUT/system.txt"
     FUTURESDR_LOG_LEVEL=warn cargo run -q --release -- --source bladerf \
         --cpus "$CPUS" $EXTRA --swap "${PAIR[$key]}" --until-enter \
