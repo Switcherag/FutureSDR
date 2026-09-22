@@ -12,11 +12,15 @@ Which transmission a frame was, and at which IFS:
   number in the step and the programmed IFS. Exact.
 - HaLow frames carry an 802.11 sequence number (12 bits). In the
   alternating run a HaLow frame takes the IFS of the ZigBee frames around
-  it. In a HaLow-only run, frames are counted by sequence number from the
-  first one received, which is taken as the sweep's first frame, and the
-  count is mapped onto the sweep: --frames-per-step frames per spacing,
-  from --ifs-start ms down by --ifs-step ms. If the HaLow transmitter does
-  otherwise, those curves are wrong; the summary says which were mapped.
+  it. In a HaLow-only run:
+  - with --pause-ms P (the transmitter pausing P ms between spacings), the
+    frames are cut into spacings where two received frames are more than
+    0.8 P apart, and the n-th part is the n-th spacing of the sweep; the
+    pause must be much longer than the largest IFS and its frames (0.5 s);
+  - without, frames are counted by sequence number from the first one
+    received, taken as the sweep's first frame.
+  Either way a spacing is --frames-per-step frames, from --ifs-start ms
+  down by --ifs-step ms; the summary says how each run was placed.
 """
 import argparse
 import csv
@@ -96,14 +100,48 @@ def halow_by_schedule(rows, frames_per_step, ifs_start, ifs_step):
     return out
 
 
+def halow_by_pause(rows, pause_ms, frames_per_step, ifs_start, ifs_step):
+    """{ifs_ms: (received, expected)} of HaLow frames, cut into spacings at
+    the transmitter's pauses; and how many parts there were."""
+    parts, prev_t = [], None
+    for r in rows:
+        if r["phy"] != "H" or int(r["seq"]) < 0:
+            continue
+        t = float(r["rx_t_ms"])
+        if prev_t is None or t - prev_t > 0.8 * pause_ms:
+            parts.append(set())
+        parts[-1].add(int(r["seq"]))
+        prev_t = t
+    out = {}
+    for step, seqs in enumerate(parts):
+        ifs = round(ifs_start - step * ifs_step, 6)
+        if ifs < -1e-9:
+            break
+        out[ifs] = (min(len(seqs), frames_per_step), frames_per_step)
+    return out, len(parts)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
     ap.add_argument("--frames-per-step", type=int, default=1000)
     ap.add_argument("--ifs-start", type=float, default=6.0)
     ap.add_argument("--ifs-step", type=float, default=0.01)
+    ap.add_argument("--pause-ms", type=float, default=0.0,
+                    help="the HaLow transmitter's pause between spacings (0: none)")
     args = ap.parse_args()
     out = Path(args.dir)
+    steps = round(args.ifs_start / args.ifs_step) + 1
+    if args.pause_ms:
+        # Within a spacing, two received frames are at most a few frame
+        # periods apart (frames lost in a row); the pause must stand out.
+        longest = 5 * (args.ifs_start + 0.7)
+        if 0.8 * args.pause_ms <= longest:
+            raise SystemExit(
+                f"a pause of {args.pause_ms} ms cannot be told from the gaps within a "
+                f"spacing (up to about {longest:.0f} ms with a few frames lost at "
+                f"{args.ifs_start} ms): pause the transmitter longer, e.g. 500 ms"
+            )
 
     results, notes = [], []
     for key, label, color, dash in RUNS:
@@ -113,7 +151,14 @@ def main():
         rows = rows_of(path)
         z = zigbee_per(rows)
         h_only = not z and any(r["phy"] == "H" for r in rows)
-        if h_only:
+        if h_only and args.pause_ms:
+            per, parts = halow_by_pause(rows, args.pause_ms, args.frames_per_step,
+                                        args.ifs_start, args.ifs_step)
+            note = f"{label}: HaLow frames cut into spacings at the {args.pause_ms:g} ms pauses"
+            if parts != steps:
+                note += f" (WARNING: {parts} parts for {steps} spacings: the IFS may be shifted)"
+            notes.append(note)
+        elif h_only:
             per = halow_by_schedule(rows, args.frames_per_step, args.ifs_start, args.ifs_step)
             notes.append(f"{label}: HaLow frames mapped onto the sweep by sequence number")
         elif key == "sz":

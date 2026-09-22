@@ -19,6 +19,9 @@
 #   ONLY    the runs, e.g. "zz sz" (all by default, in the order below)
 #   FRAMES_PER_STEP, IFS_START, IFS_STEP   the transmitters' sweep, for the
 #           analysis (1000, 6, 0.01)
+#   PAUSE_MS  the HaLow transmitter's pause between spacings, which the
+#           analysis cuts the HaLow runs at (500; 0: none, count sequence
+#           numbers instead). Must be much longer than the largest IFS.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -29,6 +32,7 @@ ONLY=${ONLY:-zz ss gg gd 11 sz}
 FRAMES_PER_STEP=${FRAMES_PER_STEP:-1000}
 IFS_START=${IFS_START:-6}
 IFS_STEP=${IFS_STEP:-0.01}
+PAUSE_MS=${PAUSE_MS:-500}
 
 # key: receivers (flows/), transmitter to run, what the run is
 declare -A PAIR=(
@@ -60,7 +64,7 @@ mkdir -p "$OUT"
 {
     model=$(tr -d '\0' </proc/device-tree/model 2>/dev/null || grep -m1 'model name' /proc/cpuinfo | cut -d: -f2)
     echo "$(hostname):$model, $(nproc) CPUs; bladeRF; --cpus $CPUS $EXTRA; $(git rev-parse --short HEAD)"
-    echo "sweep: $FRAMES_PER_STEP frames per spacing, from $IFS_START ms every $IFS_STEP ms"
+    echo "sweep: $FRAMES_PER_STEP frames per spacing, from $IFS_START ms every $IFS_STEP ms, HaLow pausing $PAUSE_MS ms between spacings"
     echo
     uname -a
     for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
@@ -95,4 +99,4 @@ for key in $ONLY; do
 done
 
 python3 figures/plot_radio.py "$OUT" --frames-per-step "$FRAMES_PER_STEP" \
-    --ifs-start "$IFS_START" --ifs-step "$IFS_STEP"
+    --ifs-start "$IFS_START" --ifs-step "$IFS_STEP" --pause-ms "$PAUSE_MS"
