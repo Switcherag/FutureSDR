@@ -28,7 +28,7 @@ cd "$(dirname "$0")"
 OUT=${OUT:-results/radio-$(hostname)-$(date +%Y%m%d-%H%M)}
 CPUS=${CPUS:-1,2,3}
 EXTRA=${EXTRA:-}
-ONLY=${ONLY:-zz ss gg gd 11 sz}
+ONLY=${ONLY:-zz zc ss gg gd 11 sz}
 FRAMES_PER_STEP=${FRAMES_PER_STEP:-1000}
 IFS_START=${IFS_START:-6}
 IFS_STEP=${IFS_STEP:-0.01}
@@ -37,6 +37,7 @@ PAUSE_MS=${PAUSE_MS:-500}
 # key: receivers (flows/), transmitter to run, what the run is
 declare -A PAIR=(
     [zz]=zigbee.toml,zigbee.toml
+    [zc]=zigbee.toml,zigbee_ch20.toml
     [ss]=wlan_simple.toml,wlan_simple.toml
     [gg]=wlan_granular.toml,wlan_granular.toml
     [gd]=wlan_granular_hard.toml,wlan_granular_viterbi.toml
@@ -45,6 +46,7 @@ declare -A PAIR=(
 )
 declare -A TX=(
     [zz]="ZigBee (2.425 GHz)"
+    [zc]="ZigBee alternating channels 15 (2.425 GHz) and 20 (2.450 GHz) (each swap retunes)"
     [ss]="HaLow (919 MHz)"
     [gg]="HaLow (919 MHz)"
     [gd]="HaLow (919 MHz)"
@@ -53,6 +55,7 @@ declare -A TX=(
 )
 declare -A WHAT=(
     [zz]="ZigBee receiver replaced by itself"
+    [zc]="ZigBee ch15 <-> ZigBee ch20 receiver, quick-tune retune at each swap"
     [ss]="HaLow receiver (4 blocks) replaced by itself"
     [gg]="HaLow receiver (13 blocks) replaced by itself"
     [gd]="HaLow receiver (13 blocks), its decoder alone replaced (inverse <-> Viterbi)"

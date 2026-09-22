@@ -3,7 +3,7 @@
 
     python3 plot_radio.py RESULTS_DIR [--frames-per-step N] [--ifs-start MS] [--ifs-step MS]
 
-Reads RESULTS_DIR/{zz,ss,gg,gd,11,sz}.csv (those present), a row per
+Reads RESULTS_DIR/{zz,zc,ss,gg,gd,11,sz}.csv (those present), a row per
 received frame, and writes radio.png and summary.md there.
 
 Which transmission a frame was, and at which IFS:
@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 
 RUNS = [
     ("zz", "ZigBee → ZigBee", "#2a78d6", "-"),
+    ("zc", "ZigBee ch15 ⇄ ch20 (retune)", "#4a3aa7", (0, (1, 1))),
     ("ss", "HaLow simple → simple", "#eb6834", "--"),
     ("gg", "HaLow granular → granular", "#1baf7a", "-."),
     ("gd", "HaLow granular, decoder only", "#eda100", ":"),
@@ -49,13 +50,14 @@ def rows_of(path):
 
 
 def zigbee_per(rows):
-    """{ifs_ms: (received, expected)} of stamped ZigBee frames."""
-    frames = defaultdict(set)  # (step, ifs) -> frame numbers
+    """{ifs_ms: (received, expected)} of stamped ZigBee frames, counted
+    per channel (the stamp's tag), which may share step numbers."""
+    frames = defaultdict(set)  # (step, ifs, channel) -> frame numbers
     for r in rows:
         if r["phy"] == "Z" and int(r["ifs_us"]) >= 0:
-            frames[(int(r["step"]), int(r["ifs_us"]))].add(int(r["frame"]))
+            frames[(int(r["step"]), int(r["ifs_us"]), r["tag"])].add(int(r["frame"]))
     per_ifs = defaultdict(lambda: [0, 0])
-    for (_, ifs_us), got in frames.items():
+    for (_, ifs_us, _), got in frames.items():
         # Numbered from 0 in each step: the highest seen tells how many
         # were sent, at least.
         per_ifs[ifs_us / 1000][0] += len(got)

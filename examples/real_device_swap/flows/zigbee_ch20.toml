@@ -1,0 +1,35 @@
+# zigbee.toml on channel 20 (2.450 GHz) instead of 15: the same receiver,
+# which the radio has to be retuned for (25 MHz away). Its name tells its
+# frames from channel 15's.
+name = "zigbee/ch20"
+connections = """
+demod > clock > decoder
+decoder.out | rx.mac
+mac > snk
+"""
+
+[blocks.demod]
+type = "ZigbeeDemod"
+
+[blocks.clock]
+type = "ClockRecoveryMm"
+
+[blocks.decoder]
+type = "ZigbeeDecoder"
+
+[blocks.mac]
+type = "ZigbeeMac"
+
+# The MAC's output carries what it transmits; nothing is sent here.
+[blocks.snk]
+type = "NullSink<u8>"
+
+[inputs]
+samples = { port = "demod.input", type = "c32" }
+
+[message_outputs]
+frames = "mac.rxed"
+
+# Channel 20.
+[radio]
+frequency = 2450e6

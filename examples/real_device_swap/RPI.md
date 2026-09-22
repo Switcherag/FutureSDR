@@ -299,12 +299,13 @@ or copy them to the laptop.
 
 ### The radio benchmark
 
-`radio_bench.sh` runs six receivers against your transmitters, replaced
+`radio_bench.sh` runs seven receivers against your transmitters, replaced
 after every frame, in this order (so that the transmitter changes least):
 
 | Key | Receivers | Transmitter |
 |-----|-----------|-------------|
 | `zz` | ZigBee → ZigBee | ZigBee |
+| `zc` | ZigBee ch15 (2.425 GHz) ⇄ ch20 (2.450 GHz), quick-tune retune at each swap | ZigBee alternating channels 15 and 20 |
 | `ss` | HaLow simple (4 blocks) → simple | HaLow |
 | `gg` | HaLow granular (13 blocks) → granular | HaLow |
 | `gd` | HaLow granular, decoder only: inverse ⇄ Viterbi | HaLow |
