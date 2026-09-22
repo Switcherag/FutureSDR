@@ -150,7 +150,8 @@ def main():
         f"{system}\n\n" + "\n".join(lines) + "\n\n"
         "Samples dropped: by the replay (its output full for longer than a radio's\n"
         "buffers last) and by the link to the receiver (full); what a radio would\n"
-        "have lost to a receiver that fell behind. Not 0: the run was CPU-bound.\n"
+        "have lost to a receiver that fell behind. If not 0, the machine could not\n"
+        "keep up during that run.\n"
     )
     print(png)
     print("\n".join(lines))
