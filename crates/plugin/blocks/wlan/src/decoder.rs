@@ -208,7 +208,12 @@ where
             let psdu = self.decode(&frame);
             S::mpdus(&frame, &self.bytes[psdu], &mut self.mpdus);
             for (mpdu, ok) in self.mpdus.drain(..) {
-                if ok || self.invalid_frames {
+                // An empty MPDU is not a frame. It is what a signal field
+                // decoded from noise declares, and with `invalid_frames` no
+                // FCS rejects it any more: posting it turns every detection
+                // the noise triggers into a frame (thousands a second on a
+                // quiet channel).
+                if (ok || self.invalid_frames) && !mpdu.is_empty() {
                     mo.post("rftap", Pmt::Blob(rftap(&mpdu))).await?;
                     mo.post("rx_frames", Pmt::Blob(mpdu)).await?;
                 }
