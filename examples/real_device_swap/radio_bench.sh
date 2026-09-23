@@ -28,7 +28,7 @@ cd "$(dirname "$0")"
 OUT=${OUT:-results/radio-$(hostname)-$(date +%Y%m%d-%H%M)}
 CPUS=${CPUS:-1,2,3}
 EXTRA=${EXTRA:-}
-ONLY=${ONLY:-zz zc ss gg gd 11 sz}
+ONLY=${ONLY:-zz zc sv si gv gi 1v 1i sz}
 FRAMES_PER_STEP=${FRAMES_PER_STEP:-1000}
 IFS_START=${IFS_START:-6}
 IFS_STEP=${IFS_STEP:-0.01}
@@ -38,29 +38,35 @@ PAUSE_MS=${PAUSE_MS:-500}
 declare -A PAIR=(
     [zz]=zigbee.toml,zigbee.toml
     [zc]=zigbee.toml,zigbee_ch20.toml
-    [ss]=wlan_simple.toml,wlan_simple.toml
-    [gg]=wlan_granular.toml,wlan_granular.toml
-    [gd]=wlan_granular_hard.toml,wlan_granular_viterbi.toml
-    [11]=wlan_single.toml,wlan_single.toml
-    [sz]=wlan_simple.toml,zigbee.toml
+    [sv]=halow_simple_viterbi.toml,halow_simple_hard.toml
+    [si]=halow_simple_viterbi_inplace.toml,halow_simple_hard_inplace.toml
+    [gv]=halow_granular_viterbi.toml,halow_granular_hard.toml
+    [gi]=halow_granular_viterbi_inplace.toml,halow_granular_hard_inplace.toml
+    [1v]=halow_single_viterbi.toml,halow_single_hard.toml
+    [1i]=halow_single_viterbi_inplace.toml,halow_single_hard_inplace.toml
+    [sz]=halow_simple_viterbi.toml,zigbee.toml
 )
 declare -A TX=(
     [zz]="ZigBee (2.425 GHz)"
     [zc]="ZigBee alternating channels 15 (2.425 GHz) and 20 (2.450 GHz) (each swap retunes)"
-    [ss]="HaLow (919 MHz)"
-    [gg]="HaLow (919 MHz)"
-    [gd]="HaLow (919 MHz)"
-    [11]="HaLow (919 MHz)"
+    [sv]="HaLow (919 MHz)"
+    [si]="HaLow (919 MHz)"
+    [gv]="HaLow (919 MHz)"
+    [gi]="HaLow (919 MHz)"
+    [1v]="HaLow (919 MHz)"
+    [1i]="HaLow (919 MHz)"
     [sz]="ZigBee and HaLow alternating (each swap retunes)"
 )
 declare -A WHAT=(
     [zz]="ZigBee receiver replaced by itself"
     [zc]="ZigBee ch15 <-> ZigBee ch20 receiver, quick-tune retune at each swap"
-    [ss]="HaLow receiver (4 blocks) replaced by itself"
-    [gg]="HaLow receiver (13 blocks) replaced by itself"
-    [gd]="HaLow receiver (13 blocks), its decoder alone replaced (inverse <-> Viterbi)"
-    [11]="HaLow receiver in one block replaced by itself"
-    [sz]="HaLow (4 blocks) <-> ZigBee receiver, quick-tune retune at each swap"
+    [sv]="HaLow simple (4 blocks), Viterbi <-> inverse: the whole flowgraph replaced"
+    [si]="HaLow simple (4 blocks), Viterbi <-> inverse: the decoder replaced in place"
+    [gv]="HaLow granular (13 blocks), Viterbi <-> inverse: the whole flowgraph replaced"
+    [gi]="HaLow granular (13 blocks), Viterbi <-> inverse: the decoder replaced in place"
+    [1v]="HaLow in one block, Viterbi <-> inverse: the whole flowgraph replaced"
+    [1i]="HaLow in one block, Viterbi <-> inverse: that block replaced in place"
+    [sz]="HaLow simple <-> ZigBee receiver, quick-tune retune at each swap"
 )
 
 mkdir -p "$OUT"

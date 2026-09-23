@@ -1,12 +1,73 @@
-//! Viterbi decoder of the 802.11 convolutional code (K = 7), from
-//! `examples/wlan`, taking the code rate and lengths as parameters.
+//! Undoing the convolutional code of 802.11 (K = 7), from `examples/wlan`,
+//! taking the code rate and lengths as parameters: by Viterbi decoding
+//! ([`ViterbiDecoder`]) or by the code's inverse ([`InverseDecoder`]).
+//!
+//! A decoder block takes one of the two as a type parameter, so that it
+//! carries the code of that one alone: replacing the block replaces the
+//! decoding, not a flag it reads.
 
 use crate::phy::CodeRate;
 
 const TRACEBACK_MAX: usize = 24;
 
+/// How a decoder block undoes the convolutional code.
+pub trait Deconvolve: Send + 'static {
+    /// A decoder for frames of up to `max_coded_bits` coded bits.
+    fn new(max_coded_bits: usize) -> Self;
+
+    /// Decode `n_data_bits` bits into `out_bits` from `n_symbols` symbols of
+    /// `n_cbps` coded bits each, coded at `rate`.
+    fn decode(
+        &mut self,
+        rate: CodeRate,
+        n_symbols: usize,
+        n_cbps: usize,
+        n_data_bits: usize,
+        in_bits: &[u8],
+        out_bits: &mut [u8],
+    );
+}
+
+/// The coded bits of a frame with the punctured positions put back as
+/// erasures (2), where both decoders start.
+struct Depunctured {
+    bits: Vec<u8>,
+}
+
+impl Depunctured {
+    fn new(max_coded_bits: usize) -> Self {
+        Self {
+            bits: vec![0; 2 * max_coded_bits + 16 * TRACEBACK_MAX],
+        }
+    }
+
+    /// Undo the puncturing of `n_symbols` symbols of `n_cbps` coded bits;
+    /// punctured positions become erasures (2). The traceback reads past
+    /// the end, where zeros follow, as they did in `examples/wlan` for the
+    /// first frame (later frames read the stale bits of earlier ones there).
+    /// Zeros rather than erasures: the metric update cannot take a pair of
+    /// two erasures.
+    fn fill(&mut self, rate: CodeRate, in_bits: &[u8], n_symbols: usize, n_cbps: usize) {
+        let pattern = rate.puncturing();
+        let erased = |count: usize| pattern[count % pattern.len()] == 0;
+        let mut count = 0;
+        for &bit in &in_bits[..n_symbols * n_cbps] {
+            while erased(count) {
+                self.bits[count] = 2;
+                count += 1;
+            }
+            self.bits[count] = bit;
+            count += 1;
+        }
+        while erased(count) {
+            self.bits[count] = 2;
+            count += 1;
+        }
+        self.bits[count..].fill(0);
+    }
+}
+
 pub struct ViterbiDecoder {
-    rate: CodeRate,
     n_traceback: usize,
     store_pos: usize,
 
@@ -20,34 +81,11 @@ pub struct ViterbiDecoder {
     mmresult: [u8; 64],
     ppresult: [[u8; 64]; TRACEBACK_MAX],
 
-    depunctured: Vec<u8>,
+    depunctured: Depunctured,
 }
 
 impl ViterbiDecoder {
-    /// A decoder for up to `max_coded_bits` coded bits.
-    pub fn new(max_coded_bits: usize) -> Self {
-        ViterbiDecoder {
-            rate: CodeRate::R1_2,
-            n_traceback: 0,
-            store_pos: 0,
-
-            metric0: [0; 64],
-            metric1: [0; 64],
-            path0: [0; 64],
-            path1: [0; 64],
-
-            branchtab27: [[0; 32]; 2],
-
-            mmresult: [0; 64],
-            ppresult: [[0; 64]; TRACEBACK_MAX],
-
-            depunctured: vec![0; 2 * max_coded_bits + 16 * TRACEBACK_MAX],
-        }
-    }
-
     fn reset(&mut self, rate: CodeRate) {
-        self.rate = rate;
-
         self.metric0.fill(0);
         self.metric1.fill(0);
         self.path0.fill(0);
@@ -66,31 +104,6 @@ impl ViterbiDecoder {
         self.ppresult.fill([0; 64]);
 
         self.n_traceback = rate.traceback();
-    }
-
-    /// Undo the puncturing of `n_symbols` symbols of `n_cbps` coded bits;
-    /// punctured positions become erasures (2). The traceback reads past
-    /// the end, where zeros follow, as they did in `examples/wlan` for the
-    /// first frame (later frames read the stale bits of earlier ones there).
-    /// Zeros rather than erasures: the metric update cannot take a pair of
-    /// two erasures.
-    fn depuncture(&mut self, in_bits: &[u8], n_symbols: usize, n_cbps: usize) {
-        let pattern = self.rate.puncturing();
-        let erased = |count: usize| pattern[count % pattern.len()] == 0;
-        let mut count = 0;
-        for &bit in &in_bits[..n_symbols * n_cbps] {
-            while erased(count) {
-                self.depunctured[count] = 2;
-                count += 1;
-            }
-            self.depunctured[count] = bit;
-            count += 1;
-        }
-        while erased(count) {
-            self.depunctured[count] = 2;
-            count += 1;
-        }
-        self.depunctured[count..].fill(0);
     }
 
     fn viterbi_butterfly2_generic(&mut self, symbols: &[u8; 4]) {
@@ -469,10 +482,29 @@ impl ViterbiDecoder {
 
         self.ppresult[pos][beststate]
     }
+}
 
-    /// Decode `n_data_bits` bits into `out_bits` from `n_symbols` symbols of
-    /// `n_cbps` coded bits each, coded at `rate`.
-    pub fn decode(
+impl Deconvolve for ViterbiDecoder {
+    fn new(max_coded_bits: usize) -> Self {
+        ViterbiDecoder {
+            n_traceback: 0,
+            store_pos: 0,
+
+            metric0: [0; 64],
+            metric1: [0; 64],
+            path0: [0; 64],
+            path1: [0; 64],
+
+            branchtab27: [[0; 32]; 2],
+
+            mmresult: [0; 64],
+            ppresult: [[0; 64]; TRACEBACK_MAX],
+
+            depunctured: Depunctured::new(max_coded_bits),
+        }
+    }
+
+    fn decode(
         &mut self,
         rate: CodeRate,
         n_symbols: usize,
@@ -482,7 +514,7 @@ impl ViterbiDecoder {
         out_bits: &mut [u8],
     ) {
         self.reset(rate);
-        self.depuncture(in_bits, n_symbols, n_cbps);
+        self.depunctured.fill(rate, in_bits, n_symbols, n_cbps);
 
         let mut in_count = 0;
         let mut out_count = 0;
@@ -492,7 +524,7 @@ impl ViterbiDecoder {
             if (in_count % 4) == 0 {
                 let index = in_count & !0b11;
                 self.viterbi_butterfly2_generic(
-                    &self.depunctured[index..index + 4].try_into().unwrap(),
+                    &self.depunctured.bits[index..index + 4].try_into().unwrap(),
                 );
 
                 if (in_count > 0) && (in_count % 16) == 8 {
@@ -516,14 +548,25 @@ impl ViterbiDecoder {
     }
 }
 
-impl ViterbiDecoder {
-    /// Decode like [`decode`](Self::decode), but without Viterbi: the code's
-    /// feedforward inverse, `b[n] = A[n-2] + A[n-4] + B[n] + B[n-1] + B[n-2] +
-    /// B[n-3] + B[n-4]` (mod 2), since `(D^2 + D^4) gA + (1 + D + D^2 + D^3 +
-    /// D^4) gB = 1` for gA = 133 and gB = 171 (octal). It corrects nothing:
-    /// a wrong coded bit spoils up to seven decoded ones, and a punctured
-    /// (erased) bit counts as 0, so only rate 1/2 decodes whole.
-    pub fn decode_hard(
+/// Undoes the code by its feedforward inverse instead of Viterbi decoding,
+/// `b[n] = A[n-2] + A[n-4] + B[n] + B[n-1] + B[n-2] + B[n-3] + B[n-4]`
+/// (mod 2), since `(D^2 + D^4) gA + (1 + D + D^2 + D^3 + D^4) gB = 1` for
+/// gA = 133 and gB = 171 (octal). It corrects nothing: a wrong coded bit
+/// spoils up to seven decoded ones, and a punctured (erased) bit counts as
+/// 0, so only rate 1/2 decodes whole. None of [`ViterbiDecoder`]'s trellis
+/// is in it.
+pub struct InverseDecoder {
+    depunctured: Depunctured,
+}
+
+impl Deconvolve for InverseDecoder {
+    fn new(max_coded_bits: usize) -> Self {
+        Self {
+            depunctured: Depunctured::new(max_coded_bits),
+        }
+    }
+
+    fn decode(
         &mut self,
         rate: CodeRate,
         n_symbols: usize,
@@ -532,9 +575,13 @@ impl ViterbiDecoder {
         in_bits: &[u8],
         out_bits: &mut [u8],
     ) {
-        self.reset(rate);
-        self.depuncture(in_bits, n_symbols, n_cbps);
-        let bit = |k: usize| self.depunctured.get(k).map_or(0, |&b| b & (b != 2) as u8);
+        self.depunctured.fill(rate, in_bits, n_symbols, n_cbps);
+        let bit = |k: usize| {
+            self.depunctured
+                .bits
+                .get(k)
+                .map_or(0, |&b| b & (b != 2) as u8)
+        };
         let a = |n: isize| if n < 0 { 0 } else { bit(2 * n as usize) };
         let b = |n: isize| if n < 0 { 0 } else { bit(2 * n as usize + 1) };
         for n in 0..n_data_bits as isize {

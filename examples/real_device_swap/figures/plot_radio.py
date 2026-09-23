@@ -3,14 +3,17 @@
 
     python3 plot_radio.py RESULTS_DIR [--frames-per-step N] [--ifs-start MS] [--ifs-step MS]
 
-Reads RESULTS_DIR/{zz,zc,ss,gg,gd,11,sz}.csv (those present), a row per
-received frame, and writes radio.png and summary.md there.
+Reads RESULTS_DIR/{zz,zc,sv,si,gv,gi,1v,1i,sz}.csv (those present), a row
+per received frame, and writes radio.png and summary.md there.
 
 Which transmission a frame was, and at which IFS:
 
 - ZigBee frames of the multizig firmware carry a stamp: their step, their
   number in the step and the programmed IFS. Exact.
-- HaLow frames carry an 802.11 sequence number (12 bits). In the
+- HaLow frames carry an 802.11 sequence number (12 bits) when they have a
+  MAC header; frames too short for one (the minimum-size frames of the
+  radio bench, no payload) have none, and are counted as they arrive
+  instead, which cannot tell a repeat from a new frame. In the
   alternating run a HaLow frame takes the IFS of the ZigBee frames around
   it. In a HaLow-only run:
   - with --pause-ms P (the transmitter pausing P ms between spacings), the
@@ -33,13 +36,23 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 RUNS = [
-    ("zz", "ZigBee → ZigBee", "#2a78d6", "-"),
-    ("zc", "ZigBee ch15 ⇄ ch20 (retune)", "#4a3aa7", (0, (1, 1))),
-    ("ss", "HaLow simple → simple", "#eb6834", "--"),
-    ("gg", "HaLow granular → granular", "#1baf7a", "-."),
+    # Colour by receiver, dash by what a swap replaces: a solid-ish dash for
+    # the whole flowgraph, a dotted one for the block replaced in place.
+    ("zz", "ZigBee \u2192 ZigBee", "#2a78d6", "-"),
+    ("zc", "ZigBee ch15 \u21c4 ch20 (retune)", "#4a3aa7", (0, (1, 1))),
+    ("sv", "HaLow simple: flowgraph", "#eb6834", "--"),
+    ("si", "HaLow simple: decoder in place", "#eb6834", (0, (1, 1))),
+    ("gv", "HaLow granular: flowgraph", "#1baf7a", "-."),
+    ("gi", "HaLow granular: decoder in place", "#1baf7a", (0, (1, 1))),
+    ("1v", "HaLow single block: flowgraph", "#e87ba4", (0, (5, 1, 1, 1))),
+    ("1i", "HaLow single block: in place", "#e87ba4", (0, (1, 1))),
+    ("sz", "HaLow simple \u21c4 ZigBee (retune)", "#008300", (0, (3, 1, 1, 1, 1, 1))),
+    # The runs of the series before this one, so that their directories still
+    # plot: a receiver replaced by itself, and the granular decoder alone.
+    ("ss", "HaLow simple \u2192 simple", "#eb6834", "--"),
+    ("gg", "HaLow granular \u2192 granular", "#1baf7a", "-."),
     ("gd", "HaLow granular, decoder only", "#eda100", ":"),
-    ("11", "HaLow single block → single", "#e87ba4", (0, (5, 1, 1, 1))),
-    ("sz", "HaLow simple ⇄ ZigBee (retune)", "#008300", (0, (3, 1, 1, 1, 1, 1))),
+    ("11", "HaLow single block \u2192 single", "#e87ba4", (0, (5, 1, 1, 1))),
 ]
 SURFACE, GRID, AXIS = "#fcfcfb", "#e1e0d9", "#c3c2b7"
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"
@@ -66,19 +79,26 @@ def zigbee_per(rows):
     return {k: tuple(v) for k, v in per_ifs.items()}
 
 
+def counted(seqs):
+    """How many frames a spacing received: its distinct sequence numbers, or
+    the frames themselves where they carry none (-1)."""
+    numbered = {s for s in seqs if s >= 0}
+    return len(numbered) if numbered else len(seqs)
+
+
 def halow_between(rows):
     """{ifs_ms: received} of HaLow frames, each at the IFS of the stamped
     ZigBee frame received nearest before it (the alternating run)."""
-    got = defaultdict(set)
+    got = defaultdict(list)
     last = None
     for r in rows:
         if r["phy"] == "Z" and int(r["ifs_us"]) >= 0:
             last = (int(r["step"]), int(r["ifs_us"]) / 1000)
-        elif r["phy"] == "H" and last is not None and int(r["seq"]) >= 0:
-            got[last].add(int(r["seq"]))
+        elif r["phy"] == "H" and last is not None:
+            got[last].append(int(r["seq"]))
     per_ifs = defaultdict(int)
     for (_, ifs), seqs in got.items():
-        per_ifs[ifs] += len(seqs)
+        per_ifs[ifs] += counted(seqs)
     return per_ifs
 
 
@@ -108,19 +128,19 @@ def halow_by_pause(rows, pause_ms, frames_per_step, ifs_start, ifs_step):
     the transmitter's pauses; and how many parts there were."""
     parts, prev_t = [], None
     for r in rows:
-        if r["phy"] != "H" or int(r["seq"]) < 0:
+        if r["phy"] != "H":
             continue
         t = float(r["rx_t_ms"])
         if prev_t is None or t - prev_t > 0.8 * pause_ms:
-            parts.append(set())
-        parts[-1].add(int(r["seq"]))
+            parts.append([])
+        parts[-1].append(int(r["seq"]))
         prev_t = t
     out = {}
     for step, seqs in enumerate(parts):
         ifs = round(ifs_start - step * ifs_step, 6)
         if ifs < -1e-9:
             break
-        out[ifs] = (min(len(seqs), frames_per_step), frames_per_step)
+        out[ifs] = (min(counted(seqs), frames_per_step), frames_per_step)
     return out, len(parts)
 
 

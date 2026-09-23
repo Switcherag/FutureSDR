@@ -98,17 +98,16 @@ fn receive<S: Standard>(
     chunks: Option<u64>,
     invalid_frames: bool,
 ) -> Result<Vec<Vec<u8>>> {
-    receive_with::<S>(samples, chunks, invalid_frames, false, false)
+    receive_with::<S, ViterbiDecoder>(samples, chunks, invalid_frames, false)
 }
 
 /// The receiver with the fused blocks, or (`granular`) as `examples/wlan`
 /// builds it, block by block.
-fn receive_with<S: Standard>(
+fn receive_with<S: Standard, D: Deconvolve>(
     samples: Vec<Complex32>,
     chunks: Option<u64>,
     invalid_frames: bool,
     granular: bool,
-    hard: bool,
 ) -> Result<Vec<Vec<u8>>> {
     let mut fg = Flowgraph::new();
     let src = fg.add(ChunkSource {
@@ -118,7 +117,7 @@ fn receive_with<S: Standard>(
         chunks: chunks.map(Rng::new),
     })?;
     let long = fg.add(SyncLong::<S>::new())?;
-    let dec = fg.add(Decoder::<S>::with_hard(invalid_frames, hard))?;
+    let dec = fg.add(Decoder::<S, D>::new(invalid_frames))?;
     let (tx, rx) = mpsc::channel(10_000);
     let pipe = fg.add(MessagePipe::new(tx))?;
     if granular {
@@ -305,14 +304,14 @@ fn the_granular_receiver_gives_the_same_frames() -> Result<()> {
         let samples = read_cf32(&wlan_data(&format!("{name}.cf32")));
         let want = expected(&format!("{name}.wlan.txt"));
         for chunks in [None, Some(1)] {
-            let frames = receive_with::<A>(samples.clone(), chunks, false, true, false)?;
+            let frames = receive_with::<A, ViterbiDecoder>(samples.clone(), chunks, false, true)?;
             assert_eq!(hex(&frames), hex(&want), "{name} {chunks:?}");
         }
     }
     let want = expected("halow_frame.v6.txt");
     for seed in 0..3 {
         let samples = halow_frame(&mut Rng::new(seed));
-        let frames = receive_with::<Ah>(samples, Some(seed), false, true, false)?;
+        let frames = receive_with::<Ah, ViterbiDecoder>(samples, Some(seed), false, true)?;
         assert_eq!(hex(&frames), hex(&want), "seed {seed}");
     }
     Ok(())
@@ -343,12 +342,15 @@ fn the_single_block_receiver_gives_the_same_frames() -> Result<()> {
 #[test]
 fn the_hard_decoder_decodes_clean_frames_only() -> Result<()> {
     let want = expected("halow_frame.v6.txt");
-    let frames = receive_with::<Ah>(halow_frame(&mut Rng::new(1)), None, false, false, true)?;
+    let frames =
+        receive_with::<Ah, InverseDecoder>(halow_frame(&mut Rng::new(1)), None, false, false)?;
     assert_eq!(hex(&frames), hex(&want));
 
     let samples = read_cf32(&wlan_data("bpsk-1-2-15db.cf32"));
     let viterbi = hex(&expected("bpsk-1-2-15db.wlan.txt"));
-    let hard = hex(&receive_with::<A>(samples, None, false, false, true)?);
+    let hard = hex(&receive_with::<A, InverseDecoder>(
+        samples, None, false, false,
+    )?);
     assert!(hard.iter().all(|f| viterbi.contains(f)), "{hard:?}");
     eprintln!(
         "bpsk 1/2 at 15 dB: {} frames by Viterbi, {} without",
@@ -385,7 +387,8 @@ fn ah_long_recording_gives_the_frames_of_v6() -> Result<()> {
         let (mut best, mut cpu) = (f64::INFINITY, f64::INFINITY);
         for _ in 0..5 {
             let (since, cpu_since) = (Instant::now(), cpu_time());
-            let frames = receive_with::<Ah>(samples.clone(), None, false, granular, false)?;
+            let frames =
+                receive_with::<Ah, ViterbiDecoder>(samples.clone(), None, false, granular)?;
             best = best.min(since.elapsed().as_secs_f64());
             cpu = cpu.min(cpu_time() - cpu_since);
             assert_eq!(frames.len(), want.len());

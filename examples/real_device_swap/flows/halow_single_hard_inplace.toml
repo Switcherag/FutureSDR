@@ -1,0 +1,34 @@
+# HaLow receiver (802.11ah, S1G 2 MHz at 4 MSps) in one block,
+# WlanReceiver<Ah>, as wlan_single.toml.
+#
+# The convolutional code is undone by its inverse instead of Viterbi
+# decoding (WlanHardDecoder / WlanHardReceiver, which carry the inverse
+# alone): no error correction, rate 1/2 only.
+#
+# The radio bench swaps it with halow_single_viterbi_inplace.toml
+# after every frame: only the receiver block is replaced, in place: it runs as a
+# flowgraph of its own (`swappable`), the rest keeps running.
+#
+# The frames whose FCS is wrong are posted too, whole (`invalid_frames`):
+# the radio bench's transmitter sends minimum-size frames with no
+# payload, so there is no FCS here to check.
+name = "halow/single/hard"
+
+[blocks.rx]
+type = "WlanHardReceiver<Ah>"
+invalid_frames = true
+
+# The decoding runs apart, so that a replacement replaces that block
+# alone; its input's item type cannot be told from its type.
+[swappable]
+rx = { input = "c32" }
+
+[inputs]
+samples = { port = "rx.input", type = "c32" }
+
+[message_outputs]
+frames = "rx.rx_frames"
+
+# S1G channel 34 (EU), 2 MHz, as the dyn branch's real-device runs.
+[radio]
+frequency = 919.0e6

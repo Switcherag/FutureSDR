@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 
 use futuresdr::prelude::*;
 
+use crate::Deconvolve;
 use crate::FrameParam;
 use crate::MAX_PSDU_SIZE;
 use crate::Standard;
@@ -12,19 +13,23 @@ use crate::ViterbiDecoder;
 
 /// Decodes the data symbols of each frame the equalizer tags, and posts
 /// its MPDUs with a correct FCS, without the FCS, on `rx_frames` and as
-/// RFtap on `rftap`; with `invalid_frames`, also the others, whole. With
-/// `hard`, the convolutional code is undone by its inverse instead of
-/// Viterbi decoding (see [`ViterbiDecoder::decode_hard`]).
+/// RFtap on `rftap`; with `invalid_frames`, also the others, whole.
+///
+/// `D` is how the convolutional code is undone: [`ViterbiDecoder`], or
+/// [`InverseDecoder`](crate::InverseDecoder) for the code's inverse. The
+/// block carries the code of that one alone, so swapping a
+/// `Decoder<S, ViterbiDecoder>` for a `Decoder<S, InverseDecoder>` swaps
+/// the decoding itself.
 #[derive(Block)]
 #[message_outputs(rx_frames, rftap)]
-pub struct Decoder<S: Standard, I = DefaultCpuReader<u8>>
+pub struct Decoder<S: Standard, D = ViterbiDecoder, I = DefaultCpuReader<u8>>
 where
+    D: Deconvolve,
     I: CpuBufferReader<Item = u8>,
 {
     #[input]
     pub(crate) input: I,
     invalid_frames: bool,
-    hard: bool,
     frame: Option<FrameParam>,
     copied: usize,
     rx_symbols: Vec<u8>,
@@ -33,27 +38,22 @@ where
     permutation: Vec<usize>,
     decoded: Vec<u8>,
     bytes: Vec<u8>,
-    viterbi: ViterbiDecoder,
+    deconvolve: D,
     mpdus: Vec<(Vec<u8>, bool)>,
     standard: PhantomData<fn() -> S>,
 }
 
-impl<S: Standard, I> Decoder<S, I>
+impl<S: Standard, D, I> Decoder<S, D, I>
 where
+    D: Deconvolve,
     I: CpuBufferReader<Item = u8>,
 {
     pub fn new(invalid_frames: bool) -> Self {
-        Self::with_hard(invalid_frames, false)
-    }
-
-    /// Decoding by the code's inverse (`hard`) or by Viterbi.
-    pub fn with_hard(invalid_frames: bool, hard: bool) -> Self {
         let mut input = I::default();
         input.set_min_items(S::N_DATA_SC);
         Self {
             input,
             invalid_frames,
-            hard,
             frame: None,
             copied: 0,
             rx_symbols: vec![0; S::N_DATA_SC * S::MAX_SYMBOLS],
@@ -62,7 +62,7 @@ where
             permutation: Vec::new(),
             decoded: vec![0; S::MAX_CODED_BITS / 2 + 8],
             bytes: vec![0; MAX_PSDU_SIZE + S::SERVICE_BITS / 8],
-            viterbi: ViterbiDecoder::new(S::MAX_CODED_BITS),
+            deconvolve: D::new(S::MAX_CODED_BITS),
             mpdus: Vec::new(),
             standard: PhantomData,
         }
@@ -98,13 +98,7 @@ where
             }
         }
 
-        let decode = if self.hard {
-            ViterbiDecoder::decode_hard
-        } else {
-            ViterbiDecoder::decode
-        };
-        decode(
-            &mut self.viterbi,
+        self.deconvolve.decode(
             frame.mcs.rate,
             frame.n_symbols,
             n_cbps,
@@ -144,8 +138,9 @@ fn rftap(frame: &[u8]) -> Vec<u8> {
     rftap
 }
 
-impl<S: Standard, I> Default for Decoder<S, I>
+impl<S: Standard, D, I> Default for Decoder<S, D, I>
 where
+    D: Deconvolve,
     I: CpuBufferReader<Item = u8>,
 {
     fn default() -> Self {
@@ -153,8 +148,9 @@ where
     }
 }
 
-impl<S: Standard, I> Kernel for Decoder<S, I>
+impl<S: Standard, D, I> Kernel for Decoder<S, D, I>
 where
+    D: Deconvolve,
     I: CpuBufferReader<Item = u8>,
 {
     async fn work(

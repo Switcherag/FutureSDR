@@ -7,6 +7,7 @@ use futuresdr::fft;
 use futuresdr::fft::Fft;
 use futuresdr::prelude::*;
 
+use crate::Deconvolve;
 use crate::FrameParam;
 use crate::Standard;
 use crate::ViterbiDecoder;

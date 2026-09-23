@@ -3,6 +3,7 @@
 use futuresdr::num_complex::Complex32;
 
 use crate::CodeRate;
+use crate::Deconvolve;
 use crate::FrameParam;
 use crate::Mcs;
 use crate::Modulation;

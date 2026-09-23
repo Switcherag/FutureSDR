@@ -13,10 +13,12 @@ use futuresdr::runtime::buffer::dev::BlockInbox;
 use futuresdr::runtime::buffer::dev::BufferRequirements;
 
 use crate::Decoder;
+use crate::Deconvolve;
 use crate::FrameEqualizer;
 use crate::Standard;
 use crate::SyncLong;
 use crate::SyncShort;
+use crate::ViterbiDecoder;
 
 /// Items a pipe's writer can take at once.
 const CAPACITY: usize = 1 << 16;
@@ -202,30 +204,44 @@ type C32 = Complex32;
 /// The whole receiver in one block: samples in, frames posted on
 /// `rx_frames` and `rftap` (the equalizer's `symbols` and `channel_est`
 /// too).
+///
+/// `D` is the decoding its [`Decoder`] stage does, as in a flowgraph of
+/// blocks: [`ViterbiDecoder`](crate::ViterbiDecoder) or
+/// [`InverseDecoder`](crate::InverseDecoder), and the block carries that
+/// one's code alone.
 #[derive(Block)]
 #[message_outputs(rx_frames, rftap, symbols, channel_est)]
-pub struct Receiver<S: Standard> {
+pub struct Receiver<S: Standard, D = ViterbiDecoder>
+where
+    D: Deconvolve,
+{
     #[input]
     input: DefaultCpuReader<C32>,
     sync: SyncShort<S, PipeReader<C32>, PipeWriter<C32>>,
     long: SyncLong<S, PipeReader<C32>, PipeWriter<C32>>,
     eq: FrameEqualizer<S, PipeReader<C32>, PipeWriter<u8>>,
-    dec: Decoder<S, PipeReader<u8>>,
+    dec: Decoder<S, D, PipeReader<u8>>,
 }
 
-impl<S: Standard> Receiver<S> {
+impl<S: Standard, D> Receiver<S, D>
+where
+    D: Deconvolve,
+{
     pub fn new(threshold: f32, invalid_frames: bool) -> Self {
         Self {
             input: DefaultCpuReader::default(),
             sync: SyncShort::new(threshold),
             long: SyncLong::new(),
             eq: FrameEqualizer::new(),
-            dec: Decoder::with_hard(invalid_frames, false),
+            dec: Decoder::new(invalid_frames),
         }
     }
 }
 
-impl<S: Standard> Kernel for Receiver<S> {
+impl<S: Standard, D> Kernel for Receiver<S, D>
+where
+    D: Deconvolve,
+{
     async fn work(
         &mut self,
         io: &mut WorkIo,

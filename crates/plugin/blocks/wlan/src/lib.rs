@@ -58,6 +58,8 @@ pub use phy::*;
 pub use single::Receiver;
 pub use sync_long::SyncLong;
 pub use sync_short::SyncShort;
+pub use viterbi::Deconvolve;
+pub use viterbi::InverseDecoder;
 pub use viterbi::ViterbiDecoder;
 
 /// What distinguishes the 802.11 OFDM variants the blocks receive.
@@ -137,15 +139,16 @@ export_plugin! {
             types: [A, Ah],
             description: "Deinterleaving, Viterbi decoding and descrambling; posts the MPDUs on \
                           `rx_frames` and `rftap` (setting invalid_frames: also those with a \
-                          wrong FCS, whole).",
-            add: |s| Decoder::<T>::new(s.get_or("invalid_frames", false)?),
+                          wrong FCS, whole). Carries the Viterbi decoder only.",
+            add: |s| Decoder::<T, ViterbiDecoder>::new(s.get_or("invalid_frames", false)?),
         },
         {
             name: "WlanHardDecoder",
             types: [A, Ah],
             description: "WlanDecoder undoing the convolutional code by its inverse instead of \
-                          Viterbi decoding: no error correction, rate 1/2 only.",
-            add: |s| Decoder::<T>::with_hard(s.get_or("invalid_frames", false)?, true),
+                          Viterbi decoding: no error correction, rate 1/2 only. Carries the \
+                          inverse only, none of the Viterbi decoder.",
+            add: |s| Decoder::<T, InverseDecoder>::new(s.get_or("invalid_frames", false)?),
         },
         {
             name: "WlanReceiver",
@@ -153,7 +156,17 @@ export_plugin! {
             description: "The whole receiver in one block (WlanSync > WlanSyncLong > \
                           WlanEqualizer > WlanDecoder inside); posts on rx_frames and rftap \
                           (settings threshold, invalid_frames).",
-            add: |s| Receiver::<T>::new(
+            add: |s| Receiver::<T, ViterbiDecoder>::new(
+                s.get_or("threshold", sync_short::THRESHOLD)?,
+                s.get_or("invalid_frames", false)?,
+            ),
+        },
+        {
+            name: "WlanHardReceiver",
+            types: [A, Ah],
+            description: "WlanReceiver with WlanHardDecoder inside instead of WlanDecoder: the \
+                          code undone by its inverse, no error correction, rate 1/2 only.",
+            add: |s| Receiver::<T, InverseDecoder>::new(
                 s.get_or("threshold", sync_short::THRESHOLD)?,
                 s.get_or("invalid_frames", false)?,
             ),
