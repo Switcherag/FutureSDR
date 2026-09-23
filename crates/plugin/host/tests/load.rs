@@ -176,3 +176,76 @@ fn unknown_types_name_the_available_ones() {
         "{err}"
     );
 }
+
+/// Whether `name` is mapped into this process.
+fn mapped(name: &str) -> bool {
+    std::fs::read_to_string("/proc/self/maps")
+        .unwrap()
+        .contains(name)
+}
+
+/// A flowgraph of the basic plugin's blocks, described in TOML.
+fn chain(plugin: &std::path::Path) -> plugin_host::Description {
+    plugin_host::Description::from_toml(&format!(
+        r#"
+        plugins = ["{}"]
+        connections = "src > snk"
+        [blocks.src]
+        type = "VectorSource<i16>"
+        items = [1, 2, 3]
+        [blocks.snk]
+        type = "VectorSink<i16>"
+        "#,
+        plugin.display()
+    ))
+    .unwrap()
+}
+
+/// A copy of the basic plugin under its own name: tests run in one process,
+/// and the loader unmaps a library only when the last `dlopen` of it is gone,
+/// so a test that unloads needs a library no other test has loaded.
+fn private_copy(name: &str) -> std::path::PathBuf {
+    let copy = common::scratch(name).join(format!("libfsdr_blocks_{name}.so"));
+    std::fs::copy(common::basic_plugin(), &copy).unwrap();
+    copy
+}
+
+#[test]
+fn a_plugin_is_closed_once_nothing_it_built_is_left() {
+    let plugin = private_copy("closed_when_unused");
+    let name = plugin.file_name().unwrap().to_str().unwrap().to_string();
+    let mut registry = plugin_host::Registry::new();
+    assert!(!registry.load(&plugin).unwrap().is_empty());
+    assert!(mapped(&name), "loading maps it");
+
+    // Run a flowgraph of its blocks to the end: its buffers go to the pool
+    // the runtime keeps between flowgraphs, and their type was instantiated
+    // in the library.
+    let built = plugin_host::build(&registry, &chain(&plugin)).unwrap();
+    let done = Runtime::new().run(built.flowgraph).unwrap();
+    drop(done);
+    drop(built.blocks);
+
+    assert!(registry.unload(&plugin).unwrap(), "closed here");
+    assert!(!mapped(&name), "and unmapped: {name}");
+    assert!(registry.get("VectorSink<i16>").is_none(), "and forgotten");
+}
+
+#[test]
+fn a_plugin_stays_while_a_flowgraph_of_its_blocks_lives() {
+    let plugin = private_copy("stays_while_used");
+    let name = plugin.file_name().unwrap().to_str().unwrap().to_string();
+    let mut registry = plugin_host::Registry::new();
+    registry.load(&plugin).unwrap();
+
+    let built = plugin_host::build(&registry, &chain(&plugin)).unwrap();
+
+    // Its blocks hold the library, so unloading forgets the block types but
+    // cannot close it yet.
+    assert!(!registry.unload(&plugin).unwrap(), "held by the flowgraph");
+    assert!(mapped(&name), "still mapped: {name}");
+    assert!(registry.get("VectorSink<i16>").is_none(), "but forgotten");
+
+    drop(built);
+    assert!(!mapped(&name), "closed with the last holder: {name}");
+}

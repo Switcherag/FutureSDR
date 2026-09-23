@@ -226,11 +226,20 @@ impl Drop for Standby {
             return;
         };
         managed.withdraw();
-        let Managed { handle, task, .. } = managed;
+        let Managed {
+            handle,
+            task,
+            blocks,
+            ..
+        } = managed;
         self.scheduler
             .spawn(async move {
                 let _ = handle.stop().await;
                 let _ = task.await;
+                // Its blocks hold the plugin libraries their code is in:
+                // dropped here, once the flowgraph has stopped, and not
+                // while it was still running.
+                drop(blocks);
             })
             .detach();
     }

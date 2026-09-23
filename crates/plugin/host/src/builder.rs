@@ -9,23 +9,35 @@ use plugin_api::Added;
 
 use crate::connect::Kind;
 use crate::description::Description;
+use crate::registry::Keepalive;
 use crate::registry::Registry;
 
 /// The blocks of a built flowgraph, by name.
+///
+/// It also holds the plugin libraries their code is in open, so that a
+/// flowgraph cannot outlive them (see [`Registry::unload`]).
 #[derive(Debug, Default)]
-pub struct Blocks(HashMap<String, Added>);
+pub struct Blocks {
+    blocks: HashMap<String, Added>,
+    libraries: Keepalive,
+}
 
 impl Blocks {
     /// Id of block `name`.
     pub fn id(&self, name: &str) -> Option<BlockId> {
-        self.0.get(name).map(|b| b.id)
+        self.blocks.get(name).map(|b| b.id)
+    }
+
+    /// The plugin libraries these blocks came from.
+    pub fn libraries(&self) -> &Keepalive {
+        &self.libraries
     }
 
     /// Typed reference to block `name`, if its kernel is `K`. Use it with
     /// [`TerminatedFlowgraph::block`](futuresdr::runtime::TerminatedFlowgraph::block)
     /// once the flowgraph has run.
     pub fn block_ref<K: 'static>(&self, name: &str) -> Option<BlockRef<K>> {
-        self.0
+        self.blocks
             .get(name)?
             .block_ref
             .downcast_ref::<BlockRef<K>>()
@@ -34,7 +46,7 @@ impl Blocks {
 
     /// Block names.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.0.keys().map(String::as_str)
+        self.blocks.keys().map(String::as_str)
     }
 }
 
@@ -54,8 +66,12 @@ pub struct Built {
 pub fn build(registry: &Registry, desc: &Description) -> Result<Built> {
     let mut flowgraph = Flowgraph::new();
     let mut blocks = HashMap::new();
+    let mut libraries = Keepalive::default();
     for decl in &desc.blocks {
         let added = registry.add(&mut flowgraph, &decl.type_name, &decl.settings)?;
+        if let Some(entry) = registry.get(&decl.type_name) {
+            libraries.extend(entry.keepalive());
+        }
         blocks.insert(decl.name.clone(), added);
     }
     for link in &desc.links {
@@ -73,6 +89,6 @@ pub fn build(registry: &Registry, desc: &Description) -> Result<Built> {
     }
     Ok(Built {
         flowgraph,
-        blocks: Blocks(blocks),
+        blocks: Blocks { blocks, libraries },
     })
 }
