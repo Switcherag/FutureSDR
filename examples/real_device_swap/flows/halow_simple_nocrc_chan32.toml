@@ -1,0 +1,33 @@
+# halow_simple_nocrc_chan34.toml on S1G channel 32, 918.0 MHz: the decoder
+# posts the frames whose FCS is wrong too, whole (FCS included), instead of
+# dropping them. With `--listen`, it tells a receiver that decodes nothing
+# from one that decodes frames and drops them on their CRC.
+#
+# S1G channel 32 (US), where the channel is 4 MHz wide. The plugin has no
+# S1G 4 MHz receiver (4 MHz carries 108 data subcarriers, 2 MHz 52), so this
+# decodes a 2 MHz transmission centred on 918.0 MHz, not a 4 MHz one, as
+# halow4mhz.toml does.
+name = "halow/nocrc/32"
+connections = "sync > long > eq > dec"
+
+[blocks.sync]
+type = "WlanSync<Ah>"
+
+[blocks.long]
+type = "WlanSyncLong<Ah>"
+
+[blocks.eq]
+type = "WlanEqualizer<Ah>"
+
+[blocks.dec]
+type = "WlanDecoder<Ah>"
+invalid_frames = true
+
+[inputs]
+samples = { port = "sync.input", type = "c32" }
+
+[message_outputs]
+frames = "dec.rx_frames"
+
+[radio]
+frequency = 918.0e6

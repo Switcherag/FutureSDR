@@ -1,0 +1,30 @@
+# Troubleshooting copy of wlan_simple.toml: the decoder posts the frames
+# whose FCS is wrong too, whole (FCS included), instead of dropping them.
+# With `--listen`, it tells a receiver that decodes nothing from one that
+# decodes frames and drops them on their CRC.
+#
+# S1G channel 34 (EU), 2 MHz, as wlan_simple.toml.
+name = "halow/nocrc/34"
+connections = "sync > long > eq > dec"
+
+[blocks.sync]
+type = "WlanSync<Ah>"
+
+[blocks.long]
+type = "WlanSyncLong<Ah>"
+
+[blocks.eq]
+type = "WlanEqualizer<Ah>"
+
+[blocks.dec]
+type = "WlanDecoder<Ah>"
+invalid_frames = true
+
+[inputs]
+samples = { port = "sync.input", type = "c32" }
+
+[message_outputs]
+frames = "dec.rx_frames"
+
+[radio]
+frequency = 919.0e6

@@ -116,6 +116,11 @@ struct Args {
     /// Output CSV (default: real_device_swap.csv or real_device_replay.csv).
     #[arg(long)]
     csv: Option<PathBuf>,
+    /// Troubleshooting: run this description (in flows/) alone on the radio,
+    /// at its `[radio] frequency`, and print the frames it decodes in hex.
+    /// No swaps, no CSV.
+    #[arg(long, conflicts_with = "swap")]
+    listen: Option<String>,
 
     // bladeRF
     /// Hardware sample rate, S/s.
@@ -404,8 +409,24 @@ fn parse_seq(frame: &[u8]) -> Option<u16> {
 
 // ── bladeRF ──────────────────────────────────────────────────────────────
 
+/// The radio, ready to be a flowgraph's source.
 #[cfg(feature = "bladerf")]
-fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
+struct OpenRadio {
+    radio: std::sync::Arc<bladerf_source::Radio>,
+    registry: Registry,
+    /// The radio flowgraph, `radio`, with its `samples` output.
+    head: Description,
+    /// Frequencies to tune to, taken by a thread of its own: as on the dyn
+    /// branch, a swap does not wait for its retune. The source drops what
+    /// was read before (see `Radio::tune`).
+    tune: std::sync::mpsc::Sender<f64>,
+}
+
+/// Open the bladeRF, keep a quick-tune profile of each of `channels`, and
+/// register it as the block type of the radio flowgraph. `None` with
+/// `--register-only`, which is then all this does.
+#[cfg(feature = "bladerf")]
+fn open_radio(args: &Args, registry: Registry, channels: Vec<u64>) -> Result<Option<OpenRadio>> {
     use std::sync::Arc;
 
     use bladerf_source::BladeRfSource;
@@ -414,44 +435,6 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     use plugin_api::Plugin;
     use plugin_api::add_kernel;
 
-    // The receivers that take turns: --swap, else --halow and ZigBee.
-    let flows = Path::new(env!("CARGO_MANIFEST_DIR")).join("flows");
-    let names: Vec<String> = match &args.swap {
-        Some(pair) => pair.split(',').map(|n| n.trim().to_string()).collect(),
-        None => {
-            let pair = [args.halow.clone(), "zigbee.toml".to_string()];
-            match args.first.unwrap_or(Phy::Zigbee) {
-                Phy::Halow => pair.to_vec(),
-                Phy::Zigbee => vec![pair[1].clone(), pair[0].clone()],
-            }
-        }
-    };
-    let [a, b] = &names[..] else {
-        bail!("--swap takes two descriptions: A,B");
-    };
-    let pair = [
-        Description::from_file(flows.join(a))?,
-        Description::from_file(flows.join(b))?,
-    ];
-    let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
-    let mut channels: Vec<u64> = pair
-        .iter()
-        .map(|d| {
-            d.radio
-                .iter()
-                .find(|(k, _)| k == "frequency")
-                .and_then(|(_, v)| match v {
-                    Pmt::F64(hz) => Some(*hz),
-                    Pmt::U64(hz) => Some(*hz as f64),
-                    Pmt::Isize(hz) => Some(*hz as f64),
-                    _ => None,
-                })
-                .map(|hz| hz.round() as u64)
-                .ok_or_else(|| anyhow::anyhow!("{:?} has no [radio] frequency", d.name))
-        })
-        .collect::<Result<_>>()?;
-    let freqs = [channels[0] as f64, channels[1] as f64];
-    channels.dedup();
     let rate = args.sample_rate / args.decim.max(1) as f64;
     if (rate - replay::RATE).abs() > 1.0 {
         bail!(
@@ -475,7 +458,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
         println!("  quick tune {p}");
     }
     if args.register_only {
-        return Ok(());
+        return Ok(None);
     }
 
     // The radio as a block type, for the radio flowgraph's description.
@@ -525,6 +508,64 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
             }
         })?;
 
+    Ok(Some(OpenRadio {
+        radio,
+        registry,
+        head,
+        tune,
+    }))
+}
+
+#[cfg(feature = "bladerf")]
+fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
+    // The receivers that take turns: --swap, else --halow and ZigBee.
+    let flows = Path::new(env!("CARGO_MANIFEST_DIR")).join("flows");
+    let names: Vec<String> = match &args.swap {
+        Some(pair) => pair.split(',').map(|n| n.trim().to_string()).collect(),
+        None => {
+            let pair = [args.halow.clone(), "zigbee.toml".to_string()];
+            match args.first.unwrap_or(Phy::Zigbee) {
+                Phy::Halow => pair.to_vec(),
+                Phy::Zigbee => vec![pair[1].clone(), pair[0].clone()],
+            }
+        }
+    };
+    let [a, b] = &names[..] else {
+        bail!("--swap takes two descriptions: A,B");
+    };
+    let pair = [
+        Description::from_file(flows.join(a))?,
+        Description::from_file(flows.join(b))?,
+    ];
+    let phy = [phy_of(&pair[0])?, phy_of(&pair[1])?];
+    let mut channels: Vec<u64> = pair
+        .iter()
+        .map(|d| {
+            d.radio
+                .iter()
+                .find(|(k, _)| k == "frequency")
+                .and_then(|(_, v)| match v {
+                    Pmt::F64(hz) => Some(*hz),
+                    Pmt::U64(hz) => Some(*hz as f64),
+                    Pmt::Isize(hz) => Some(*hz as f64),
+                    _ => None,
+                })
+                .map(|hz| hz.round() as u64)
+                .ok_or_else(|| anyhow::anyhow!("{:?} has no [radio] frequency", d.name))
+        })
+        .collect::<Result<_>>()?;
+    let freqs = [channels[0] as f64, channels[1] as f64];
+    channels.dedup();
+    let Some(OpenRadio {
+        radio,
+        registry,
+        head,
+        tune,
+    }) = open_radio(args, registry, channels)?
+    else {
+        return Ok(());
+    };
+
     let csv_path = args
         .csv
         .clone()
@@ -539,17 +580,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     let timeout = Duration::from_millis(args.rx_timeout_ms);
     let verbose = args.verbose;
 
-    // Enter stops the run.
-    static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if args.until_enter {
-        std::thread::spawn(|| {
-            let mut line = String::new();
-            let _ = std::io::stdin().read_line(&mut line);
-            STOP.store(true, std::sync::atomic::Ordering::Relaxed);
-        });
-        println!("receiving; press Enter to stop");
-    }
-    let stopped = || STOP.load(std::sync::atomic::Ordering::Relaxed);
+    let stopped = stop_on_enter(args.until_enter);
 
     let mut ctrl = controller(args, cpus, registry);
     ctrl.link("radio.samples", "rx.samples")?;
@@ -684,6 +715,115 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     Ok(())
 }
 
+/// Troubleshooting: one receiver on the radio, every frame in hex.
+#[cfg(feature = "bladerf")]
+fn run_listen(args: &Args, cpus: &[usize], registry: Registry, flow: &str) -> Result<()> {
+    let flows = Path::new(env!("CARGO_MANIFEST_DIR")).join("flows");
+    let desc = Description::from_file(flows.join(flow))?;
+    let name = desc.name.clone().unwrap_or_else(|| flow.to_string());
+    let hz = frequency_of(&desc)?;
+    let rate = args.sample_rate / args.decim.max(1) as f64;
+    let Some(OpenRadio {
+        radio,
+        registry,
+        head,
+        tune,
+    }) = open_radio(args, registry, vec![hz.round() as u64])?
+    else {
+        return Ok(());
+    };
+    println!(
+        "{name} from {flow} at {:.3} MHz, {:.1} MSps (gain {} dB); every frame in hex",
+        hz / 1e6,
+        rate / 1e6,
+        args.gain_db,
+    );
+
+    let duration = Duration::from_secs_f64(args.duration);
+    let max_frames = args.frames;
+    let stop = stop_on_enter(args.until_enter);
+    let mut ctrl = controller(args, cpus, registry);
+    ctrl.link("radio.samples", "rx.samples")?;
+    ctrl.run(move |mut ctrl| async move {
+        ctrl.spawn_async("radio", head).await?;
+        tune.send(hz)?;
+        let mut tap = ctrl.tap("rx.frames")?;
+        ctrl.spawn_async("rx", desc).await?;
+
+        let t0 = Instant::now();
+        let (mut frames, mut report) = (0usize, Instant::now());
+        while !stop() && t0.elapsed() < duration && (max_frames == 0 || frames < max_frames) {
+            let overflows = bladerf_source::OVERFLOWS.load(std::sync::atomic::Ordering::Relaxed);
+            let Some((origin, bytes)) = next_frame(&mut tap, Duration::from_millis(200)).await
+            else {
+                // Something every 5 s, so that a silent receiver is told
+                // from a stopped one.
+                if report.elapsed() > Duration::from_secs(5) {
+                    report = Instant::now();
+                    println!(
+                        "[{:9.3} s] {frames} frames, {overflows} samples lost",
+                        ms(t0.elapsed()) / 1e3
+                    );
+                }
+                continue;
+            };
+            frames += 1;
+            report = Instant::now();
+            let what = match (parse_seq(&bytes), parse_stamp(&bytes)) {
+                (Some(seq), _) => format!("  seq {seq}"),
+                (_, Some(stamp)) => format!(
+                    "  frame {} of step {} (tag {}, IFS {} µs)",
+                    stamp.frame, stamp.step, stamp.tag, stamp.ifs_us
+                ),
+                _ => String::new(),
+            };
+            println!(
+                "\n[{:9.3} s] {origin}  {} bytes{what}",
+                ms(t0.elapsed()) / 1e3,
+                bytes.len()
+            );
+            print!("{}", hexdump(&bytes));
+        }
+        println!(
+            "\n{frames} frames in {:.1} s, {} samples lost",
+            ms(t0.elapsed()) / 1e3,
+            bladerf_source::OVERFLOWS.load(std::sync::atomic::Ordering::Relaxed)
+        );
+        stop_all(&mut ctrl).await?;
+        anyhow::Ok(())
+    })?;
+    println!(
+        "quick-tune misses {}",
+        radio.misses.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "bladerf"))]
+fn run_listen(_args: &Args, _cpus: &[usize], _registry: Registry, _flow: &str) -> Result<()> {
+    bail!("built without the `bladerf` feature")
+}
+
+/// 16 bytes a line: offset, hex, and the printable characters.
+fn hexdump(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for (i, line) in bytes.chunks(16).enumerate() {
+        let hex: Vec<String> = line.iter().map(|b| format!("{b:02x}")).collect();
+        let text: String = line
+            .iter()
+            .map(|&b| {
+                if (0x20..0x7f).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        let _ = writeln!(out, "  {:04x}  {:<47}  {text}", i * 16, hex.join(" "));
+    }
+    out
+}
+
 #[cfg(not(feature = "bladerf"))]
 fn run_bladerf(_args: &Args, _cpus: &[usize], _registry: Registry) -> Result<()> {
     bail!("built without the `bladerf` feature; use --source replay")
@@ -696,6 +836,36 @@ fn run_bladerf(_args: &Args, _cpus: &[usize], _registry: Registry) -> Result<()>
 fn phy_named(name: &str) -> Option<usize> {
     let phy = name.split('/').next().unwrap_or_default();
     PHYS.iter().position(|p| *p == phy)
+}
+
+/// Whether the run should stop: with `until_enter`, once Enter is pressed.
+#[cfg_attr(not(feature = "bladerf"), allow(dead_code))]
+fn stop_on_enter(until_enter: bool) -> impl Fn() -> bool + Send + 'static {
+    static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if until_enter {
+        std::thread::spawn(|| {
+            let mut line = String::new();
+            let _ = std::io::stdin().read_line(&mut line);
+            STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        println!("receiving; press Enter to stop");
+    }
+    || STOP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The `[radio] frequency` of a description, in Hz.
+#[cfg_attr(not(feature = "bladerf"), allow(dead_code))]
+fn frequency_of(desc: &Description) -> Result<f64> {
+    desc.radio
+        .iter()
+        .find(|(k, _)| k == "frequency")
+        .and_then(|(_, v)| match v {
+            Pmt::F64(hz) => Some(*hz),
+            Pmt::U64(hz) => Some(*hz as f64),
+            Pmt::Isize(hz) => Some(*hz as f64),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("{:?} has no [radio] frequency", desc.name))
 }
 
 /// The PHY a receiver description posts frames of, by its name.
@@ -1218,9 +1388,10 @@ fn main() -> Result<()> {
         replay::RT_PRIORITY.store(priority, std::sync::atomic::Ordering::Relaxed);
         println!("real-time priority {priority} (SCHED_FIFO)");
     }
-    match args.source {
-        Source::Bladerf => run_bladerf(&args, &cpus, registry),
-        Source::Replay => run_replay(&args, &cpus, registry),
+    match (args.listen.clone(), args.source) {
+        (Some(flow), _) => run_listen(&args, &cpus, registry, &flow),
+        (None, Source::Bladerf) => run_bladerf(&args, &cpus, registry),
+        (None, Source::Replay) => run_replay(&args, &cpus, registry),
     }
 }
 

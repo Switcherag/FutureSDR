@@ -1,0 +1,32 @@
+# 802.11ah (HaLow) receiver on S1G channel 32, 918.0 MHz (US band, where
+# the channel is 4 MHz wide), otherwise wlan_simple.toml: the wlan plugin's
+# `Ah` standard, S1G 2 MHz at 4 MSps.
+#
+# The plugin has no S1G 4 MHz receiver (4 MHz carries 108 data subcarriers,
+# 2 MHz 52), so this decodes a 2 MHz transmission centred on 918.0 MHz, not
+# a 4 MHz one. Together with `--listen`, it says what comes out of the
+# receiver on this channel.
+name = "halow/918"
+connections = "sync > long > eq > dec"
+
+[blocks.sync]
+type = "WlanSync<Ah>"
+
+[blocks.long]
+type = "WlanSyncLong<Ah>"
+
+[blocks.eq]
+type = "WlanEqualizer<Ah>"
+
+[blocks.dec]
+type = "WlanDecoder<Ah>"
+
+[inputs]
+samples = { port = "sync.input", type = "c32" }
+
+[message_outputs]
+frames = "dec.rx_frames"
+
+# S1G channel 32 (US), 918.0 MHz.
+[radio]
+frequency = 918.0e6
