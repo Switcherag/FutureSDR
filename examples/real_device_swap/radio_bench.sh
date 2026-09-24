@@ -28,7 +28,7 @@ cd "$(dirname "$0")"
 OUT=${OUT:-results/radio-$(hostname)-$(date +%Y%m%d-%H%M)}
 CPUS=${CPUS:-1,2,3}
 EXTRA=${EXTRA:-}
-ONLY=${ONLY:-zz zc sv si gv gi 1v 1i sz}
+ONLY=${ONLY:-zz zb zc hb sv si gv gi 1v 1i sz}
 FRAMES_PER_STEP=${FRAMES_PER_STEP:-1000}
 IFS_START=${IFS_START:-6}
 IFS_STEP=${IFS_STEP:-0.01}
@@ -37,7 +37,9 @@ PAUSE_MS=${PAUSE_MS:-500}
 # key: receivers (flows/), transmitter to run, what the run is
 declare -A PAIR=(
     [zz]=zigbee.toml,zigbee.toml
+    [zb]=zigbee.toml,zigbee.toml
     [zc]=zigbee.toml,zigbee_ch20.toml
+    [hb]=halow_simple_viterbi.toml,halow_simple_viterbi.toml
     [sv]=halow_simple_viterbi.toml,halow_simple_hard.toml
     [si]=halow_simple_viterbi_inplace.toml,halow_simple_hard_inplace.toml
     [gv]=halow_granular_viterbi.toml,halow_granular_hard.toml
@@ -48,7 +50,9 @@ declare -A PAIR=(
 )
 declare -A TX=(
     [zz]="ZigBee (2.425 GHz)"
+    [zb]="ZigBee (2.425 GHz)"
     [zc]="ZigBee alternating channels 15 (2.425 GHz) and 20 (2.450 GHz) (each swap retunes)"
+    [hb]="HaLow (919 MHz)"
     [sv]="HaLow (919 MHz)"
     [si]="HaLow (919 MHz)"
     [gv]="HaLow (919 MHz)"
@@ -59,7 +63,9 @@ declare -A TX=(
 )
 declare -A WHAT=(
     [zz]="ZigBee receiver replaced by itself"
+    [zb]="CONTROL: one ZigBee receiver, never replaced"
     [zc]="ZigBee ch15 <-> ZigBee ch20 receiver, quick-tune retune at each swap"
+    [hb]="CONTROL: one HaLow simple receiver, never replaced"
     [sv]="HaLow simple (4 blocks), Viterbi <-> inverse: the whole flowgraph replaced"
     [si]="HaLow simple (4 blocks), Viterbi <-> inverse: the decoder replaced in place"
     [gv]="HaLow granular (13 blocks), Viterbi <-> inverse: the whole flowgraph replaced"
@@ -67,6 +73,14 @@ declare -A WHAT=(
     [1v]="HaLow in one block, Viterbi <-> inverse: the whole flowgraph replaced"
     [1i]="HaLow in one block, Viterbi <-> inverse: that block replaced in place"
     [sz]="HaLow simple <-> ZigBee receiver, quick-tune retune at each swap"
+)
+
+# The control runs receive without ever replacing the receiver: what they
+# lose is what the radio, the transmitter and the sweep cost on their own,
+# which is the baseline every other run has to be read against.
+declare -A OPTS=(
+    [zb]="--no-swap"
+    [hb]="--no-swap"
 )
 
 mkdir -p "$OUT"
@@ -104,7 +118,7 @@ for key in $ONLY; do
     echo "   press Enter once the sweep is over."
     echo "$key start: $(date +%T) $(state)" >>"$OUT/system.txt"
     FUTURESDR_LOG_LEVEL=warn cargo run -q --release -- --source bladerf \
-        --cpus "$CPUS" $EXTRA --swap "${PAIR[$key]}" --until-enter \
+        --cpus "$CPUS" $EXTRA ${OPTS[$key]:-} --swap "${PAIR[$key]}" --until-enter \
         --duration 1e9 --rx-timeout-ms 80000 --csv "$OUT/$key.csv" \
         2>&1 | tee "$OUT/$key.log"
     echo "$key end: $(date +%T) $(state)" >>"$OUT/system.txt"

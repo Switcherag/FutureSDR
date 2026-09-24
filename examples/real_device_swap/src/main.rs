@@ -368,21 +368,38 @@ fn median(v: &mut [f64]) -> f64 {
 #[cfg_attr(not(feature = "bladerf"), allow(dead_code))]
 const ZIGBEE_ANCHOR: [u8; 8] = [0x00, 0x00, b'E', b'E', b'B', b'G', b'I', b'Z'];
 
-/// The 19-byte stamp of a multizig frame, little-endian: frame number in
-/// the step (u32), step (u16), tag (u8), programmed IFS in µs (u32), and
-/// the transmitter's clock in µs (u64).
+/// What a ZigBee frame tells us about where it sits in the sweep.
+///
+/// Two transmitter frame formats are in use:
+///
+/// * the **19-byte stamp** of a multizig frame, behind [`ZIGBEE_ANCHOR`],
+///   little-endian: frame number in the step (u32), step (u16), tag (u8),
+///   programmed IFS in µs (u32), the transmitter's clock in µs (u64);
+/// * the **light frame** (13-byte PSDU) the Bench rigs send since 2026-09-23:
+///   `MHR(7) + ifs_us(4, LE) + FCS(2)`, with no source address, no frame
+///   number and no timestamp — the payload is the IFS and nothing else. It
+///   exists because a PSDU over 18 bytes costs the *next* frame ~600 µs of
+///   extra inter-frame time, which would put a floor under the whole sweep.
+///
+/// Fields a format does not carry are `None`; only `ifs_us` is always there.
 #[cfg_attr(not(feature = "bladerf"), allow(dead_code))]
 #[derive(Debug, Clone, Copy)]
 struct Stamp {
-    frame: u32,
-    step: u16,
-    tag: u8,
+    frame: Option<u32>,
+    step: Option<u16>,
+    tag: Option<u8>,
     ifs_us: u32,
-    ts_us: u64,
+    ts_us: Option<u64>,
 }
 
 #[cfg_attr(not(feature = "bladerf"), allow(dead_code))]
 fn parse_stamp(frame: &[u8]) -> Option<Stamp> {
+    parse_full_stamp(frame).or_else(|| parse_light_stamp(frame))
+}
+
+/// The 19-byte stamp, found by its source address.
+#[cfg_attr(not(feature = "bladerf"), allow(dead_code))]
+fn parse_full_stamp(frame: &[u8]) -> Option<Stamp> {
     let needed = ZIGBEE_ANCHOR.len() + 19;
     let at = frame
         .windows(needed)
@@ -390,11 +407,36 @@ fn parse_stamp(frame: &[u8]) -> Option<Stamp> {
         + ZIGBEE_ANCHOR.len();
     let p = &frame[at..at + 19];
     Some(Stamp {
-        frame: u32::from_le_bytes(p[0..4].try_into().unwrap()),
-        step: u16::from_le_bytes(p[4..6].try_into().unwrap()),
-        tag: p[6],
+        frame: Some(u32::from_le_bytes(p[0..4].try_into().unwrap())),
+        step: Some(u16::from_le_bytes(p[4..6].try_into().unwrap())),
+        tag: Some(p[6]),
         ifs_us: u32::from_le_bytes(p[7..11].try_into().unwrap()),
-        ts_us: u64::from_le_bytes(p[11..19].try_into().unwrap()),
+        ts_us: Some(u64::from_le_bytes(p[11..19].try_into().unwrap())),
+    })
+}
+
+/// A light frame's payload, which is the IFS alone.
+///
+/// The frame has no source address to anchor on, so it is recognised by its
+/// header instead: `FCF 0x01 0x08` (data frame, short destination, **no**
+/// source address), then a sequence number, then a broadcast PAN and address.
+/// That fixes the payload at offset 7, where the decoder hands us the PSDU
+/// without its length byte. A frame shorter than 11 bytes cannot hold it.
+#[cfg_attr(not(feature = "bladerf"), allow(dead_code))]
+fn parse_light_stamp(frame: &[u8]) -> Option<Stamp> {
+    if frame.len() < 11 || frame[0] != 0x01 || frame[1] != 0x08 {
+        return None;
+    }
+    let ifs_us = u32::from_le_bytes(frame[7..11].try_into().unwrap());
+    // Reject a frame whose payload cannot be an IFS this bench ever programs:
+    // the sweep runs 6 ms down to 0.08 ms, so anything past a second is noise
+    // that happened to decode.
+    (ifs_us <= 1_000_000).then_some(Stamp {
+        frame: None,
+        step: None,
+        tag: None,
+        ifs_us,
+        ts_us: None,
     })
 }
 
@@ -581,6 +623,7 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
     let verbose = args.verbose;
 
     let stopped = stop_on_enter(args.until_enter);
+    let no_swap = args.no_swap;
 
     let mut ctrl = controller(args, cpus, registry);
     ctrl.link("radio.samples", "rx.samples")?;
@@ -589,10 +632,17 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
         tune.send(freqs[0])?;
         let mut tap = ctrl.tap("rx.frames")?;
         ctrl.spawn_async("rx", pair[0].clone()).await?;
-        println!(
-            "listening with {} first; a frame changes to the other",
-            pair[0].name.as_deref().unwrap_or("?")
-        );
+        if no_swap {
+            println!(
+                "listening with {}; never replaced (--no-swap)",
+                pair[0].name.as_deref().unwrap_or("?")
+            );
+        } else {
+            println!(
+                "listening with {} first; a frame changes to the other",
+                pair[0].name.as_deref().unwrap_or("?")
+            );
+        }
 
         let t0 = Instant::now();
         let (mut active, mut rx_idx) = (0usize, 0u64);
@@ -631,7 +681,13 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
             if frame.is_none() && !timed_out {
                 continue;
             }
-            let swap_now = timed_out || got == Some(phy[active]);
+            if frame.is_some() {
+                since_frame = Instant::now();
+            }
+            // `--no-swap`: the control run. One receiver, never replaced, so
+            // that the loss the radio and the transmitter cost on their own
+            // can be told from the loss a swap costs.
+            let swap_now = !no_swap && (timed_out || got == Some(phy[active]));
             let (mut swap, mut retune) = (f64::NAN, f64::NAN);
             if swap_now {
                 since_frame = Instant::now();
@@ -672,11 +728,11 @@ fn run_bladerf(args: &Args, cpus: &[usize], registry: Registry) -> Result<()> {
                         "{rx_idx},{},{origin},rx,{},{},{},{},{},{},{}",
                         if p == 0 { "H" } else { "Z" },
                         bytes.len(),
-                        s(stamp.map(|x| x.frame.to_string())),
-                        s(stamp.map(|x| x.step.to_string())),
-                        s(stamp.map(|x| x.tag.to_string())),
+                        s(stamp.and_then(|x| x.frame).map(|v| v.to_string())),
+                        s(stamp.and_then(|x| x.step).map(|v| v.to_string())),
+                        s(stamp.and_then(|x| x.tag).map(|v| v.to_string())),
                         s(stamp.map(|x| x.ifs_us.to_string())),
-                        s(stamp.map(|x| x.ts_us.to_string())),
+                        s(stamp.and_then(|x| x.ts_us).map(|v| v.to_string())),
                         s(seq.map(|x| x.to_string())),
                     )
                 }
@@ -771,10 +827,14 @@ fn run_listen(args: &Args, cpus: &[usize], registry: Registry, flow: &str) -> Re
             report = Instant::now();
             let what = match (parse_seq(&bytes), parse_stamp(&bytes)) {
                 (Some(seq), _) => format!("  seq {seq}"),
-                (_, Some(stamp)) => format!(
-                    "  frame {} of step {} (tag {}, IFS {} µs)",
-                    stamp.frame, stamp.step, stamp.tag, stamp.ifs_us
-                ),
+                (_, Some(stamp)) => match (stamp.frame, stamp.step) {
+                    (Some(frame), Some(step)) => format!(
+                        "  frame {frame} of step {step} (tag {}, IFS {} µs)",
+                        stamp.tag.unwrap_or(0),
+                        stamp.ifs_us
+                    ),
+                    _ => format!("  IFS {} µs", stamp.ifs_us),
+                },
                 _ => String::new(),
             };
             println!(
