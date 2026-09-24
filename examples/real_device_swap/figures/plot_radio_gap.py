@@ -126,8 +126,21 @@ def figure(runs, keys, title, subtitle, ylabel, ymax, value, path):
         run = runs.get(key)
         if not run:
             continue
-        ax.plot(run["ifs"], value(run), color=run["color"], linewidth=1.7,
-                linestyle=run["dash"], label=run["label"])
+        # A spacing holds few frames, so its PER can only take a few values —
+        # eleven frames can say 0, 9, 18 % and nothing between — and only the
+        # spacings that delivered a frame have a value at all. Drawing that as
+        # a line invents both the values between the steps and the spacings
+        # between the points, so each spacing is a point.
+        # Colour says which receiver, filled or hollow says what a swap
+        # replaced: the whole flowgraph, or that one block in place.
+        in_place = run["dash"] == (0, (1, 1))
+        ax.plot(run["ifs"], value(run), color=run["color"], marker="o",
+                markersize=3.2, linestyle="none", alpha=0.7,
+                markerfacecolor="none" if in_place else run["color"],
+                markeredgewidth=0.9, label=run["label"])
+        if trend := run.get("trend"):
+            ax.plot(run["ifs"], trend(run), color=run["color"], linewidth=1.4,
+                    linestyle=run["dash"], alpha=0.9)
     # The sweep spends most of its steps below 1 ms, where everything happens;
     # a log axis gives that end the room the linear one spent on the top.
     ax.set_xscale("log")
@@ -137,8 +150,10 @@ def figure(runs, keys, title, subtitle, ylabel, ymax, value, path):
     ax.set_ylim(-ymax * 0.02, ymax)
     ax.set_xlabel("Programmed inter-frame spacing (ms)", color=INK2, fontsize=11)
     ax.set_ylabel(ylabel, color=INK2, fontsize=11)
-    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False,
-              fontsize=9.5, labelcolor=INK2)
+    legend = ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False,
+                       fontsize=9.5, labelcolor=INK2, markerscale=3)
+    for handle in legend.legend_handles:
+        handle.set_alpha(1.0)
     fig.suptitle(title, x=0.045, y=0.99, ha="left", color=INK, fontsize=14,
                  fontweight="bold")
     fig.text(0.045, 0.925, subtitle, ha="left", va="top", color=MUTED, fontsize=9.5)
