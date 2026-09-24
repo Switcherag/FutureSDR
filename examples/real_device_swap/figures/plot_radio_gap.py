@@ -39,7 +39,7 @@ from plot_radio import RUNS, SURFACE, GRID, AXIS, INK, INK2, MUTED
 
 
 def rows_by_silence(frames, silence_ms, pause_ms):
-    """One row per spacing: (index, count, median gap ms), and how many
+    """One row per spacing: (index, count, median gap ms, median swap ms), and how many
     spacings were inferred empty.
 
     A row is what arrives between two silences. A spacing that arrives empty
@@ -50,26 +50,31 @@ def rows_by_silence(frames, silence_ms, pause_ms):
     row after it one step up the sweep.
     """
     rows, current = [], []
-    for t in frames:
-        if current and t - current[-1] > silence_ms:
+    for frame in frames:
+        if current and frame[0] - current[-1][0] > silence_ms:
             rows.append(current)
             current = []
-        current.append(t)
+        current.append(frame)
     if current:
         rows.append(current)
 
+    def middle(values):
+        values = sorted(v for v in values if v == v)
+        return values[len(values) // 2] if values else float("nan")
+
     out, index, skipped = [], 0, 0
     for i, row in enumerate(rows):
-        gaps = sorted(b - a for a, b in zip(row, row[1:]))
-        gap = gaps[len(gaps) // 2] if gaps else float("nan")
+        times = [t for t, _ in row]
+        gap = middle([b - a for a, b in zip(times, times[1:])])
+        swap = middle([s for _, s in row])
         if i:
-            silence = row[0] - rows[i - 1][-1]
-            span = rows[i - 1][-1] - rows[i - 1][0]
+            silence = row[0][0] - rows[i - 1][-1][0]
+            span = rows[i - 1][-1][0] - rows[i - 1][0][0]
             period = pause_ms + span
             empty = max(0, round((silence - pause_ms) / period)) if period > 0 else 0
             index += 1 + empty
             skipped += empty
-        out.append((index, len(row), gap))
+        out.append((index, len(row), gap, swap))
     return out, skipped
 
 
@@ -86,7 +91,7 @@ def drift(rows, ifs_start, ifs_step, above_ms=1.0):
     Returns the median disagreement in steps and the worst one.
     """
     offs = []
-    measured = [(i, gap) for i, n, gap in rows if n > 1]
+    measured = [(i, gap) for i, n, gap, _ in rows if n > 1]
     if len(measured) < 2:
         return 0.0, 0.0
     offset = measured[0][1] - ifs_start
@@ -99,6 +104,47 @@ def drift(rows, ifs_start, ifs_step, above_ms=1.0):
         return 0.0, 0.0
     offs.sort()
     return offs[len(offs) // 2], max(offs, key=abs)
+
+
+PHY_KEYS = ["zz", "zc", "sv", "sz"]
+HALOW_KEYS = ["sv", "si", "gv", "gi", "1v", "1i"]
+
+
+def figure(runs, keys, title, subtitle, ylabel, ymax, value, path):
+    """One panel, PER or swap time against the IFS, for `keys` of `runs`."""
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    ax.grid(True, color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(AXIS)
+    ax.tick_params(colors=INK2, labelsize=10)
+    for key in keys:
+        run = runs.get(key)
+        if not run:
+            continue
+        ax.plot(run["ifs"], value(run), color=run["color"], linewidth=1.7,
+                linestyle=run["dash"], label=run["label"])
+    # The sweep spends most of its steps below 1 ms, where everything happens;
+    # a log axis gives that end the room the linear one spent on the top.
+    ax.set_xscale("log")
+    ax.set_xticks([0.08, 0.1, 0.2, 0.5, 1, 2, 4, 6])
+    ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    ax.set_xlim(0.075, 6.5)
+    ax.set_ylim(-ymax * 0.02, ymax)
+    ax.set_xlabel("Programmed inter-frame spacing (ms)", color=INK2, fontsize=11)
+    ax.set_ylabel(ylabel, color=INK2, fontsize=11)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False,
+              fontsize=9.5, labelcolor=INK2)
+    fig.suptitle(title, x=0.045, y=0.99, ha="left", color=INK, fontsize=14,
+                 fontweight="bold")
+    fig.text(0.045, 0.925, subtitle, ha="left", va="top", color=MUTED, fontsize=9.5)
+    fig.tight_layout(rect=(0, 0, 0.78, 0.9))
+    fig.savefig(path, dpi=150, facecolor=SURFACE)
+    plt.close(fig)
 
 
 def main():
@@ -114,18 +160,29 @@ def main():
     ap.add_argument("--pause-ms", type=float, default=500.0,
                     help="the transmitter's pause between spacings")
     ap.add_argument("--smooth", type=int, default=1,
-                    help="average the PER over this many spacings (1: raw)")
+                    help="average over this many spacings (1: raw)")
     args = ap.parse_args()
     out = Path(args.dir)
     spacings = round((args.ifs_start - args.ifs_end) / args.ifs_step) + 1
 
-    results, notes = [], []
+    def over(values, sent=None):
+        """`values` per spacing, averaged over `--smooth` neighbours, with the
+        spacings that arrived empty left out rather than counted as loss."""
+        w = max(1, args.smooth)
+        out = []
+        for i in range(spacings):
+            window = [v for v in values[max(0, i - w // 2): i + w // 2 + 1] if v is not None]
+            out.append(sum(window) / len(window) if window else float("nan"))
+        return out
+
+    runs, notes = {}, []
     for key, label, color, dash in RUNS:
         path = out / f"{key}.csv"
         if not path.exists():
             continue
-        frames = [float(r["rx_t_ms"]) for r in csv.DictReader(open(path))
-                  if r["event"] == "rx"]
+        frames = [(float(r["rx_t_ms"]),
+                   float(r["swap_ms"]) if r["swap_ms"] not in ("NaN", "nan") else float("nan"))
+                  for r in csv.DictReader(open(path)) if r["event"] == "rx"]
         if not frames:
             continue
         rows, skipped = rows_by_silence(frames, args.silence_ms, args.pause_ms)
@@ -134,35 +191,24 @@ def main():
         # nothing is lost. They differ: the 2026-09-24 transmitter was set to
         # 10 and delivered 11.
         sent = args.frames_per_step or Counter(
-            n for _, n, _ in rows[: max(1, len(rows) // 10)]
+            n for _, n, _, _ in rows[: max(1, len(rows) // 10)]
         ).most_common(1)[0][0]
-        # One point per spacing of the sweep, so that spacings that arrived
-        # empty are a break in the line rather than a line drawn across them.
+
         got = [None] * spacings
-        for index, n, _ in rows:
+        swap = [None] * spacings
+        for index, n, _, s in rows:
             if index < spacings:
                 got[index] = min(n, sent)
-        ifs = [round(args.ifs_start - i * args.ifs_step, 6) for i in range(spacings)]
-        pers = [100 * (1 - g / sent) if g is not None else float("nan") for g in got]
-        if args.smooth > 1:
-            # A spacing holds few frames, so its PER is coarse: 11 frames can
-            # only say 0, 9, 18 %. Averaging over neighbouring spacings shows
-            # the trend the single points cannot. Empty spacings are left out
-            # of the average rather than counted as total loss.
-            w = args.smooth
-            smoothed = []
-            for i in range(spacings):
-                window = [g for g in got[max(0, i - w // 2): i + w // 2 + 1] if g is not None]
-                smoothed.append(100 * (1 - sum(window) / (len(window) * sent))
-                                if window else float("nan"))
-            pers = smoothed
-        swaps = sorted(float(r["swap_ms"]) for r in csv.DictReader(open(path))
-                       if r["event"] == "rx" and r.get("swapped") == "1"
-                       and r["swap_ms"] not in ("NaN", "nan"))
-        results.append((label, color, dash, ifs, pers, swaps,
-                        sum(n for _, n, _ in rows), len(rows), sent, skipped))
+                swap[index] = s if s == s else None
+        runs[key] = {
+            "label": label, "color": color, "dash": dash,
+            "ifs": [round(args.ifs_start - i * args.ifs_step, 6) for i in range(spacings)],
+            "per": over([100 * (1 - g / sent) if g is not None else None for g in got]),
+            "swap": over(swap),
+            "frames": sum(n for _, n, _, _ in rows), "rows": len(rows), "sent": sent,
+        }
         note = (f"- {label}: {len(rows)} rows for {spacings} spacings, "
-                f"{sent} frames each")
+                f"{sent} frames each, {runs[key]['frames']} frames")
         if skipped:
             note += f", {skipped} spacings inferred empty from the long silences"
         placed = rows[-1][0] + 1 if rows else 0
@@ -175,54 +221,35 @@ def main():
                      f"from their own spacing, worst {worst:+.0f})")
         notes.append(note)
 
-    if not results:
+    if not runs:
         raise SystemExit(f"no runs in {out}")
-
-    fig, (ax_all, ax_zoom) = plt.subplots(2, 1, figsize=(13, 9))
-    fig.patch.set_facecolor(SURFACE)
-    for ax in (ax_all, ax_zoom):
-        ax.set_facecolor(SURFACE)
-        ax.grid(True, color=GRID, linewidth=0.8)
-        ax.set_axisbelow(True)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(AXIS)
-        ax.tick_params(colors=INK2, labelsize=10)
-    for label, color, dash, ifs, pers, swaps, *_ in results:
-        swap = swaps[len(swaps) // 2] if swaps else float("nan")
-        style = dict(color=color, linewidth=1.6, linestyle=dash,
-                     label=f"{label} (swap {swap:.3f} ms)")
-        ax_all.plot(ifs, pers, **style)
-        zoom = [(i, p) for i, p in zip(ifs, pers) if i <= 1.0]
-        ax_zoom.plot([i for i, _ in zoom], [p for _, p in zoom], **style)
-    ax_all.set_title("Packet error rate, the whole sweep", loc="left", color=INK2, fontsize=11)
-    ax_zoom.set_title("Packet error rate, 0 to 1 ms", loc="left", color=INK2, fontsize=11)
-    for ax in (ax_all, ax_zoom):
-        ax.set_ylabel("PER (%)", color=INK2, fontsize=11)
-        ax.set_ylim(-2, 102)
-    ax_zoom.set_xlabel("Programmed inter-frame spacing (ms)", color=INK2, fontsize=11)
-    ax_all.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False,
-                  fontsize=9.5, labelcolor=INK2)
     system = (out / "system.txt").read_text().splitlines()[0] if (out / "system.txt").exists() else ""
-    fig.suptitle("Receiver replaced after every frame, over the air (bladeRF)",
-                 x=0.06, y=0.99, ha="left", color=INK, fontsize=14, fontweight="bold")
-    fig.text(0.06, 0.955, system, ha="left", va="top", color=MUTED, fontsize=9.5)
-    fig.tight_layout(rect=(0, 0, 0.72, 0.94))
-    png = out / "radio_gap.png"
-    fig.savefig(png, dpi=150, facecolor=SURFACE)
+
+    figure(runs, PHY_KEYS, "Packet error rate: one receiver of each kind", system,
+           "PER (%)", 100, lambda r: r["per"], out / "per_phy.png")
+    figure(runs, HALOW_KEYS, "Packet error rate: the HaLow receivers", system,
+           "PER (%)", 100, lambda r: r["per"], out / "per_halow.png")
+    figure(runs, [k for k, *_ in RUNS if k in runs],
+           "Time to replace the receiver, against the spacing it works at", system,
+           "Swap (median per spacing, ms)", 1.2, lambda r: r["swap"], out / "swap.png")
 
     lines = [
         "| Run | Frames received / sent | Spacings | Swap (median) |",
         "|-----|------------------------|----------|---------------|",
     ]
-    for label, _, _, _, _, swaps, got, nrows, sent, _ in results:
+    for key, *_ in RUNS:
+        r = runs.get(key)
+        if not r:
+            continue
+        swaps = sorted(s for s in r["swap"] if s == s)
         med = f"{swaps[len(swaps) // 2]:.3f} ms" if swaps else "–"
-        lines.append(f"| {label} | {got} / {nrows * sent} | {nrows} of {spacings} | {med} |")
+        lines.append(f"| {r['label']} | {r['frames']} / {r['rows'] * r['sent']} | "
+                     f"{r['rows']} of {spacings} | {med} |")
     text = f"{system}\n\n" + "\n".join(lines) + "\n\n" + "\n".join(notes) + "\n"
     (out / "summary_gap.md").write_text(text)
-    print(png)
+    print("\n".join(str(out / n) for n in ("per_phy.png", "per_halow.png", "swap.png")))
     print(text)
 
 
-main()
+if __name__ == "__main__":
+    main()
