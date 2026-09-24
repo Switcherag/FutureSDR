@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """PER against the IFS, one row per spacing, cut at the transmitter's pauses.
 
-    python3 plot_radio_gap.py RESULTS_DIR [--frames-per-step N] [--ifs-start MS]
-                              [--ifs-step MS] [--ifs-end MS] [--silence-ms MS]
+    python3 plot_radio_gap.py RESULTS_DIR --frames N --ifs-max MS --ifs-min MS
+                              --ifs-step MS [--silence-ms MS] [--pause-ms MS]
+
+The sweep is given, not guessed: `--frames` a spacing, from `--ifs-max` down to
+`--ifs-min` by `--ifs-step`. They must be the transmitter's, and the summary
+says where the data disagrees with them — a spacing that holds more frames than
+it is said to send, rows that do not span the sweep, rows whose own spacing is
+not the one their position implies.
 
 The transmitter sends a spacing's frames, then falls silent for 500 ms, then
 the next spacing. So the rule is simply: **450 ms without a frame starts the
@@ -165,11 +171,16 @@ def figure(runs, keys, title, subtitle, ylabel, ymax, value, path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
-    ap.add_argument("--frames-per-step", type=int, default=0,
-                    help="frames a spacing holds (default: read from the data)")
-    ap.add_argument("--ifs-start", type=float, default=6.0)
-    ap.add_argument("--ifs-step", type=float, default=0.01)
-    ap.add_argument("--ifs-end", type=float, default=0.08)
+    ap.add_argument("--frames", "--frames-per-step", type=int, default=0,
+                    dest="frames",
+                    help="frames the transmitter sends per spacing "
+                         "(default: the most common row size at the top of the sweep)")
+    ap.add_argument("--ifs-max", type=float, default=6.0,
+                    help="the spacing the sweep starts at, in ms")
+    ap.add_argument("--ifs-min", type=float, default=0.08,
+                    help="the spacing it ends at, in ms")
+    ap.add_argument("--ifs-step", type=float, default=0.01,
+                    help="what it takes off the spacing at each step, in ms")
     ap.add_argument("--silence-ms", type=float, default=450.0,
                     help="silence that starts the next spacing's row")
     ap.add_argument("--pause-ms", type=float, default=500.0,
@@ -178,7 +189,7 @@ def main():
                     help="average over this many spacings (1: raw)")
     args = ap.parse_args()
     out = Path(args.dir)
-    spacings = round((args.ifs_start - args.ifs_end) / args.ifs_step) + 1
+    spacings = round((args.ifs_max - args.ifs_min) / args.ifs_step) + 1
 
     def over(values, sent=None):
         """`values` per spacing, averaged over `--smooth` neighbours, with the
@@ -205,7 +216,7 @@ def main():
         # common row size over the first tenth of the sweep, where next to
         # nothing is lost. They differ: the 2026-09-24 transmitter was set to
         # 10 and delivered 11.
-        sent = args.frames_per_step or Counter(
+        sent = args.frames or Counter(
             n for _, n, _, _ in rows[: max(1, len(rows) // 10)]
         ).most_common(1)[0][0]
 
@@ -217,20 +228,25 @@ def main():
                 swap[index] = s if s == s else None
         runs[key] = {
             "label": label, "color": color, "dash": dash,
-            "ifs": [round(args.ifs_start - i * args.ifs_step, 6) for i in range(spacings)],
+            "ifs": [round(args.ifs_max - i * args.ifs_step, 6) for i in range(spacings)],
             "per": over([100 * (1 - g / sent) if g is not None else None for g in got]),
             "swap": over(swap),
             "frames": sum(n for _, n, _, _ in rows), "rows": len(rows), "sent": sent,
         }
         note = (f"- {label}: {len(rows)} rows for {spacings} spacings, "
                 f"{sent} frames each, {runs[key]['frames']} frames")
+        most = Counter(n for _, n, _, _ in rows).most_common(1)[0][0]
+        if most > sent:
+            note += (f" (WARNING: a spacing most often holds {most} frames, more than "
+                     f"the {sent} it is said to send: the PER is measured against the "
+                     f"wrong number)")
         if skipped:
             note += f", {skipped} spacings inferred empty from the long silences"
         placed = rows[-1][0] + 1 if rows else 0
         if placed != spacings:
             note += (f" (WARNING: the rows span {placed} spacings, not {spacings}: "
                      f"the sweep and the settings disagree)")
-        median_off, worst = drift(rows, args.ifs_start, args.ifs_step)
+        median_off, worst = drift(rows, args.ifs_max, args.ifs_step)
         if abs(median_off) > 3:
             note += (f" (WARNING: above 1 ms the rows sit {median_off:+.0f} steps "
                      f"from their own spacing, worst {worst:+.0f})")
